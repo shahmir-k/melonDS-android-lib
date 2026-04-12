@@ -871,6 +871,26 @@ void GPU::StartFrame() noexcept
     // * if we have display FIFO DMA
     RunFIFO = GPU2D_A.UsesFIFO() || NDS.DMAsInMode(0, 0x04);
 
+#ifdef LITEV_AGGRESSIVE_SKIP
+    if (FrameskipTarget > 0)
+    {
+        if (FrameskipCounter > 0)
+        {
+            SkipThisFrame = true;
+            FrameskipCounter--;
+        }
+        else
+        {
+            SkipThisFrame = false;
+            FrameskipCounter = FrameskipTarget;
+        }
+    }
+    else
+    {
+        SkipThisFrame = false;
+    }
+#endif
+
     TotalScanlines = 0;
     StartScanline(0);
 }
@@ -886,27 +906,47 @@ void GPU::StartHBlank(u32 line) noexcept
         // note: this should start 48 cycles after the scanline start
         if (line < 192)
         {
-            GPU2D_Renderer->DrawScanline(line, &GPU2D_A);
-            GPU2D_Renderer->DrawScanline(line, &GPU2D_B);
+#ifdef LITEV_AGGRESSIVE_SKIP
+            if (!SkipThisFrame)
+#endif
+            {
+                GPU2D_Renderer->DrawScanline(line, &GPU2D_A);
+                GPU2D_Renderer->DrawScanline(line, &GPU2D_B);
+            }
         }
 
         // sprites are pre-rendered one scanline in advance
         if (line < 191)
         {
-            GPU2D_Renderer->DrawSprites(line+1, &GPU2D_A);
-            GPU2D_Renderer->DrawSprites(line+1, &GPU2D_B);
+#ifdef LITEV_AGGRESSIVE_SKIP
+            if (!SkipThisFrame)
+#endif
+            {
+                GPU2D_Renderer->DrawSprites(line+1, &GPU2D_A);
+                GPU2D_Renderer->DrawSprites(line+1, &GPU2D_B);
+            }
         }
 
         NDS.CheckDMAs(0, 0x02);
     }
     else if (VCount == 215)
     {
-        GPU3D.VCount215(*this);
+#ifdef LITEV_AGGRESSIVE_SKIP
+        if (!SkipThisFrame || !GPU3D.RenderFrameIdentical)
+#endif
+        {
+            GPU3D.VCount215(*this);
+        }
     }
     else if (VCount == 262)
     {
-        GPU2D_Renderer->DrawSprites(0, &GPU2D_A);
-        GPU2D_Renderer->DrawSprites(0, &GPU2D_B);
+#ifdef LITEV_AGGRESSIVE_SKIP
+        if (!SkipThisFrame)
+#endif
+        {
+            GPU2D_Renderer->DrawSprites(0, &GPU2D_A);
+            GPU2D_Renderer->DrawSprites(0, &GPU2D_B);
+        }
     }
 
     if (DispStat[0] & (1<<4)) NDS.SetIRQ(0, IRQ_HBlank);

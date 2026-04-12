@@ -151,6 +151,25 @@ endif()
 
 target_include_directories(core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+if (LITEV_ARM7_HLE_AUDIO)
+    target_sources(core PRIVATE
+        ARM7HLE_Core.cpp
+        ARM7HLE_Audio.cpp
+        ARM7HLE_SPI.cpp
+        ARM7HLE_Power.cpp)
+endif()
+
+if (LITEV_NEON_RENDERER)
+    target_sources(core PRIVATE GPU2D_NEON.cpp)
+    if (ARCHITECTURE STREQUAL ARM64 OR CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+        # NEON is baseline on AArch64
+    elseif (ARCHITECTURE STREQUAL ARM OR
+            CMAKE_SYSTEM_PROCESSOR MATCHES "armv7" OR
+            CMAKE_SYSTEM_PROCESSOR MATCHES "arm")
+        target_compile_options(core PRIVATE -mfpu=neon -mfloat-abi=softfp)
+    endif()
+endif()
+
 set(MELONDS_VERSION_SUFFIX "$ENV{MELONDS_VERSION_SUFFIX}" CACHE STRING "Suffix to add to displayed melonDS version")
 option(MELONDS_EMBED_BUILD_INFO "Embed detailed build info into the binary" OFF)
 set(MELONDS_GIT_BRANCH "$ENV{MELONDS_GIT_BRANCH}" CACHE STRING "The Git branch used for this build")

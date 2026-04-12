@@ -28,6 +28,9 @@
 #include "Platform.h"
 #include "GPU.h"
 #include "ARMJIT_Memory.h"
+#ifdef LITEV_ARM7_HLE_AUDIO
+#include "ARM7HLE_Core.h"
+#endif
 
 namespace melonDS
 {
@@ -614,6 +617,7 @@ void ARMv5::Execute()
         }
     }
 
+    u32 interpBatch9 = 0;
     while (NDS.ARM9Timestamp < NDS.ARM9Target)
     {
 #ifdef JIT_ENABLED
@@ -698,21 +702,18 @@ void ARMv5::Execute()
                     AddCycles_C();
             }
 
-            // TODO optimize this shit!!!
-            if (Halted)
+            if ((++interpBatch9 & 15) == 0)
             {
-                if (Halted == 1 && NDS.ARM9Timestamp < NDS.ARM9Target)
+                if (Halted)
                 {
-                    NDS.ARM9Timestamp = NDS.ARM9Target;
+                    if (Halted == 1 && NDS.ARM9Timestamp < NDS.ARM9Target)
+                    {
+                        NDS.ARM9Timestamp = NDS.ARM9Target;
+                    }
+                    break;
                 }
-                break;
+                if (IRQ) TriggerIRQ();
             }
-            /*if (NDS::IF[0] & NDS::IE[0])
-            {
-                if (NDS::IME[0] & 0x1)
-                    TriggerIRQ();
-            }*/
-            if (IRQ) TriggerIRQ();
 
         }
 
@@ -754,8 +755,19 @@ void ARMv4::Execute()
         }
     }
 
+    u32 interpBatch7 = 0;
     while (NDS.ARM7Timestamp < NDS.ARM7Target)
     {
+#ifdef LITEV_ARM7_HLE_AUDIO
+        {
+            u32 hlePC = R[15] - ((CPSR & 0x20) ? 4u : 8u);
+            if (NDS.ARM7HLE.TryDispatch(this, NDS, hlePC))
+            {
+                if (StopExecution) break;
+                continue;
+            }
+        }
+#endif
 #ifdef JIT_ENABLED
         if constexpr (mode == CPUExecuteMode::JIT)
         {
@@ -832,21 +844,18 @@ void ARMv4::Execute()
                     AddCycles_C();
             }
 
-            // TODO optimize this shit!!!
-            if (Halted)
+            if ((++interpBatch7 & 15) == 0)
             {
-                if (Halted == 1 && NDS.ARM7Timestamp < NDS.ARM7Target)
+                if (Halted)
                 {
-                    NDS.ARM7Timestamp = NDS.ARM7Target;
+                    if (Halted == 1 && NDS.ARM7Timestamp < NDS.ARM7Target)
+                    {
+                        NDS.ARM7Timestamp = NDS.ARM7Target;
+                    }
+                    break;
                 }
-                break;
+                if (IRQ) TriggerIRQ();
             }
-            /*if (NDS::IF[1] & NDS::IE[1])
-            {
-                if (NDS::IME[1] & 0x1)
-                    TriggerIRQ();
-            }*/
-            if (IRQ) TriggerIRQ();
         }
 
         NDS.ARM7Timestamp += Cycles;

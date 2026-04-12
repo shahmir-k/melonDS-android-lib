@@ -27,6 +27,11 @@
 #include "Args.h"
 #include "ARMJIT_Memory.h"
 
+#ifdef LITEV_ARM7_PROFILE
+#include <atomic>
+#include <cstdint>
+#endif
+
 #ifdef JIT_ENABLED
 #include "JitBlock.h"
 
@@ -90,6 +95,37 @@ public:
     void SetLiteralOptimizations(bool enabled) noexcept;
     void SetBranchOptimizations(bool enabled) noexcept;
     void SetFastMemory(bool enabled) noexcept;
+
+#ifdef LITEV_ARM7_PROFILE
+    struct JitStats
+    {
+        std::atomic<uint64_t> BlockCompiles    {0};
+        std::atomic<uint64_t> BlockRestores    {0};
+        std::atomic<uint64_t> TotalInstructions{0};
+        std::atomic<uint64_t> FastLookupHits   {0};
+        std::atomic<uint64_t> FastLookupMisses {0};
+
+        uint64_t AverageBlockLength() const noexcept
+        {
+            uint64_t c = BlockCompiles.load();
+            return c > 0 ? TotalInstructions.load() / c : 0;
+        }
+        double HitRate() const noexcept
+        {
+            uint64_t total = FastLookupHits.load() + FastLookupMisses.load();
+            return total > 0 ? (double)FastLookupHits.load() / total : 0.0;
+        }
+    } Stats;
+
+    void ResetJitStats() noexcept
+    {
+        Stats.BlockCompiles = 0;
+        Stats.BlockRestores = 0;
+        Stats.TotalInstructions = 0;
+        Stats.FastLookupHits = 0;
+        Stats.FastLookupMisses = 0;
+    }
+#endif // LITEV_ARM7_PROFILE
 
     Compiler JITCompiler;
     std::unordered_map<u32, JitBlock*> JitBlocks9 {};

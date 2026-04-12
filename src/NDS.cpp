@@ -49,8 +49,11 @@ namespace melonDS
 {
 using namespace Platform;
 
-const s32 kMaxIterationCycles = 64;
+const s32 kMaxIterationCycles = 512;
 const s32 kIterationCycleMargin = 8;
+
+// Per-thread current CPU index (0=ARM9, 1=ARM7).
+thread_local int t_CurCPU = 0;
 
 // timing notes
 //
@@ -129,10 +132,24 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
     MainRAM = JIT.Memory.GetMainRAM();
     SharedWRAM = JIT.Memory.GetSharedWRAM();
     ARM7WRAM = JIT.Memory.GetARM7WRAM();
+
+    // Start the ARM7 dedicated thread.
+    arm7ThreadRunning.store(true, std::memory_order_relaxed);
+    arm7Thread = std::thread(&NDS::ARM7ThreadFunc, this);
 }
 
 NDS::~NDS() noexcept
 {
+    // Stop the ARM7 thread before any members are destroyed.
+    {
+        std::unique_lock<std::mutex> lock(arm7Mutex);
+        arm7ThreadRunning.store(false, std::memory_order_relaxed);
+        arm7WorkReady.store(true, std::memory_order_relaxed);
+    }
+    arm7Wake.notify_all();
+    if (arm7Thread.joinable())
+        arm7Thread.join();
+
     UnregisterEventFuncs(Event_Div);
     UnregisterEventFuncs(Event_Sqrt);
     // The destructor for each component is automatically called by the compiler
@@ -413,6 +430,9 @@ void NDS::SetupDirectBoot(const std::string& romname)
 
     ARM9.JumpTo(header.ARM9EntryAddress);
     ARM7.JumpTo(header.ARM7EntryAddress);
+#ifdef LITEV_ARM7_HLE_AUDIO
+    ARM7HLE.ScanFirmware(*this);
+#endif
 
     PostFlag9 = 0x01;
     PostFlag7 = 0x01;
@@ -508,6 +528,9 @@ void NDS::Reset()
 
     ARM9.Reset();
     ARM7.Reset();
+#ifdef LITEV_ARM7_HLE_AUDIO
+    ARM7HLE.Reset();
+#endif
 
     CPUStop = 0;
 
@@ -815,16 +838,12 @@ u64 NDS::NextTarget()
     u64 minEvent = UINT64_MAX;
 
     u32 mask = SchedListMask;
-    for (int i = 0; i < Event_MAX; i++)
+    while (mask)
     {
-        if (!mask) break;
-        if (mask & 0x1)
-        {
-            if (SchedList[i].Timestamp < minEvent)
-                minEvent = SchedList[i].Timestamp;
-        }
-
-        mask >>= 1;
+        int i = __builtin_ctz(mask);
+        if (SchedList[i].Timestamp < minEvent)
+            minEvent = SchedList[i].Timestamp;
+        mask &= mask - 1;
     }
 
     u64 max = SysTimestamp + kMaxIterationCycles;
@@ -849,7 +868,7 @@ void NDS::RunSystem(u64 timestamp)
 
             if (evt.Timestamp <= SysTimestamp)
             {
-                SchedListMask &= ~(1<<i);
+                __atomic_fetch_and(&SchedListMask, ~(1u<<i), __ATOMIC_ACQ_REL);
 
                 EventFunc func = evt.Funcs[evt.FuncID];
                 func(evt.That, evt.Param);
@@ -900,7 +919,7 @@ void NDS::RunSystemSleep(u64 timestamp)
 
                 if (evt.Timestamp <= SysTimestamp)
                 {
-                    SchedListMask &= ~(1<<i);
+                    __atomic_fetch_and(&SchedListMask, ~(1u<<i), __ATOMIC_ACQ_REL);
 
                     EventFunc func = evt.Funcs[evt.FuncID];
                     func(evt.That, evt.Param);
@@ -919,10 +938,77 @@ void NDS::RunSystemSleep(u64 timestamp)
     }
 }
 
+void NDS::ARM7ThreadFunc()
+{
+    t_CurCPU = 1;
+
+    while (arm7ThreadRunning.load(std::memory_order_acquire))
+    {
+        {
+            std::unique_lock<std::mutex> lock(arm7Mutex);
+            arm7Wake.wait(lock, [this] {
+                return arm7WorkReady.load(std::memory_order_relaxed)
+                    || !arm7ThreadRunning.load(std::memory_order_relaxed);
+            });
+            arm7WorkReady.store(false, std::memory_order_relaxed);
+        }
+
+        if (!arm7ThreadRunning.load(std::memory_order_acquire))
+            break;
+
+        u64 target = arm7SyncTarget.load(std::memory_order_acquire);
+
+        while (ARM7Timestamp < target)
+        {
+            ARM7Target = target;
+
+            if (CPUStop & CPUStop_DMA7)
+            {
+                DMAs[4].Run();
+                DMAs[5].Run();
+                DMAs[6].Run();
+                DMAs[7].Run();
+                if (ConsoleType == 1)
+                {
+                    auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
+                    dsi.RunNDMAs(1);
+                }
+            }
+            else
+            {
+                switch (arm7CPUMode)
+                {
+#ifdef JIT_ENABLED
+                case CPUExecuteMode::JIT:
+                    ARM7.Execute<CPUExecuteMode::JIT>();
+                    break;
+#endif
+                case CPUExecuteMode::InterpreterGDB:
+                    ARM7.Execute<CPUExecuteMode::InterpreterGDB>();
+                    break;
+                case CPUExecuteMode::Interpreter:
+                default:
+                    ARM7.Execute<CPUExecuteMode::Interpreter>();
+                    break;
+                }
+            }
+
+            RunTimers(1);
+        }
+
+        {
+            std::unique_lock<std::mutex> lock(arm7Mutex);
+            arm7WorkDone.store(true, std::memory_order_relaxed);
+        }
+        arm7Done.notify_one();
+    }
+}
+
 template <CPUExecuteMode cpuMode>
 u32 NDS::RunFrame()
 {
     Current = this;
+    arm7CPUMode = cpuMode;
 
     FrameStartTimestamp = SysTimestamp;
 
@@ -978,7 +1064,7 @@ u32 NDS::RunFrame()
             {
                 u64 target = NextTarget();
                 ARM9Target = target << ARM9ClockShift;
-                CurCPU = 0;
+                CurCPU = 0; t_CurCPU = 0;
 
                 if (CPUStop & CPUStop_GXStall)
                 {
@@ -1007,31 +1093,22 @@ u32 NDS::RunFrame()
                 RunTimers(0);
                 GPU.GPU3D.Run();
 
+                // Signal ARM7 thread to run the same number of system cycles in parallel.
                 target = ARM9Timestamp >> ARM9ClockShift;
-                CurCPU = 1;
-
-                while (ARM7Timestamp < target)
                 {
-                    ARM7Target = target; // might be changed by a reschedule
+                    std::unique_lock<std::mutex> lock(arm7Mutex);
+                    arm7SyncTarget.store(target, std::memory_order_relaxed);
+                    arm7WorkDone.store(false, std::memory_order_relaxed);
+                    arm7WorkReady.store(true, std::memory_order_relaxed);
+                }
+                arm7Wake.notify_one();
 
-                    if (CPUStop & CPUStop_DMA7)
-                    {
-                        DMAs[4].Run();
-                        DMAs[5].Run();
-                        DMAs[6].Run();
-                        DMAs[7].Run();
-                        if (ConsoleType == 1)
-                        {
-                            auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
-                            dsi.RunNDMAs(1);
-                        }
-                    }
-                    else
-                    {
-                        ARM7.Execute<cpuMode>();
-                    }
-
-                    RunTimers(1);
+                // Wait for ARM7 to finish before processing scheduled events.
+                {
+                    std::unique_lock<std::mutex> lock(arm7Mutex);
+                    arm7Done.wait(lock, [this] {
+                        return arm7WorkDone.load(std::memory_order_relaxed);
+                    });
                 }
 
                 RunSystem(target);
@@ -1091,7 +1168,7 @@ u32 NDS::RunFrame()
 
 void NDS::Reschedule(u64 target)
 {
-    if (CurCPU == 0)
+    if (t_CurCPU == 0)
     {
         if (target < (ARM9Target >> ARM9ClockShift))
             ARM9Target = (target << ARM9ClockShift);
@@ -1139,7 +1216,7 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
         evt.Timestamp += delay;
     else
     {
-        if (CurCPU == 0)
+        if (t_CurCPU == 0)
             evt.Timestamp = (ARM9Timestamp >> ARM9ClockShift) + delay;
         else
             evt.Timestamp = ARM7Timestamp + delay;
@@ -1148,7 +1225,7 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
     evt.FuncID = funcid;
     evt.Param = param;
 
-    SchedListMask |= (1<<id);
+    __atomic_fetch_or(&SchedListMask, 1u<<id, __ATOMIC_ACQ_REL);
 
     Reschedule(evt.Timestamp);
 }
@@ -1369,7 +1446,7 @@ void NDS::UpdateIRQ(u32 cpu)
 
 void NDS::SetIRQ(u32 cpu, u32 irq)
 {
-    IF[cpu] |= (1 << irq);
+    __atomic_fetch_or(&IF[cpu], 1u << irq, __ATOMIC_ACQ_REL);
     UpdateIRQ(cpu);
 
     if ((cpu == 1) && (CPUStop & CPUStop_Sleep))
@@ -1444,7 +1521,7 @@ void NDS::GXFIFOStall()
 
     CPUStop |= CPUStop_GXStall;
 
-    if (CurCPU == 1) ARM9.Halt(2);
+    if (t_CurCPU == 1) ARM9.Halt(2);
     else
     {
         DMAs[0].StallIfRunning();
@@ -1483,7 +1560,7 @@ u64 NDS::GetSysClockCycles(int num)
 
     if (num == 0 || num == 2)
     {
-        if (CurCPU == 0)
+        if (t_CurCPU == 0)
             ret = ARM9Timestamp >> ARM9ClockShift;
         else
             ret = ARM7Timestamp;
@@ -1495,7 +1572,7 @@ u64 NDS::GetSysClockCycles(int num)
         ret = LastSysClockCycles;
         LastSysClockCycles = 0;
 
-        if (CurCPU == 0)
+        if (t_CurCPU == 0)
             LastSysClockCycles = ARM9Timestamp >> ARM9ClockShift;
         else
             LastSysClockCycles = ARM7Timestamp;
@@ -3146,7 +3223,9 @@ u32 NDS::ARM9IORead32(u32 addr)
     case 0x04100000:
         if (IPCFIFOCnt9 & 0x8000)
         {
+            ipcLock.lock();
             u32 ret;
+            bool triggerIRQ = false;
             if (IPCFIFO7.IsEmpty())
             {
                 IPCFIFOCnt9 |= 0x4000;
@@ -3155,10 +3234,10 @@ u32 NDS::ARM9IORead32(u32 addr)
             else
             {
                 ret = IPCFIFO7.Read();
-
-                if (IPCFIFO7.IsEmpty() && (IPCFIFOCnt7 & 0x0004))
-                    SetIRQ(1, IRQ_IPCSendDone);
+                triggerIRQ = IPCFIFO7.IsEmpty() && (IPCFIFOCnt7 & 0x0004);
             }
+            ipcLock.unlock();
+            if (triggerIRQ) SetIRQ(1, IRQ_IPCSendDone);
             return ret;
         }
         else
@@ -3569,14 +3648,22 @@ void NDS::ARM9IOWrite32(u32 addr, u32 val)
     case 0x04000188:
         if (IPCFIFOCnt9 & 0x8000)
         {
+            ipcLock.lock();
             if (IPCFIFO9.IsFull())
+            {
                 IPCFIFOCnt9 |= 0x4000;
+                ipcLock.unlock();
+            }
             else
             {
                 bool wasempty = IPCFIFO9.IsEmpty();
                 IPCFIFO9.Write(val);
-                if ((IPCFIFOCnt7 & 0x0400) && wasempty)
-                    SetIRQ(1, IRQ_IPCRecv);
+                bool doIRQ = (IPCFIFOCnt7 & 0x0400) && wasempty;
+                ipcLock.unlock();
+#ifdef LITEV_ARM7_HLE_AUDIO
+                if (wasempty) ARM7HLE.NoteIPCFIFOGotData();
+#endif
+                if (doIRQ) SetIRQ(1, IRQ_IPCRecv);
             }
         }
         return;
@@ -3847,6 +3934,12 @@ u16 NDS::ARM7IORead16(u32 addr)
             else if (IPCFIFO7.IsFull()) val |= 0x0002;
             if (IPCFIFO9.IsEmpty())     val |= 0x0100;
             else if (IPCFIFO9.IsFull()) val |= 0x0200;
+#ifdef LITEV_ARM7_HLE_AUDIO
+            if (val & 0x0100)
+                ARM7HLE.NoteIPCFIFOEmptyRead(ARM7);
+            else
+                ARM7HLE.NoteIPCFIFOGotData();
+#endif
             return val;
         }
 
@@ -3883,7 +3976,15 @@ u16 NDS::ARM7IORead16(u32 addr)
                   (NDSCartSlot.GetROMCommand(7) << 8);
         return 0;
 
-    case 0x040001C0: return SPI.ReadCnt();
+    case 0x040001C0:
+        {
+            u16 spicnt = SPI.ReadCnt();
+#ifdef LITEV_ARM7_HLE_AUDIO
+            if (!(spicnt & 0x0080) && ((spicnt >> 8) & 0x3) == 0x1)
+                ARM7HLE.NoteSPIIdleRead(ARM7);
+#endif
+            return spicnt;
+        }
     case 0x040001C2: return SPI.ReadData();
 
     case 0x04000204: return ExMemCnt[1];
@@ -3978,7 +4079,9 @@ u32 NDS::ARM7IORead32(u32 addr)
     case 0x04100000:
         if (IPCFIFOCnt7 & 0x8000)
         {
+            ipcLock.lock();
             u32 ret;
+            bool triggerIRQ = false;
             if (IPCFIFO9.IsEmpty())
             {
                 IPCFIFOCnt7 |= 0x4000;
@@ -3987,10 +4090,10 @@ u32 NDS::ARM7IORead32(u32 addr)
             else
             {
                 ret = IPCFIFO9.Read();
-
-                if (IPCFIFO9.IsEmpty() && (IPCFIFOCnt9 & 0x0004))
-                    SetIRQ(0, IRQ_IPCSendDone);
+                triggerIRQ = IPCFIFO9.IsEmpty() && (IPCFIFOCnt9 & 0x0004);
             }
+            ipcLock.unlock();
+            if (triggerIRQ) SetIRQ(0, IRQ_IPCSendDone);
             return ret;
         }
         else
@@ -4225,6 +4328,9 @@ void NDS::ARM7IOWrite16(u32 addr, u16 val)
 
     case 0x040001C0:
         SPI.WriteCnt(val);
+#ifdef LITEV_ARM7_HLE_AUDIO
+        if (val & 0x8000) ARM7HLE.NoteSPITransferStart();
+#endif
         return;
     case 0x040001C2:
         SPI.WriteData(val & 0xFF);
@@ -4330,14 +4436,19 @@ void NDS::ARM7IOWrite32(u32 addr, u32 val)
     case 0x04000188:
         if (IPCFIFOCnt7 & 0x8000)
         {
+            ipcLock.lock();
             if (IPCFIFO7.IsFull())
+            {
                 IPCFIFOCnt7 |= 0x4000;
+                ipcLock.unlock();
+            }
             else
             {
                 bool wasempty = IPCFIFO7.IsEmpty();
                 IPCFIFO7.Write(val);
-                if ((IPCFIFOCnt9 & 0x0400) && wasempty)
-                    SetIRQ(0, IRQ_IPCRecv);
+                bool doIRQ = (IPCFIFOCnt9 & 0x0400) && wasempty;
+                ipcLock.unlock();
+                if (doIRQ) SetIRQ(0, IRQ_IPCRecv);
             }
         }
         return;

@@ -543,6 +543,23 @@ public:
     melonDS::NDS& NDS;
     u16 VCount = 0;
     u16 TotalScanlines = 0;
+
+#ifdef LITEV_AGGRESSIVE_SKIP
+    int FrameskipTarget = 0;
+    int FrameskipCounter = 0;
+    bool SkipThisFrame = false;
+    static constexpr int LITEV_FRAMESKIP_MAX = 3;
+
+    void SetFrameskipTarget(int target) noexcept
+    {
+        if (target < 0) target = 0;
+        if (target > LITEV_FRAMESKIP_MAX) target = LITEV_FRAMESKIP_MAX;
+        FrameskipTarget = target;
+        FrameskipCounter = 0;
+        SkipThisFrame = false;
+    }
+#endif // LITEV_AGGRESSIVE_SKIP
+
     u16 DispStat[2] {};
     u8 VRAMCNT[9] {};
     u8 VRAMSTAT = 0;

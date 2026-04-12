@@ -468,11 +468,13 @@ InterpreterFunc InterpretTHUMB[ARMInstrInfo::tk_Count] =
 };
 #undef F
 
-ARMJIT::ARMJIT(melonDS::NDS& nds, std::optional<JITArgs> jit) noexcept : 
+static constexpr u32 LITEV_JIT_MAX_BLOCK_SIZE = 512;
+
+ARMJIT::ARMJIT(melonDS::NDS& nds, std::optional<JITArgs> jit) noexcept :
         NDS(nds),
         Memory(nds),
         JITCompiler(nds),
-        MaxBlockSize(jit.has_value() ? std::clamp(jit->MaxBlockSize, 1u, 32u) : 32),
+        MaxBlockSize(jit.has_value() ? std::clamp(jit->MaxBlockSize, 1u, LITEV_JIT_MAX_BLOCK_SIZE) : 32),
         LiteralOptimizations(jit.has_value() ? jit->LiteralOptimizations : false),
         BranchOptimizations(jit.has_value() ? jit->BranchOptimizations : false),
         FastMemory((jit.has_value() ? jit->FastMemory : false) && ARMJIT_Memory::IsFastMemSupported())
@@ -495,7 +497,7 @@ void ARMJIT::RetireJitBlock(JitBlock* block) noexcept
 void ARMJIT::SetJITArgs(JITArgs args) noexcept
 {
     args.FastMemory = args.FastMemory && ARMJIT_Memory::IsFastMemSupported();
-    args.MaxBlockSize = std::clamp(args.MaxBlockSize, 1u, 32u);
+    args.MaxBlockSize = std::clamp(args.MaxBlockSize, 1u, LITEV_JIT_MAX_BLOCK_SIZE);
 
     if (MaxBlockSize != args.MaxBlockSize
         || LiteralOptimizations != args.LiteralOptimizations
@@ -905,7 +907,15 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     {
         JIT_DEBUGPRINT("restored! %p\n", prevBlock);
         block = prevBlock;
+#ifdef LITEV_ARM7_PROFILE
+        Stats.BlockRestores.fetch_add(1, std::memory_order_relaxed);
+#endif
     }
+
+#ifdef LITEV_ARM7_PROFILE
+    Stats.BlockCompiles.fetch_add(1, std::memory_order_relaxed);
+    Stats.TotalInstructions.fetch_add((uint64_t)i, std::memory_order_relaxed);
+#endif
 
     assert((localAddr & 1) == 0);
     for (u32 j = 0; j < numAddressRanges; j++)
@@ -1066,7 +1076,15 @@ JitBlockEntry ARMJIT::LookUpBlock(u32 num, u64* entries, u32 offset, u32 addr) n
 {
     u64* entry = &entries[offset / 2];
     if (*entry >> 32 == (addr | num))
+    {
+#ifdef LITEV_ARM7_PROFILE
+        Stats.FastLookupHits.fetch_add(1, std::memory_order_relaxed);
+#endif
         return JITCompiler.AddEntryOffset((u32)*entry);
+    }
+#ifdef LITEV_ARM7_PROFILE
+    Stats.FastLookupMisses.fetch_add(1, std::memory_order_relaxed);
+#endif
     return NULL;
 }
 

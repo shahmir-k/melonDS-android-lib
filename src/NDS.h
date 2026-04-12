@@ -23,6 +23,10 @@
 #include <string>
 #include <optional>
 #include <functional>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 #include "Platform.h"
 #include "Savestate.h"
@@ -43,6 +47,9 @@
 #include "CRC32.h"
 #include "DMA.h"
 #include "FreeBIOS.h"
+#ifdef LITEV_ARM7_HLE_AUDIO
+#include "ARM7HLE_Core.h"
+#endif
 
 // when touching the main loop/timing code, pls test a lot of shit
 // with this enabled, to make sure it doesn't desync
@@ -253,6 +260,24 @@ public: // TODO: Encapsulate the rest of these members
     int ConsoleType;
     int CurCPU;
 
+    // ARM7 dedicated thread (OPT-1)
+    struct Spinlock {
+        std::atomic_flag flag = ATOMIC_FLAG_INIT;
+        void lock() noexcept { while (flag.test_and_set(std::memory_order_acquire)) {} }
+        void unlock() noexcept { flag.clear(std::memory_order_release); }
+    };
+    Spinlock ipcLock;
+    std::thread arm7Thread;
+    std::mutex arm7Mutex;
+    std::condition_variable arm7Wake;
+    std::condition_variable arm7Done;
+    std::atomic<bool> arm7ThreadRunning{false};
+    std::atomic<bool> arm7WorkReady{false};
+    std::atomic<bool> arm7WorkDone{true};
+    std::atomic<u64> arm7SyncTarget{0};
+    CPUExecuteMode arm7CPUMode{CPUExecuteMode::Interpreter};
+    void ARM7ThreadFunc();
+
     SchedEvent SchedList[Event_MAX] {};
     u8 ARM9MemTimings[0x40000][8];
     u32 ARM9Regions[0x40000];
@@ -323,6 +348,9 @@ public: // TODO: Encapsulate the rest of these members
     GBACart::GBACartSlot GBACartSlot;
     melonDS::GPU GPU;
     melonDS::AREngine AREngine;
+#ifdef LITEV_ARM7_HLE_AUDIO
+    ARM7HLECore ARM7HLE;
+#endif
 
     const u32 ARM7WRAMSize = 0x10000;
     u8* ARM7WRAM;

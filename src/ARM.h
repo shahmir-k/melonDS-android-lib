@@ -26,6 +26,11 @@
 #include "MemRegion.h"
 #include "MemConstants.h"
 
+#ifdef LITEV_ARM7_PROFILE
+#include <atomic>
+#include <cstdint>
+#endif
+
 #ifdef GDBSTUB_ENABLED
 #include "debug/GdbStub.h"
 #endif
@@ -380,6 +385,33 @@ protected:
     void BusWrite32(u32 addr, u32 val) override;
 };
 
+#ifdef LITEV_ARM7_PROFILE
+struct ARM7SubsysProfile
+{
+    std::atomic<uint64_t> BIOS      {0};
+    std::atomic<uint64_t> WRAM     {0};
+    std::atomic<uint64_t> SharedWRAM{0};
+    std::atomic<uint64_t> MainRAM  {0};
+    std::atomic<uint64_t> Other    {0};
+
+    void Reset() noexcept
+    {
+        BIOS.store(0, std::memory_order_relaxed);
+        WRAM.store(0, std::memory_order_relaxed);
+        SharedWRAM.store(0, std::memory_order_relaxed);
+        MainRAM.store(0, std::memory_order_relaxed);
+        Other.store(0, std::memory_order_relaxed);
+    }
+
+    void SamplePC(u32 pc) noexcept;
+
+    uint64_t Total() const noexcept
+    {
+        return BIOS + WRAM + SharedWRAM + MainRAM + Other;
+    }
+};
+#endif // LITEV_ARM7_PROFILE
+
 class ARMv4 : public ARM
 {
 public:
@@ -421,6 +453,11 @@ protected:
     void BusWrite8(u32 addr, u8 val) override;
     void BusWrite16(u32 addr, u16 val) override;
     void BusWrite32(u32 addr, u32 val) override;
+
+public:
+#ifdef LITEV_ARM7_PROFILE
+    ARM7SubsysProfile SubsysProfile;
+#endif
 };
 
 namespace ARMInterpreter
