@@ -1124,6 +1124,11 @@ void GLRenderer::RenderFrame(GPU& gpu)
 {
     CurShaderID = -1;
 
+    auto textureDirty = gpu.VRAMDirty_Texture.DeriveState(gpu.VRAMMap_Texture, gpu);
+    auto texPalDirty = gpu.VRAMDirty_TexPal.DeriveState(gpu.VRAMMap_TexPal, gpu);
+    if (!textureDirty.Any() && !texPalDirty.Any() && gpu.GPU3D.RenderFrameIdentical)
+        return;
+
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, MainFramebuffer);
 
