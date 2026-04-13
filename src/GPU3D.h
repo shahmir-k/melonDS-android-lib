@@ -323,6 +323,7 @@ public:
 
     std::array<Polygon*,2048> RenderPolygonRAM {};
     u32 RenderNumPolygons = 0;
+    u64 RenderFrameToken = 0;
 
     u32 FlushRequest = 0;
     u32 FlushAttributes = 0;
@@ -353,6 +354,7 @@ public:
 
     virtual void SetupAccelFrame() {}
     virtual void PrepareCaptureFrame() {}
+    virtual void PrepareFrame(const GPU3D& gpu3d) {}
     virtual void SetOutputTexture(int buffer, u32 texture) {}
     virtual void BindOutputTexture(int buffer) {}
 

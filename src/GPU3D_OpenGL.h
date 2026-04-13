@@ -22,6 +22,10 @@
 #include "GPU3D.h"
 #include "GPU_OpenGL.h"
 #include "OpenGLSupport.h"
+#include <array>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 namespace melonDS
 {
@@ -46,6 +50,7 @@ public:
 
     void SetupAccelFrame() override;
     void PrepareCaptureFrame() override;
+    void PrepareFrame(const GPU3D& gpu3d) override;
     void Blit(const GPU& gpu) override;
 
     void SetOutputTexture(int buffer, u32 texture) override;
@@ -74,14 +79,39 @@ private:
         u32 RenderKey;
     };
 
+    struct PreparedFrameData
+    {
+        std::array<RendererPolygon, 2048> PolygonList {};
+        std::array<u32, 10240 * 7> VertexBuffer {};
+        std::array<u16, 2048 * 40> IndexBuffer {};
+        u32 NumVertices = 0;
+        u32 NumIndices = 0;
+        u32 NumEdgeIndices = 0;
+        int NumFinalPolys = 0;
+        int NumOpaqueFinalPolys = -1;
+        u64 FrameToken = 0;
+    };
+
+    struct PrepareJob
+    {
+        const GPU3D* GPU = nullptr;
+        u64 FrameToken = 0;
+        int ScaleFactor = 1;
+        bool BetterPolygons = false;
+    };
+
     GLCompositor CurGLCompositor;
     RendererPolygon PolygonList[2048] {};
+    PreparedFrameData PreparedFrames[2] {};
 
     bool BuildRenderShader(u32 flags, const std::string& vs, const std::string& fs);
     void UseRenderShader(u32 flags);
-    void SetupPolygon(RendererPolygon* rp, Polygon* polygon) const;
-    u32* SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) const;
-    void BuildPolygons(RendererPolygon* polygons, int npolys);
+    static void SetupPolygon(RendererPolygon* rp, Polygon* polygon) noexcept;
+    static u32* SetupVertex(int scaleFactor, const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) noexcept;
+    static void BuildPolygons(PreparedFrameData& frame, int scaleFactor, bool betterPolygons, RendererPolygon* polygons, int npolys);
+    void BuildPreparedFrame(PreparedFrameData& frame, const GPU3D& gpu3d, int scaleFactor, bool betterPolygons);
+    void PrepareThreadMain();
+    const PreparedFrameData* ResolvePreparedFrame(u64 frameToken);
     int RenderSinglePolygon(int i) const;
     int RenderPolygonBatch(int i) const;
     int RenderPolygonEdgeBatch(int i) const;
@@ -147,9 +177,11 @@ private:
     u32 NumIndices {}, NumEdgeIndices {};
 
     const u32 EdgeIndicesOffset = 2048 * 30;
+    static constexpr u32 AsyncEdgeIndicesOffset = 2048 * 30;
 
     GLuint TexMemID {};
     GLuint TexPalMemID {};
+    u16 TexPalUploadBuffer[1024 * 48] {};
 
     int ScaleFactor {};
     bool BetterPolygons {};
@@ -161,6 +193,16 @@ private:
 
     GLuint MainFramebuffer {}, DownscaleFramebuffer {};
     u32 Framebuffer[256*192] {};
+
+    std::thread PrepareThread;
+    std::mutex PrepareMutex;
+    std::condition_variable PrepareCV;
+    PrepareJob PendingPrepareJob {};
+    bool PrepareJobPending = false;
+    bool PrepareThreadStop = false;
+    int PrepareWriteIndex = 0;
+    int PreparedReadIndex = -1;
+    const PreparedFrameData* ActivePreparedFrame = nullptr;
 };
 }
 #endif
