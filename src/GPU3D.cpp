@@ -2516,6 +2516,7 @@ void GPU3D::VBlank() noexcept
 
             RenderClearAttr1 = ClearAttr1;
             RenderClearAttr2 = ClearAttr2;
+            RenderFrameToken++;
         }
 
         if (FlushRequest)
@@ -2530,6 +2531,8 @@ void GPU3D::VBlank() noexcept
 
             FlushRequest = 0;
         }
+
+        CurrentRenderer->PrepareFrame(*this);
     }
 }
 
@@ -3006,4 +3009,3 @@ Renderer3D::Renderer3D(bool Accelerated)
 { }
 
 }
-

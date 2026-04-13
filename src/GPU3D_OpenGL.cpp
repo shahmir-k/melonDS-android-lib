@@ -280,12 +280,23 @@ std::unique_ptr<GLRenderer> GLRenderer::New() noexcept
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
+    result->PrepareThread = std::thread(&GLRenderer::PrepareThreadMain, result.get());
+
     return result;
 }
 
 GLRenderer::~GLRenderer()
 {
     assert(glDeleteTextures != nullptr);
+
+    {
+        std::lock_guard<std::mutex> lock(PrepareMutex);
+        PrepareThreadStop = true;
+        PrepareJobPending = false;
+    }
+    PrepareCV.notify_all();
+    if (PrepareThread.joinable())
+        PrepareThread.join();
 
     glDeleteTextures(1, &TexMemID);
     glDeleteTextures(1, &TexPalMemID);
@@ -313,6 +324,12 @@ GLRenderer::~GLRenderer()
 
 void GLRenderer::Reset(GPU& gpu)
 {
+    {
+        std::lock_guard<std::mutex> lock(PrepareMutex);
+        PrepareJobPending = false;
+        PreparedReadIndex = -1;
+        ActivePreparedFrame = nullptr;
+    }
     // This is where the compositor's Reset() method would be called,
     // except there's no such method right now.
 }
@@ -368,8 +385,68 @@ void GLRenderer::SetRenderSettings(bool betterpolygons, int scale) noexcept
     //glLineWidth(1.5);
 }
 
+void GLRenderer::PrepareFrame(const GPU3D& gpu3d)
+{
+    if (gpu3d.RenderFrameIdentical || gpu3d.RenderNumPolygons == 0)
+        return;
 
-void GLRenderer::SetupPolygon(GLRenderer::RendererPolygon* rp, Polygon* polygon) const
+    std::lock_guard<std::mutex> lock(PrepareMutex);
+    PendingPrepareJob = {
+        .GPU = &gpu3d,
+        .FrameToken = gpu3d.RenderFrameToken,
+        .ScaleFactor = ScaleFactor,
+        .BetterPolygons = BetterPolygons,
+    };
+    PrepareJobPending = true;
+    PrepareCV.notify_one();
+}
+
+const GLRenderer::PreparedFrameData* GLRenderer::ResolvePreparedFrame(u64 frameToken)
+{
+    std::lock_guard<std::mutex> lock(PrepareMutex);
+    if (PreparedReadIndex < 0)
+        return nullptr;
+
+    const PreparedFrameData& frame = PreparedFrames[PreparedReadIndex];
+    if (frame.FrameToken != frameToken)
+        return nullptr;
+
+    ActivePreparedFrame = &frame;
+    return ActivePreparedFrame;
+}
+
+void GLRenderer::PrepareThreadMain()
+{
+    while (true)
+    {
+        PrepareJob job;
+        int writeIndex;
+        {
+            std::unique_lock<std::mutex> lock(PrepareMutex);
+            PrepareCV.wait(lock, [this] { return PrepareThreadStop || PrepareJobPending; });
+            if (PrepareThreadStop)
+                return;
+
+            job = PendingPrepareJob;
+            PrepareJobPending = false;
+            writeIndex = PrepareWriteIndex;
+        }
+
+        BuildPreparedFrame(PreparedFrames[writeIndex], *job.GPU, job.ScaleFactor, job.BetterPolygons);
+
+        {
+            std::lock_guard<std::mutex> lock(PrepareMutex);
+            if (PrepareThreadStop)
+                return;
+
+            PreparedReadIndex = writeIndex;
+            PrepareWriteIndex ^= 1;
+        }
+    }
+}
+
+
+void GLRenderer::SetupPolygon(GLRenderer::RendererPolygon* rp, Polygon* polygon) noexcept
 {
     rp->PolyData = polygon;
 
@@ -415,7 +492,7 @@ void GLRenderer::SetupPolygon(GLRenderer::RendererPolygon* rp, Polygon* polygon)
     }
 }
 
-u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) const
+u32* GLRenderer::SetupVertex(int scaleFactor, const Polygon* poly, int vid, const Vertex* vtx, u32 vtxattr, u32* vptr) noexcept
 {
     u32 z = poly->FinalZ[vid];
     u32 w = poly->FinalW[vid];
@@ -427,10 +504,10 @@ u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u3
     while (z > 0xFFFF) { z >>= 1; zshift++; }
 
     u32 x, y;
-    if (ScaleFactor > 1)
+    if (scaleFactor > 1)
     {
-        x = (vtx->HiresPosition[0] * ScaleFactor) >> 4;
-        y = (vtx->HiresPosition[1] * ScaleFactor) >> 4;
+        x = (vtx->HiresPosition[0] * scaleFactor) >> 4;
+        y = (vtx->HiresPosition[1] * scaleFactor) >> 4;
     }
     else
     {
@@ -477,13 +554,13 @@ u32* GLRenderer::SetupVertex(const Polygon* poly, int vid, const Vertex* vtx, u3
     return vptr;
 }
 
-void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys)
+void GLRenderer::BuildPolygons(PreparedFrameData& frame, int scaleFactor, bool betterPolygons, GLRenderer::RendererPolygon* polygons, int npolys)
 {
-    u32* vptr = &VertexBuffer[0];
+    u32* vptr = &frame.VertexBuffer[0];
     u32 vidx = 0;
 
     u32 iidx = 0;
-    u32 eidx = EdgeIndicesOffset;
+    u32 eidx = AsyncEdgeIndicesOffset;
 
     for (int i = 0; i < npolys; i++)
     {
@@ -523,9 +600,9 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 lastx = vtx->FinalPosition[0];
                 lasty = vtx->FinalPosition[1];
 
-                vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                vptr = SetupVertex(scaleFactor, poly, j, vtx, vtxattr, vptr);
 
-                IndexBuffer[iidx++] = vidx;
+                frame.IndexBuffer[iidx++] = vidx;
                 rp->NumIndices++;
 
                 vidx++;
@@ -541,21 +618,21 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
             {
                 Vertex* vtx = poly->Vertices[j];
 
-                vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                vptr = SetupVertex(scaleFactor, poly, j, vtx, vtxattr, vptr);
                 vidx++;
             }
 
             // build a triangle
-            IndexBuffer[iidx++] = vidx_first;
-            IndexBuffer[iidx++] = vidx - 2;
-            IndexBuffer[iidx++] = vidx - 1;
+            frame.IndexBuffer[iidx++] = vidx_first;
+            frame.IndexBuffer[iidx++] = vidx - 2;
+            frame.IndexBuffer[iidx++] = vidx - 1;
             rp->NumIndices += 3;
         }
         else // quad, pentagon, etc
         {
             rp->PrimType = GL_TRIANGLES;
 
-            if (!BetterPolygons)
+            if (!betterPolygons)
             {
                 // regular triangle-splitting
 
@@ -563,14 +640,14 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 {
                     Vertex* vtx = poly->Vertices[j];
 
-                    vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                    vptr = SetupVertex(scaleFactor, poly, j, vtx, vtxattr, vptr);
 
                     if (j >= 2)
                     {
                         // build a triangle
-                        IndexBuffer[iidx++] = vidx_first;
-                        IndexBuffer[iidx++] = vidx - 1;
-                        IndexBuffer[iidx++] = vidx;
+                        frame.IndexBuffer[iidx++] = vidx_first;
+                        frame.IndexBuffer[iidx++] = vidx - 1;
+                        frame.IndexBuffer[iidx++] = vidx;
                         rp->NumIndices += 3;
                     }
 
@@ -626,8 +703,8 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 cS *= cW;
                 cT *= cW;
 
-                cX = (cX * ScaleFactor) >> 4;
-                cY = (cY * ScaleFactor) >> 4;
+                cX = (cX * scaleFactor) >> 4;
+                cY = (cY * scaleFactor) >> 4;
 
                 u32 w = (u32)cW;
 
@@ -658,23 +735,23 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
                 {
                     Vertex* vtx = poly->Vertices[j];
 
-                    vptr = SetupVertex(poly, j, vtx, vtxattr, vptr);
+                    vptr = SetupVertex(scaleFactor, poly, j, vtx, vtxattr, vptr);
 
                     if (j >= 1)
                     {
                         // build a triangle
-                        IndexBuffer[iidx++] = vidx_first;
-                        IndexBuffer[iidx++] = vidx - 1;
-                        IndexBuffer[iidx++] = vidx;
+                        frame.IndexBuffer[iidx++] = vidx_first;
+                        frame.IndexBuffer[iidx++] = vidx - 1;
+                        frame.IndexBuffer[iidx++] = vidx;
                         rp->NumIndices += 3;
                     }
 
                     vidx++;
                 }
 
-                IndexBuffer[iidx++] = vidx_first;
-                IndexBuffer[iidx++] = vidx - 1;
-                IndexBuffer[iidx++] = vidx_first + 1;
+                frame.IndexBuffer[iidx++] = vidx_first;
+                frame.IndexBuffer[iidx++] = vidx - 1;
+                frame.IndexBuffer[iidx++] = vidx_first + 1;
                 rp->NumIndices += 3;
             }
         }
@@ -685,24 +762,52 @@ void GLRenderer::BuildPolygons(GLRenderer::RendererPolygon* polygons, int npolys
         u32 vidx_cur = vidx_first;
         for (u32 j = 1; j < poly->NumVertices; j++)
         {
-            IndexBuffer[eidx++] = vidx_cur;
-            IndexBuffer[eidx++] = vidx_cur + 1;
+            frame.IndexBuffer[eidx++] = vidx_cur;
+            frame.IndexBuffer[eidx++] = vidx_cur + 1;
             vidx_cur++;
             rp->NumEdgeIndices += 2;
         }
-        IndexBuffer[eidx++] = vidx_cur;
-        IndexBuffer[eidx++] = vidx_first;
+        frame.IndexBuffer[eidx++] = vidx_cur;
+        frame.IndexBuffer[eidx++] = vidx_first;
         rp->NumEdgeIndices += 2;
     }
 
-    NumVertices = vidx;
-    NumIndices = iidx;
-    NumEdgeIndices = eidx - EdgeIndicesOffset;
+    frame.NumVertices = vidx;
+    frame.NumIndices = iidx;
+    frame.NumEdgeIndices = eidx - AsyncEdgeIndicesOffset;
+}
+
+void GLRenderer::BuildPreparedFrame(PreparedFrameData& frame, const GPU3D& gpu3d, int scaleFactor, bool betterPolygons)
+{
+    frame.NumVertices = 0;
+    frame.NumIndices = 0;
+    frame.NumEdgeIndices = 0;
+    frame.NumFinalPolys = 0;
+    frame.NumOpaqueFinalPolys = -1;
+    frame.FrameToken = gpu3d.RenderFrameToken;
+
+    int npolys = 0;
+    int firsttrans = -1;
+    for (u32 i = 0; i < gpu3d.RenderNumPolygons; i++)
+    {
+        Polygon* poly = gpu3d.RenderPolygonRAM[i];
+        if (poly->Degenerate)
+            continue;
+
+        SetupPolygon(&frame.PolygonList[npolys], poly);
+        if (firsttrans < 0 && poly->Translucent)
+            firsttrans = npolys;
+        npolys++;
+    }
+
+    frame.NumFinalPolys = npolys;
+    frame.NumOpaqueFinalPolys = firsttrans;
+    BuildPolygons(frame, scaleFactor, betterPolygons, frame.PolygonList.data(), npolys);
 }
 
 int GLRenderer::RenderSinglePolygon(int i) const
 {
-    const RendererPolygon* rp = &PolygonList[i];
+    const RendererPolygon* rp = ActivePreparedFrame ? &ActivePreparedFrame->PolygonList[i] : &PolygonList[i];
 
     glDrawElements(rp->PrimType, rp->NumIndices, GL_UNSIGNED_SHORT, (void*)(uintptr_t)(rp->IndicesOffset * 2));
 
@@ -711,15 +816,16 @@ int GLRenderer::RenderSinglePolygon(int i) const
 
 int GLRenderer::RenderPolygonBatch(int i) const
 {
-    const RendererPolygon* rp = &PolygonList[i];
+    const RendererPolygon* rp = ActivePreparedFrame ? &ActivePreparedFrame->PolygonList[i] : &PolygonList[i];
     GLuint primtype = rp->PrimType;
     u32 key = rp->RenderKey;
     int numpolys = 0;
     u32 numindices = 0;
+    const int numFinalPolys = ActivePreparedFrame ? ActivePreparedFrame->NumFinalPolys : NumFinalPolys;
 
-    for (int iend = i; iend < NumFinalPolys; iend++)
+    for (int iend = i; iend < numFinalPolys; iend++)
     {
-        const RendererPolygon* cur_rp = &PolygonList[iend];
+        const RendererPolygon* cur_rp = ActivePreparedFrame ? &ActivePreparedFrame->PolygonList[iend] : &PolygonList[iend];
         if (cur_rp->PrimType != primtype) break;
         if (cur_rp->RenderKey != key) break;
 
@@ -733,14 +839,15 @@ int GLRenderer::RenderPolygonBatch(int i) const
 
 int GLRenderer::RenderPolygonEdgeBatch(int i) const
 {
-    const RendererPolygon* rp = &PolygonList[i];
+    const RendererPolygon* rp = ActivePreparedFrame ? &ActivePreparedFrame->PolygonList[i] : &PolygonList[i];
     u32 key = rp->RenderKey;
     int numpolys = 0;
     u32 numindices = 0;
+    const int numFinalPolys = ActivePreparedFrame ? ActivePreparedFrame->NumFinalPolys : NumFinalPolys;
 
-    for (int iend = i; iend < NumFinalPolys; iend++)
+    for (int iend = i; iend < numFinalPolys; iend++)
     {
-        const RendererPolygon* cur_rp = &PolygonList[iend];
+        const RendererPolygon* cur_rp = ActivePreparedFrame ? &ActivePreparedFrame->PolygonList[iend] : &PolygonList[iend];
         if (cur_rp->RenderKey != key) break;
 
         numpolys++;
@@ -753,6 +860,10 @@ int GLRenderer::RenderPolygonEdgeBatch(int i) const
 
 void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 {
+    const RendererPolygon* polygons = ActivePreparedFrame ? ActivePreparedFrame->PolygonList.data() : PolygonList;
+    const int numFinalPolys = ActivePreparedFrame ? ActivePreparedFrame->NumFinalPolys : NumFinalPolys;
+    const int numOpaqueFinalPolys = ActivePreparedFrame ? ActivePreparedFrame->NumOpaqueFinalPolys : NumOpaqueFinalPolys;
+
     u32 flags = 0;
     if (gpu3d.RenderPolygonRAM[0]->WBuffer) flags |= RenderFlag_WBuffer;
 
@@ -776,9 +887,9 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 
     glBindVertexArray(VertexArrayID);
 
-    for (int i = 0; i < NumFinalPolys; )
+    for (int i = 0; i < numFinalPolys; )
     {
-        RendererPolygon* rp = &PolygonList[i];
+        const RendererPolygon* rp = &polygons[i];
 
         if (rp->PolyData->IsShadowMask) { i++; continue; }
         if (rp->PolyData->Translucent) { i++; continue; }
@@ -815,9 +926,9 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
         glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
         glStencilMask(0);
 
-        for (int i = 0; i < NumFinalPolys; )
+        for (int i = 0; i < numFinalPolys; )
         {
-            RendererPolygon* rp = &PolygonList[i];
+            const RendererPolygon* rp = &polygons[i];
 
             if (rp->PolyData->IsShadowMask) { i++; continue; }
 
@@ -837,7 +948,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 
     glLineWidth(1.0);
 
-    if (NumOpaqueFinalPolys > -1)
+    if (numOpaqueFinalPolys > -1)
     {
         // pass 2: if needed, render translucent pixels that are against background pixels
         // when background alpha is zero, those need to be rendered with blending disabled
@@ -846,9 +957,9 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
         {
             glDisable(GL_BLEND);
 
-            for (int i = 0; i < NumFinalPolys; )
+            for (int i = 0; i < numFinalPolys; )
             {
-                RendererPolygon* rp = &PolygonList[i];
+                const RendererPolygon* rp = &polygons[i];
 
                 if (rp->PolyData->IsShadowMask)
                 {
@@ -947,9 +1058,9 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 
         // pass 3: translucent pixels
 
-        for (int i = 0; i < NumFinalPolys; )
+        for (int i = 0; i < numFinalPolys; )
         {
-            RendererPolygon* rp = &PolygonList[i];
+            const RendererPolygon* rp = &polygons[i];
 
             if (rp->PolyData->IsShadowMask)
             {
@@ -1123,6 +1234,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 void GLRenderer::RenderFrame(GPU& gpu)
 {
     CurShaderID = -1;
+    ActivePreparedFrame = nullptr;
 
     auto textureDirty = gpu.VRAMDirty_Texture.DeriveState(gpu.VRAMMap_Texture, gpu);
     auto texPalDirty = gpu.VRAMDirty_TexPal.DeriveState(gpu.VRAMMap_TexPal, gpu);
@@ -1187,53 +1299,34 @@ void GLRenderer::RenderFrame(GPU& gpu)
     if (unibuf) memcpy(unibuf, &ShaderConfig, sizeof(ShaderConfig));
     glUnmapBuffer(GL_UNIFORM_BUFFER);
 
-    // SUCKY!!!!!!!!!!!!!!!!!!
-    // TODO: detect when VRAM blocks are modified!
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, TexMemID);
-    for (int i = 0; i < 4; i++)
+    if (textureDirty.Any())
     {
-        u32 mask = gpu.VRAMMap_Texture[i];
-        u8* vram;
-        if (!mask) continue;
-        else if (mask & (1<<0)) vram = gpu.VRAM_A;
-        else if (mask & (1<<1)) vram = gpu.VRAM_B;
-        else if (mask & (1<<2)) vram = gpu.VRAM_C;
-        else if (mask & (1<<3)) vram = gpu.VRAM_D;
-
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, i*128, 1024, 128, GL_RED_INTEGER, GL_UNSIGNED_BYTE, vram);
+        gpu.MakeVRAMFlat_TextureCoherent(textureDirty);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 512, GL_RED_INTEGER,
+                        GL_UNSIGNED_BYTE, gpu.VRAMFlat_Texture);
     }
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TexPalMemID);
-
-    u16* tempBuffer = (u16*) malloc(1024 * 8 * 2);
-    for (int i = 0; i < 6; i++)
+    if (texPalDirty.Any())
     {
-        // 6 x 16K chunks
-        u32 mask = gpu.VRAMMap_TexPal[i];
-        u8* vram;
-        if (!mask) continue;
-        else if (mask & (1<<4)) vram = &gpu.VRAM_E[(i&3)*0x4000];
-        else if (mask & (1<<5)) vram = gpu.VRAM_F;
-        else if (mask & (1<<6)) vram = gpu.VRAM_G;
-
-        memcpy(tempBuffer, vram, 1024 * 8 * 2);
-        for (int j = 0; j < 1024 * 8; j++)
+        gpu.MakeVRAMFlat_TexPalCoherent(texPalDirty);
+        for (int i = 0; i < 1024 * 48; i++)
         {
-            u16 value = tempBuffer[j];
+            u16 value = reinterpret_cast<const u16*>(gpu.VRAMFlat_TexPal)[i];
 
             u8 a = (value >> 15) & 0x1;
             u8 b = (value >> 10) & 0x1F;
             u8 g = (value >> 5) & 0x1F;
             u8 r = (value >> 0) & 0x1F;
 
-            tempBuffer[j] = (r << 11) | (g << 6) | (b << 1) | a;
+            TexPalUploadBuffer[i] = (r << 11) | (g << 6) | (b << 1) | a;
         }
-
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, i*8, 1024, 8, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, tempBuffer);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 48, GL_RGBA,
+                        GL_UNSIGNED_SHORT_5_5_5_1, TexPalUploadBuffer);
     }
-    free(tempBuffer);
 
     glDisable(GL_SCISSOR_TEST);
     glEnable(GL_DEPTH_TEST);
@@ -1282,36 +1375,41 @@ void GLRenderer::RenderFrame(GPU& gpu)
 
     if (gpu.GPU3D.RenderNumPolygons)
     {
-        // render shit here
-        u32 flags = 0;
-        if (gpu.GPU3D.RenderPolygonRAM[0]->WBuffer) flags |= RenderFlag_WBuffer;
-
-        int npolys = 0;
-        int firsttrans = -1;
-        for (u32 i = 0; i < gpu.GPU3D.RenderNumPolygons; i++)
+        const PreparedFrameData* prepared = ResolvePreparedFrame(gpu.GPU3D.RenderFrameToken);
+        if (!prepared)
         {
-            if (gpu.GPU3D.RenderPolygonRAM[i]->Degenerate) continue;
+            PreparedFrameData syncFrame {};
+            BuildPreparedFrame(syncFrame, gpu.GPU3D, ScaleFactor, BetterPolygons);
 
-            SetupPolygon(&PolygonList[npolys], gpu.GPU3D.RenderPolygonRAM[i]);
-            if (firsttrans < 0 && gpu.GPU3D.RenderPolygonRAM[i]->Translucent)
-                firsttrans = npolys;
-
-            npolys++;
+            NumFinalPolys = syncFrame.NumFinalPolys;
+            NumOpaqueFinalPolys = syncFrame.NumOpaqueFinalPolys;
+            NumVertices = syncFrame.NumVertices;
+            NumIndices = syncFrame.NumIndices;
+            NumEdgeIndices = syncFrame.NumEdgeIndices;
+            memcpy(PolygonList, syncFrame.PolygonList.data(), sizeof(PolygonList));
+            memcpy(VertexBuffer, syncFrame.VertexBuffer.data(), syncFrame.NumVertices * 7 * sizeof(u32));
+            memcpy(IndexBuffer, syncFrame.IndexBuffer.data(),
+                   (AsyncEdgeIndicesOffset + syncFrame.NumEdgeIndices) * sizeof(u16));
         }
-        NumFinalPolys = npolys;
-        NumOpaqueFinalPolys = firsttrans;
 
-        BuildPolygons(&PolygonList[0], npolys);
+        const u32* vertexBuffer = prepared ? prepared->VertexBuffer.data() : VertexBuffer;
+        const u16* indexBuffer = prepared ? prepared->IndexBuffer.data() : IndexBuffer;
+        const u32 numVertices = prepared ? prepared->NumVertices : NumVertices;
+        const u32 numIndices = prepared ? prepared->NumIndices : NumIndices;
+        const u32 numEdgeIndices = prepared ? prepared->NumEdgeIndices : NumEdgeIndices;
+
         glBindBuffer(GL_ARRAY_BUFFER, VertexBufferID);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, NumVertices*7*4, VertexBuffer);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, numVertices * 7 * 4, vertexBuffer);
 
         // bind to access the index buffer
         glBindVertexArray(VertexArrayID);
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, NumIndices * 2, IndexBuffer);
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, numIndices * 2, indexBuffer);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, numEdgeIndices * 2, indexBuffer + AsyncEdgeIndicesOffset);
 
         RenderSceneChunk(gpu.GPU3D, 0, 192);
     }
+
+    ActivePreparedFrame = nullptr;
 }
 
 void GLRenderer::Stop(const GPU& gpu)
