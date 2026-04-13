@@ -47,6 +47,11 @@ private:
     alignas(8) u8 OBJWindow[2][256];
 
     u32 NumSprites[2];
+    u32 SyncedBGStamp[2] {};
+    u32 SyncedBGExtPalStamp[2] {};
+    u32 SyncedOBJStamp[2] {};
+    u32 SyncedOBJExtPalStamp[2] {};
+    bool LineUsesAccelAux = false;
 
     u8* CurBGXMosaicTable;
     array2d<u8, 16, 256> MosaicTable = []() constexpr
@@ -117,7 +122,7 @@ private:
 
         return rb | g | 0xFF000000;
     }
-    u32 ColorComposite(int i, u32 val1, u32 val2) const;
+    template<bool windowMaskFull> u32 ColorComposite(int i, u32 val1, u32 val2) const;
 
     template<u32 bgmode> void DrawScanlineBGMode(u32 line);
     void DrawScanlineBGMode6(u32 line);
@@ -129,8 +134,8 @@ private:
 
     typedef void (*DrawPixel)(u32* dst, u16 color, u32 flag);
 
-    void DrawBG_3D();
-    template<bool mosaic, DrawPixel drawPixel> void DrawBG_Text(u32 line, u32 bgnum);
+    template<bool windowMaskFull> void DrawBG_3D();
+    template<bool mosaic, bool windowMaskFull, DrawPixel drawPixel> void DrawBG_Text(u32 line, u32 bgnum);
     template<bool mosaic, DrawPixel drawPixel> void DrawBG_Affine(u32 line, u32 bgnum);
     template<bool mosaic, DrawPixel drawPixel> void DrawBG_Extended(u32 line, u32 bgnum);
     template<bool mosaic, DrawPixel drawPixel> void DrawBG_Large(u32 line);

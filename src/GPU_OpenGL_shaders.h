@@ -60,12 +60,13 @@ void main()
 
     ivec4 mbright = ivec4(texelFetch(ScreenTex, ivec2(256*3, int(fTexcoord.y)), 0));
     int dispmode = mbright.b & 0x3;
+    bool useAccelAux = (mbright.b & 0x4) != 0;
 
     // mbright.a == HOFS bit0..7
     // mbright.b bit7 == HOFS bit8 (sign)
     float _3dxpos = float(mbright.a - ((mbright.b & 0x80) * 2));
 
-    if (dispmode == 1)
+    if (dispmode == 1 && useAccelAux)
     {
         ivec4 val1 = pixel;
         ivec4 val2 = ivec4(texelFetch(ScreenTex, ivec2(fTexcoord) + ivec2(256,0), 0));
@@ -168,6 +169,51 @@ void main()
 }
 )";
 
+
+
+const char* kCompositorFS_Bottom_Nearest = R"(#version 320 es
+
+precision mediump float;
+precision mediump usampler2D;
+
+uniform usampler2D ScreenTex;
+
+smooth in vec2 fTexcoord;
+
+layout(location = 0) out vec4 oColor;
+
+void main()
+{
+    ivec4 pixel = ivec4(texelFetch(ScreenTex, ivec2(fTexcoord), 0));
+
+    ivec4 mbright = ivec4(texelFetch(ScreenTex, ivec2(256, int(fTexcoord.y)), 0));
+    int dispmode = mbright.b & 0x3;
+
+    if (dispmode != 0)
+    {
+        int brightmode = mbright.g >> 6;
+        if (brightmode == 1)
+        {
+            int evy = mbright.r & 0x1F;
+            if (evy > 16) evy = 16;
+
+            pixel += ((0x3F - pixel) * evy) >> 4;
+        }
+        else if (brightmode == 2)
+        {
+            int evy = mbright.r & 0x1F;
+            if (evy > 16) evy = 16;
+
+            pixel -= ((pixel * evy) + 0xF) >> 4;
+        }
+    }
+
+    pixel.rgb <<= 2;
+    pixel.rgb |= (pixel.rgb >> 6);
+
+    oColor = vec4(vec3(pixel.bgr) / 255.0, 1.0);
+}
+)";
 
 
 const char* kCompositorFS_Linear = R"(#version 140

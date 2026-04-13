@@ -20,42 +20,59 @@
 #include "GPU.h"
 #include "GPU3D.h"
 
+#include <algorithm>
+#include <array>
+
 #ifdef LITEV_NEON_RENDERER
 #include "GPU2D_NEON.h"
-#endif
-
-#ifdef LITEV_SCANLINE_BATCH
-static bool VRAMBanksHavePendingWrites(const melonDS::GPU& gpu) noexcept
-{
-    for (int bank = 0; bank < 9; bank++)
-    {
-        const auto& dirty = gpu.VRAMDirty[bank];
-        for (melonDS::u32 i = 0; i < dirty.DataLength; i++)
-            if (dirty.Data[i]) return true;
-    }
-    return false;
-}
 #endif
 
 namespace melonDS
 {
 namespace GPU2D
 {
+static constexpr u32 kAccelAuxLineFlag = 1u << 18;
+static constexpr std::array<u32, 32768> RGB555ToInternal = []() constexpr
+{
+    std::array<u32, 32768> table {};
+    for (u32 color = 0; color < table.size(); color++)
+    {
+        u8 r = (color & 0x001F) << 1;
+        u8 g = (color & 0x03E0) >> 4;
+        u8 b = (color & 0x7C00) >> 9;
+        table[color] = r | (g << 8) | (b << 16);
+    }
+    return table;
+}();
+
 SoftRenderer::SoftRenderer(melonDS::GPU& gpu)
     : Renderer2D(), GPU(gpu)
 {
     // mosaic table is initialized at compile-time
 }
 
-u32 SoftRenderer::ColorComposite(int i, u32 val1, u32 val2) const
+template<bool windowMaskFull>
+__attribute((always_inline)) inline u32 SoftRenderer::ColorComposite(int i, u32 val1, u32 val2) const
 {
     u32 coloreffect = 0;
     u32 eva, evb;
 
     u32 flag1 = val1 >> 24;
-    u32 flag2 = val2 >> 24;
-
     u32 blendCnt = CurUnit->BlendCnt;
+
+    if ((flag1 & 0xC0) == 0)
+    {
+        u32 blendEffect = (blendCnt >> 6) & 0x3;
+        if (blendEffect == 0 || !(blendCnt & flag1))
+            return val1;
+        if constexpr (!windowMaskFull)
+        {
+            if (!(WindowMask[i] & 0x20))
+                return val1;
+        }
+    }
+
+    u32 flag2 = val2 >> 24;
 
     u32 target2;
     if      (flag2 & 0x80) target2 = 0x1000;
@@ -90,8 +107,13 @@ u32 SoftRenderer::ColorComposite(int i, u32 val1, u32 val2) const
         if      (flag1 & 0x80) flag1 = 0x10;
         else if (flag1 & 0x40) flag1 = 0x01;
 
-        if ((blendCnt & flag1) && (WindowMask[i] & 0x20))
+        if (blendCnt & flag1)
         {
+            if constexpr (!windowMaskFull)
+            {
+                if (!(WindowMask[i] & 0x20))
+                    return val1;
+            }
             coloreffect = (blendCnt >> 6) & 0x3;
 
             if (coloreffect == 1)
@@ -123,7 +145,9 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 {
     CurUnit = unit;
 
-    int stride = GPU.GPU3D.IsRendererAccelerated() ? (256*3 + 1) : 256;
+    bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
+    int accelMetaIndex = CurUnit->Num == 0 ? (256 * 3) : 256;
+    int stride = rendererAccelerated ? (accelMetaIndex + 1) : 256;
     u32* dst = &Framebuffer[CurUnit->Num][stride * line];
 
     int n3dline = line;
@@ -131,21 +155,29 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
     if (CurUnit->Num == 0)
     {
-        auto bgDirty = GPU.VRAMDirty_ABG.DeriveState(GPU.VRAMMap_ABG, GPU);
-        GPU.MakeVRAMFlat_ABGCoherent(bgDirty);
-        auto bgExtPalDirty = GPU.VRAMDirty_ABGExtPal.DeriveState(GPU.VRAMMap_ABGExtPal, GPU);
-        GPU.MakeVRAMFlat_ABGExtPalCoherent(bgExtPalDirty);
-        auto objExtPalDirty = GPU.VRAMDirty_AOBJExtPal.DeriveState(&GPU.VRAMMap_AOBJExtPal, GPU);
-        GPU.MakeVRAMFlat_AOBJExtPalCoherent(objExtPalDirty);
+        if (line == 0 || SyncedBGStamp[0] != GPU.VRAMCoherencyStamp_ABG)
+        {
+            GPU.SyncVRAMFlat_ABG();
+            SyncedBGStamp[0] = GPU.VRAMCoherencyStamp_ABG;
+        }
+        if (line == 0 || SyncedBGExtPalStamp[0] != GPU.VRAMCoherencyStamp_ABGExtPal)
+        {
+            GPU.SyncVRAMFlat_ABGExtPal();
+            SyncedBGExtPalStamp[0] = GPU.VRAMCoherencyStamp_ABGExtPal;
+        }
     }
     else
     {
-        auto bgDirty = GPU.VRAMDirty_BBG.DeriveState(GPU.VRAMMap_BBG, GPU);
-        GPU.MakeVRAMFlat_BBGCoherent(bgDirty);
-        auto bgExtPalDirty = GPU.VRAMDirty_BBGExtPal.DeriveState(GPU.VRAMMap_BBGExtPal, GPU);
-        GPU.MakeVRAMFlat_BBGExtPalCoherent(bgExtPalDirty);
-        auto objExtPalDirty = GPU.VRAMDirty_BOBJExtPal.DeriveState(&GPU.VRAMMap_BOBJExtPal, GPU);
-        GPU.MakeVRAMFlat_BOBJExtPalCoherent(objExtPalDirty);
+        if (line == 0 || SyncedBGStamp[1] != GPU.VRAMCoherencyStamp_BBG)
+        {
+            GPU.SyncVRAMFlat_BBG();
+            SyncedBGStamp[1] = GPU.VRAMCoherencyStamp_BBG;
+        }
+        if (line == 0 || SyncedBGExtPalStamp[1] != GPU.VRAMCoherencyStamp_BBGExtPal)
+        {
+            GPU.SyncVRAMFlat_BBGExtPal();
+            SyncedBGExtPalStamp[1] = GPU.VRAMCoherencyStamp_BBGExtPal;
+        }
     }
 
     bool forceblank = false;
@@ -160,6 +192,12 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
     if (line == 0 && CurUnit->CaptureCnt & (1 << 31) && !forceblank)
         CurUnit->CaptureLatch = true;
+
+    // The top-screen accelerated compositor still relies on aux planes staying
+    // in lockstep with any potential 3D placeholder insertion. Per-line aux
+    // elision was fast on simple scenes, but it can desynchronize real 3D
+    // gameplay paths and produce a black top screen.
+    LineUsesAccelAux = rendererAccelerated && CurUnit->Num == 0;
 
     if (CurUnit->Num == 0)
     {
@@ -177,10 +215,8 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
         for (int i = 0; i < 256; i++)
             dst[i] = 0xFFFFFFFF;
 
-        if (GPU.GPU3D.IsRendererAccelerated())
-        {
-            dst[256*3] = 0;
-        }
+        if (rendererAccelerated)
+            dst[accelMetaIndex] = 0;
         return;
     }
 
@@ -202,8 +238,9 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
     case 1: // regular display
         {
+            int copyWords = LineUsesAccelAux ? (256 * 3) : 256;
             int i = 0;
-            for (; i < (stride & ~1); i+=2)
+            for (; i < (copyWords & ~1); i+=2)
                 *(u64*)&dst[i] = *(u64*)&BGOBJLine[i];
         }
         break;
@@ -269,13 +306,14 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
     u32 masterBrightness = CurUnit->MasterBrightness;
 
-    if (GPU.GPU3D.IsRendererAccelerated())
+    if (rendererAccelerated)
     {
         u32 xpos = GPU.GPU3D.GetRenderXPos();
 
-        dst[256*3] = masterBrightness |
-                     (CurUnit->DispCnt & 0x30000) |
-                     (xpos << 24) | ((xpos & 0x100) << 15);
+        dst[accelMetaIndex] = masterBrightness |
+                              (CurUnit->DispCnt & 0x30000) |
+                              (LineUsesAccelAux ? kAccelAuxLineFlag : 0) |
+                              (xpos << 24) | ((xpos & 0x100) << 15);
         return;
     }
 
@@ -454,6 +492,7 @@ void SoftRenderer::DoCapture(u32 line, u32 width)
 
     static_assert(VRAMDirtyGranularity == 512);
     GPU.VRAMDirty[dstvram][(dstaddr * 2) / VRAMDirtyGranularity] = true;
+    GPU.Invalidate2DVRAMBankWrite(dstvram);
 
     switch ((captureCnt >> 29) & 0x3)
     {
@@ -574,13 +613,44 @@ void SoftRenderer::DoCapture(u32 line, u32 width)
     { \
         if ((bgCnt[num] & 0x0040) && (CurUnit->BGMosaicSize[0] > 0)) \
         { \
-            if (GPU.GPU3D.IsRendererAccelerated()) DrawBG_##type<true, DrawPixel_Accel>(line, num); \
+            if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_##type<true, DrawPixel_Accel>(line, num); \
             else DrawBG_##type<true, DrawPixel_Normal>(line, num); \
         } \
         else \
         { \
-            if (GPU.GPU3D.IsRendererAccelerated()) DrawBG_##type<false, DrawPixel_Accel>(line, num); \
+            if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_##type<false, DrawPixel_Accel>(line, num); \
             else DrawBG_##type<false, DrawPixel_Normal>(line, num); \
+        } \
+    } while (false)
+
+#define DoDrawBGText(line, num) \
+    do \
+    { \
+        if ((bgCnt[num] & 0x0040) && (CurUnit->BGMosaicSize[0] > 0)) \
+        { \
+            if (windowMaskFull) \
+            { \
+                if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_Text<true, true, DrawPixel_Accel>(line, num); \
+                else DrawBG_Text<true, true, DrawPixel_Normal>(line, num); \
+            } \
+            else \
+            { \
+                if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_Text<true, false, DrawPixel_Accel>(line, num); \
+                else DrawBG_Text<true, false, DrawPixel_Normal>(line, num); \
+            } \
+        } \
+        else \
+        { \
+            if (windowMaskFull) \
+            { \
+                if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_Text<false, true, DrawPixel_Accel>(line, num); \
+                else DrawBG_Text<false, true, DrawPixel_Normal>(line, num); \
+            } \
+            else \
+            { \
+                if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_Text<false, false, DrawPixel_Accel>(line, num); \
+                else DrawBG_Text<false, false, DrawPixel_Normal>(line, num); \
+            } \
         } \
     } while (false)
 
@@ -589,24 +659,25 @@ void SoftRenderer::DoCapture(u32 line, u32 width)
     { \
         if ((bgCnt[2] & 0x0040) && (CurUnit->BGMosaicSize[0] > 0)) \
         { \
-            if (GPU.GPU3D.IsRendererAccelerated()) DrawBG_Large<true, DrawPixel_Accel>(line); \
+            if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_Large<true, DrawPixel_Accel>(line); \
             else DrawBG_Large<true, DrawPixel_Normal>(line); \
         } \
         else \
         { \
-            if (GPU.GPU3D.IsRendererAccelerated()) DrawBG_Large<false, DrawPixel_Accel>(line); \
+            if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) DrawBG_Large<false, DrawPixel_Accel>(line); \
             else DrawBG_Large<false, DrawPixel_Normal>(line); \
         } \
     } while (false)
 
 #define DoInterleaveSprites(prio) \
-    if (GPU.GPU3D.IsRendererAccelerated()) InterleaveSprites<DrawPixel_Accel>(prio); else InterleaveSprites<DrawPixel_Normal>(prio);
+    if (GPU.GPU3D.IsRendererAccelerated() && LineUsesAccelAux) InterleaveSprites<DrawPixel_Accel>(prio); else InterleaveSprites<DrawPixel_Normal>(prio);
 
 template<u32 bgmode>
 void SoftRenderer::DrawScanlineBGMode(u32 line)
 {
     u32 dispCnt = CurUnit->DispCnt;
     u16* bgCnt = CurUnit->BGCnt;
+    const bool windowMaskFull = !(dispCnt & 0xE000);
     for (int i = 3; i >= 0; i--)
     {
         if ((bgCnt[3] & 0x3) == i)
@@ -618,7 +689,7 @@ void SoftRenderer::DrawScanlineBGMode(u32 line)
                 else if (bgmode >= 1)
                     DoDrawBG(Affine, line, 3);
                 else
-                    DoDrawBG(Text, line, 3);
+                    DoDrawBGText(line, 3);
             }
         }
         if ((bgCnt[2] & 0x3) == i)
@@ -630,14 +701,14 @@ void SoftRenderer::DrawScanlineBGMode(u32 line)
                 else if (bgmode == 4 || bgmode == 2)
                     DoDrawBG(Affine, line, 2);
                 else
-                    DoDrawBG(Text, line, 2);
+                    DoDrawBGText(line, 2);
             }
         }
         if ((bgCnt[1] & 0x3) == i)
         {
             if (dispCnt & 0x0200)
             {
-                DoDrawBG(Text, line, 1);
+                DoDrawBGText(line, 1);
             }
         }
         if ((bgCnt[0] & 0x3) == i)
@@ -645,9 +716,12 @@ void SoftRenderer::DrawScanlineBGMode(u32 line)
             if (dispCnt & 0x0100)
             {
                 if (!CurUnit->Num && (dispCnt & 0x8))
-                    DrawBG_3D();
+                {
+                    if (windowMaskFull) DrawBG_3D<true>();
+                    else                DrawBG_3D<false>();
+                }
                 else
-                    DoDrawBG(Text, line, 0);
+                    DoDrawBGText(line, 0);
             }
         }
         if ((dispCnt & 0x1000) && NumSprites[CurUnit->Num])
@@ -662,6 +736,7 @@ void SoftRenderer::DrawScanlineBGMode6(u32 line)
 {
     u32 dispCnt = CurUnit->DispCnt;
     u16* bgCnt = CurUnit->BGCnt;
+    const bool windowMaskFull = !(dispCnt & 0xE000);
     for (int i = 3; i >= 0; i--)
     {
         if ((bgCnt[2] & 0x3) == i)
@@ -676,12 +751,15 @@ void SoftRenderer::DrawScanlineBGMode6(u32 line)
             if (dispCnt & 0x0100)
             {
                 if ((!CurUnit->Num) && (dispCnt & 0x8))
-                    DrawBG_3D();
+                {
+                    if (windowMaskFull) DrawBG_3D<true>();
+                    else                DrawBG_3D<false>();
+                }
             }
         }
         if ((dispCnt & 0x1000) && NumSprites[CurUnit->Num])
         {
-            DoInterleaveSprites(0x40000 | (i<<16))
+            DoInterleaveSprites(0x40000 | (i<<16));
         }
     }
 }
@@ -691,6 +769,7 @@ void SoftRenderer::DrawScanlineBGMode7(u32 line)
     u32 dispCnt = CurUnit->DispCnt;
     u16* bgCnt = CurUnit->BGCnt;
     // mode 7 only has text-mode BG0 and BG1
+    const bool windowMaskFull = !(dispCnt & 0xE000);
 
     for (int i = 3; i >= 0; i--)
     {
@@ -698,7 +777,7 @@ void SoftRenderer::DrawScanlineBGMode7(u32 line)
         {
             if (dispCnt & 0x0200)
             {
-                DoDrawBG(Text, line, 1);
+                DoDrawBGText(line, 1);
             }
         }
         if ((bgCnt[0] & 0x3) == i)
@@ -706,14 +785,17 @@ void SoftRenderer::DrawScanlineBGMode7(u32 line)
             if (dispCnt & 0x0100)
             {
                 if (!CurUnit->Num && (dispCnt & 0x8))
-                    DrawBG_3D();
+                {
+                    if (windowMaskFull) DrawBG_3D<true>();
+                    else                DrawBG_3D<false>();
+                }
                 else
-                    DoDrawBG(Text, line, 0);
+                    DoDrawBGText(line, 0);
             }
         }
         if ((dispCnt & 0x1000) && NumSprites[CurUnit->Num])
         {
-            DoInterleaveSprites(0x40000 | (i<<16))
+            DoInterleaveSprites(0x40000 | (i<<16));
         }
     }
 }
@@ -734,18 +816,15 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
     else     backdrop = *(u16*)&GPU.Palette[0];
 
     {
-        u8 r = (backdrop & 0x001F) << 1;
-        u8 g = (backdrop & 0x03E0) >> 4;
-        u8 b = (backdrop & 0x7C00) >> 9;
-
-        backdrop = r | (g << 8) | (b << 16) | 0x20000000;
+        backdrop = RGB555ToInternal[backdrop & 0x7FFF] | 0x20000000;
         backdrop |= (backdrop << 32);
 
         for (int i = 0; i < 256; i+=2)
             *(u64*)&BGOBJLine[i] = backdrop;
     }
 
-    if (CurUnit->DispCnt & 0xE000)
+    bool windowMaskFull = (CurUnit->DispCnt & 0xE000) == 0;
+    if (!windowMaskFull)
         CurUnit->CalculateWindowMask(line, WindowMask, OBJWindow[CurUnit->Num]);
     else
         memset(WindowMask, 0xFF, 256);
@@ -765,94 +844,201 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
     case 7: DrawScanlineBGMode7(line); break;
     }
 
-    // color special effects
-    // can likely be optimized
+    // If there is no selected color effect and no target-2 blending mask,
+    // ColorComposite() would return the top pixel unchanged for the whole line.
+    u32 blendCnt = CurUnit->BlendCnt;
+    bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
+    bool accelComposite = rendererAccelerated && LineUsesAccelAux;
+    bool preserveAccelAuxPlanes = LineUsesAccelAux;
+    bool noColorEffectTarget2 = (blendCnt & 0x3FC0) == 0;
+    bool skipComposite = noColorEffectTarget2 && !accelComposite;
+    bool accelerated3DLayer = LineUsesAccelAux && ((CurUnit->DispCnt & 0x0108) == 0x0108);
 
-    if (!GPU.GPU3D.IsRendererAccelerated())
+    if (!skipComposite && !accelComposite)
     {
         for (int i = 0; i < 256; i++)
         {
             u32 val1 = BGOBJLine[i];
             u32 val2 = BGOBJLine[256+i];
 
-            BGOBJLine[i] = ColorComposite(i, val1, val2);
+            BGOBJLine[i] = windowMaskFull
+                ? ColorComposite<true>(i, val1, val2)
+                : ColorComposite<false>(i, val1, val2);
         }
     }
-    else
+    else if (noColorEffectTarget2)
     {
-        if (CurUnit->Num == 0)
+        if (accelerated3DLayer)
         {
+            u32 evyMeta = CurUnit->EVY << 8;
+            constexpr u32 defaultMeta = 0x07000000;
             for (int i = 0; i < 256; i++)
             {
                 u32 val1 = BGOBJLine[i];
                 u32 val2 = BGOBJLine[256+i];
-                u32 val3 = BGOBJLine[512+i];
+                u32 mask = ((val1 & 0xC0000000u) == 0x40000000u) ? 0xFFFFFFFFu : 0u;
 
-                u32 flag1 = val1 >> 24;
-                u32 flag2 = val2 >> 24;
-
-                u32 bldcnteffect = (CurUnit->BlendCnt >> 6) & 0x3;
-
-                u32 target1;
-                if      (flag1 & 0x80) target1 = 0x0010;
-                else if (flag1 & 0x40) target1 = 0x0001;
-                else                   target1 = flag1;
-
-                u32 target2;
-                if      (flag2 & 0x80) target2 = 0x1000;
-                else if (flag2 & 0x40) target2 = 0x0100;
-                else                   target2 = flag2 << 8;
-
-                if (((flag1 & 0xC0) == 0x40) && (CurUnit->BlendCnt & target2))
+                BGOBJLine[i]     = val1 ^ ((val1 ^ val2) & mask);
+                BGOBJLine[256+i] = val2 & mask;
+                BGOBJLine[512+i] = defaultMeta ^ ((defaultMeta ^ evyMeta) & mask);
+            }
+        }
+        else
+        {
+            if (preserveAccelAuxPlanes)
+            {
+                memset(&BGOBJLine[256], 0, 256 * sizeof(u32));
+                std::fill_n(&BGOBJLine[512], 256, 0x07000000);
+            }
+        }
+    }
+    else if (!skipComposite)
+    {
+        if (CurUnit->Num == 0)
+        {
+            if (windowMaskFull)
+            {
+                u32 blendEffect = (blendCnt >> 6) & 0x3;
+                bool blendTarget1BG0 = (blendCnt & 0x0001) != 0;
+                bool bottom3DBlendEnabled = (blendCnt & 0x01C0) == 0x0140;
+                u32 top3DEffect = (blendEffect == 1 || !blendTarget1BG0) ? 0 : blendEffect;
+                u32 top3DMeta = (top3DEffect << 24) | (CurUnit->EVY << 8);
+                u32 alphaMeta = (blendEffect << 24) | (CurUnit->EVB << 16) | (CurUnit->EVA << 8);
+                u32 alphaMetaDisabled = 0x07000000 | (CurUnit->EVB << 16) | (CurUnit->EVA << 8);
+                for (int i = 0; i < 256; i++)
                 {
-                    // 3D on top, blending
+                    u32 val1 = BGOBJLine[i];
+                    u32 val2 = BGOBJLine[256+i];
 
-                    BGOBJLine[i]     = val2;
-                    BGOBJLine[256+i] = ColorComposite(i, val2, val3);
-                    BGOBJLine[512+i] = 0x04000000;
-                }
-                else if ((flag1 & 0xC0) == 0x40)
-                {
-                    // 3D on top, normal/fade
+                    u32 flag1 = val1 >> 24;
+                    u32 flag2 = val2 >> 24;
+                    u32 type1 = flag1 & 0xC0;
+                    u32 type2 = flag2 & 0xC0;
 
-                    if (bldcnteffect == 1)             bldcnteffect = 0;
-                    if (!(CurUnit->BlendCnt & 0x0001)) bldcnteffect = 0;
-                    if (!(WindowMask[i] & 0x20))       bldcnteffect = 0;
-
-                    BGOBJLine[i]     = val2;
-                    BGOBJLine[256+i] = ColorComposite(i, val2, val3);
-                    BGOBJLine[512+i] = (bldcnteffect << 24) | (CurUnit->EVY << 8);
-                }
-                else if (((flag2 & 0xC0) == 0x40) && ((CurUnit->BlendCnt & 0x01C0) == 0x0140))
-                {
-                    // 3D on bottom, blending
-
-                    u32 eva, evb;
-                    if ((flag1 & 0xC0) == 0xC0)
+                    if (type1 == 0x40)
                     {
-                        eva = flag1 & 0x1F;
-                        evb = 16 - eva;
+                        u32 val3 = BGOBJLine[512+i];
+                        u32 target2;
+                        if      (flag2 & 0x80) target2 = 0x1000;
+                        else if (type2 == 0x40) target2 = 0x0100;
+                        else                    target2 = flag2 << 8;
+
+                        BGOBJLine[i]     = val2;
+                        BGOBJLine[256+i] = ColorComposite<true>(i, val2, val3);
+                        BGOBJLine[512+i] = (blendCnt & target2) ? 0x04000000 : top3DMeta;
                     }
-                    else if (((CurUnit->BlendCnt & target1) && (WindowMask[i] & 0x20)) ||
-                            ((flag1 & 0xC0) == 0x80))
+                    else if (type2 == 0x40 && bottom3DBlendEnabled)
                     {
-                        eva = CurUnit->EVA;
-                        evb = CurUnit->EVB;
+                        // 3D on bottom, blending
+
+                        u32 val3 = BGOBJLine[512+i];
+                        u32 meta = alphaMeta;
+                        if (type1 == 0xC0)
+                        {
+                        }
+                        else if (type1 == 0x80)
+                        {
+                        }
+                        else
+                        {
+                            u32 target1 = (type1 == 0x40) ? 0x0001 : flag1;
+                            if (blendCnt & target1)
+                            {
+                            }
+                            else
+                            {
+                                meta = alphaMetaDisabled;
+                            }
+                        }
+
+                        BGOBJLine[i]     = val1;
+                        BGOBJLine[256+i] = ColorComposite<true>(i, val1, val3);
+                        BGOBJLine[512+i] = meta;
                     }
                     else
-                        bldcnteffect = 7;
+                    {
+                        // no potential 3D pixel involved
 
-                    BGOBJLine[i]     = val1;
-                    BGOBJLine[256+i] = ColorComposite(i, val1, val3);
-                    BGOBJLine[512+i] = (bldcnteffect << 24) | (CurUnit->EVB << 16) | (CurUnit->EVA << 8);
+                        BGOBJLine[i]     = ColorComposite<true>(i, val1, val2);
+                        BGOBJLine[256+i] = 0;
+                        BGOBJLine[512+i] = 0x07000000;
+                    }
                 }
-                else
+            }
+            else
+            {
+                for (int i = 0; i < 256; i++)
                 {
-                    // no potential 3D pixel involved
+                    u32 val1 = BGOBJLine[i];
+                    u32 val2 = BGOBJLine[256+i];
+                    u32 val3 = BGOBJLine[512+i];
 
-                    BGOBJLine[i]     = ColorComposite(i, val1, val2);
-                    BGOBJLine[256+i] = 0;
-                    BGOBJLine[512+i] = 0x07000000;
+                    u32 flag1 = val1 >> 24;
+                    u32 flag2 = val2 >> 24;
+
+                    u32 bldcnteffect = (blendCnt >> 6) & 0x3;
+
+                    u32 target1;
+                    if      (flag1 & 0x80) target1 = 0x0010;
+                    else if (flag1 & 0x40) target1 = 0x0001;
+                    else                   target1 = flag1;
+
+                    u32 target2;
+                    if      (flag2 & 0x80) target2 = 0x1000;
+                    else if (flag2 & 0x40) target2 = 0x0100;
+                    else                   target2 = flag2 << 8;
+
+                    if (((flag1 & 0xC0) == 0x40) && (blendCnt & target2))
+                    {
+                        // 3D on top, blending
+
+                        BGOBJLine[i]     = val2;
+                        BGOBJLine[256+i] = ColorComposite<false>(i, val2, val3);
+                        BGOBJLine[512+i] = 0x04000000;
+                    }
+                    else if ((flag1 & 0xC0) == 0x40)
+                    {
+                        // 3D on top, normal/fade
+
+                        if (bldcnteffect == 1)             bldcnteffect = 0;
+                        if (!(blendCnt & 0x0001))          bldcnteffect = 0;
+                        if (!(WindowMask[i] & 0x20))       bldcnteffect = 0;
+
+                        BGOBJLine[i]     = val2;
+                        BGOBJLine[256+i] = ColorComposite<false>(i, val2, val3);
+                        BGOBJLine[512+i] = (bldcnteffect << 24) | (CurUnit->EVY << 8);
+                    }
+                    else if (((flag2 & 0xC0) == 0x40) && ((blendCnt & 0x01C0) == 0x0140))
+                    {
+                        // 3D on bottom, blending
+
+                        u32 eva, evb;
+                        if ((flag1 & 0xC0) == 0xC0)
+                        {
+                            eva = flag1 & 0x1F;
+                            evb = 16 - eva;
+                        }
+                        else if (((blendCnt & target1) && (WindowMask[i] & 0x20)) ||
+                                ((flag1 & 0xC0) == 0x80))
+                        {
+                            eva = CurUnit->EVA;
+                            evb = CurUnit->EVB;
+                        }
+                        else
+                            bldcnteffect = 7;
+
+                        BGOBJLine[i]     = val1;
+                        BGOBJLine[256+i] = ColorComposite<false>(i, val1, val3);
+                        BGOBJLine[512+i] = (bldcnteffect << 24) | (CurUnit->EVB << 16) | (CurUnit->EVA << 8);
+                    }
+                    else
+                    {
+                        // no potential 3D pixel involved
+
+                        BGOBJLine[i]     = ColorComposite<false>(i, val1, val2);
+                        BGOBJLine[256+i] = 0;
+                        BGOBJLine[512+i] = 0x07000000;
+                    }
                 }
             }
         }
@@ -863,9 +1049,15 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
                 u32 val1 = BGOBJLine[i];
                 u32 val2 = BGOBJLine[256+i];
 
-                BGOBJLine[i]     = ColorComposite(i, val1, val2);
-                BGOBJLine[256+i] = 0;
-                BGOBJLine[512+i] = 0x07000000;
+                BGOBJLine[i] = windowMaskFull
+                    ? ColorComposite<true>(i, val1, val2)
+                    : ColorComposite<false>(i, val1, val2);
+
+                if (preserveAccelAuxPlanes)
+                {
+                    BGOBJLine[256+i] = 0;
+                    BGOBJLine[512+i] = 0x07000000;
+                }
             }
         }
     }
@@ -888,37 +1080,30 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
 }
 
 
-void SoftRenderer::DrawPixel_Normal(u32* dst, u16 color, u32 flag)
+__attribute((always_inline)) inline void SoftRenderer::DrawPixel_Normal(u32* dst, u16 color, u32 flag)
 {
-    u8 r = (color & 0x001F) << 1;
-    u8 g = (color & 0x03E0) >> 4;
-    u8 b = (color & 0x7C00) >> 9;
-    //g |= ((color & 0x8000) >> 15);
-
     *(dst+256) = *dst;
-    *dst = r | (g << 8) | (b << 16) | flag;
+    *dst = RGB555ToInternal[color & 0x7FFF] | flag;
 }
 
-void SoftRenderer::DrawPixel_Accel(u32* dst, u16 color, u32 flag)
+__attribute((always_inline)) inline void SoftRenderer::DrawPixel_Accel(u32* dst, u16 color, u32 flag)
 {
-    u8 r = (color & 0x001F) << 1;
-    u8 g = (color & 0x03E0) >> 4;
-    u8 b = (color & 0x7C00) >> 9;
-
     *(dst+512) = *(dst+256);
     *(dst+256) = *dst;
-    *dst = r | (g << 8) | (b << 16) | flag;
+    *dst = RGB555ToInternal[color & 0x7FFF] | flag;
 }
 
+template<bool windowMaskFull>
 void SoftRenderer::DrawBG_3D()
 {
-    int i = 0;
-
     if (GPU.GPU3D.IsRendererAccelerated())
     {
-        for (i = 0; i < 256; i++)
+        for (int i = 0; i < 256; i++)
         {
-            if (!(WindowMask[i] & 0x01)) continue;
+            if constexpr (!windowMaskFull)
+            {
+                if (!(WindowMask[i] & 0x01)) continue;
+            }
 
             BGOBJLine[i+512] = BGOBJLine[i+256];
             BGOBJLine[i+256] = BGOBJLine[i];
@@ -927,12 +1112,15 @@ void SoftRenderer::DrawBG_3D()
     }
     else
     {
-        for (i = 0; i < 256; i++)
+        for (int i = 0; i < 256; i++)
         {
             u32 c = _3DLine[i];
 
             if ((c >> 24) == 0) continue;
-            if (!(WindowMask[i] & 0x01)) continue;
+            if constexpr (!windowMaskFull)
+            {
+                if (!(WindowMask[i] & 0x01)) continue;
+            }
 
             BGOBJLine[i+256] = BGOBJLine[i];
             BGOBJLine[i] = c | 0x40000000;
@@ -940,7 +1128,7 @@ void SoftRenderer::DrawBG_3D()
     }
 }
 
-template<bool mosaic, SoftRenderer::DrawPixel drawPixel>
+template<bool mosaic, bool windowMaskFull, SoftRenderer::DrawPixel drawPixel>
 void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
 {
     // workaround for backgrounds missing on aarch64 with lto build
@@ -999,11 +1187,53 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
     u32 pixelsaddr;
     u8 color;
     u32 lastxpos;
+    const u32 bgWindowBit = 1u << bgnum;
+    const u32 bgFlag = 0x01000000u << bgnum;
 
     if (bgcnt & 0x0080)
     {
         // 256-color
 
+        if constexpr (!mosaic && windowMaskFull)
+        {
+            u16 xpos = xoff;
+            for (int i = 0; i < 256;)
+            {
+                curtile = *(u16*)&bgvram[(tilemapaddr + ((xpos & 0xF8) >> 2) + ((xpos & widexmask) << 3)) & bgvrammask];
+
+                if (extpal) curpal = CurUnit->GetBGExtPal(extpalslot, curtile>>12);
+                else        curpal = pal;
+
+                pixelsaddr = tilesetaddr + ((curtile & 0x03FF) << 6)
+                                         + (((curtile & 0x0800) ? (7-(yoff&0x7)) : (yoff&0x7)) << 3);
+
+                u32 tilePos = xpos & 0x7;
+                int count = std::min<int>(8 - tilePos, 256 - i);
+                int end = i + count;
+                if (curtile & 0x0400)
+                {
+                    for (; i < end; i++, xpos++, tilePos++)
+                    {
+                        color = bgvram[(pixelsaddr + (7 - tilePos)) & bgvrammask];
+
+                        if (color)
+                            drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                    }
+                }
+                else
+                {
+                    for (; i < end; i++, xpos++, tilePos++)
+                    {
+                        color = bgvram[(pixelsaddr + tilePos) & bgvrammask];
+
+                        if (color)
+                            drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                    }
+                }
+            }
+
+            return;
+        }
         // preload shit as needed
         if ((xoff & 0x7) || mosaic)
         {
@@ -1040,13 +1270,13 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
             }
 
             // draw pixel
-            if (WindowMask[i] & (1<<bgnum))
+            if (windowMaskFull || (WindowMask[i] & bgWindowBit))
             {
                 u32 tilexoff = (curtile & 0x0400) ? (7-(xpos&0x7)) : (xpos&0x7);
                 color = bgvram[(pixelsaddr + tilexoff) & bgvrammask];
 
                 if (color)
-                    drawPixel(&BGOBJLine[i], curpal[color], 0x01000000<<bgnum);
+                    drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
             }
 
             xoff++;
@@ -1055,6 +1285,47 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
     else
     {
         // 16-color
+
+        if constexpr (!mosaic && windowMaskFull)
+        {
+            u16 xpos = xoff;
+            for (int i = 0; i < 256;)
+            {
+                curtile = *(u16*)&bgvram[((tilemapaddr + ((xpos & 0xF8) >> 2) + ((xpos & widexmask) << 3))) & bgvrammask];
+                curpal = pal + ((curtile & 0xF000) >> 8);
+                pixelsaddr = tilesetaddr + ((curtile & 0x03FF) << 5)
+                                         + (((curtile & 0x0800) ? (7-(yoff&0x7)) : (yoff&0x7)) << 2);
+
+                u32 tilePos = xpos & 0x7;
+                int count = std::min<int>(8 - tilePos, 256 - i);
+                int end = i + count;
+                if (curtile & 0x0400)
+                {
+                    for (; i < end; i++, xpos++, tilePos++)
+                    {
+                        u32 tilexoff = 7 - tilePos;
+                        u8 pixels = bgvram[(pixelsaddr + (tilexoff >> 1)) & bgvrammask];
+                        color = (tilexoff & 0x1) ? (pixels >> 4) : (pixels & 0x0F);
+
+                        if (color)
+                            drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                    }
+                }
+                else
+                {
+                    for (; i < end; i++, xpos++, tilePos++)
+                    {
+                        u8 pixels = bgvram[(pixelsaddr + (tilePos >> 1)) & bgvrammask];
+                        color = (tilePos & 0x1) ? (pixels >> 4) : (pixels & 0x0F);
+
+                        if (color)
+                            drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                    }
+                }
+            }
+
+            return;
+        }
 
         // preload shit as needed
         if ((xoff & 0x7) || mosaic)
@@ -1086,20 +1357,21 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
             }
 
             // draw pixel
-            if (WindowMask[i] & (1<<bgnum))
+            if (windowMaskFull || (WindowMask[i] & bgWindowBit))
             {
                 u32 tilexoff = (curtile & 0x0400) ? (7-(xpos&0x7)) : (xpos&0x7);
+                u8 pixels = bgvram[(pixelsaddr + (tilexoff >> 1)) & bgvrammask];
                 if (tilexoff & 0x1)
                 {
-                    color = bgvram[(pixelsaddr + (tilexoff >> 1)) & bgvrammask] >> 4;
+                    color = pixels >> 4;
                 }
                 else
                 {
-                    color = bgvram[(pixelsaddr + (tilexoff >> 1)) & bgvrammask] & 0x0F;
+                    color = pixels & 0x0F;
                 }
 
                 if (color)
-                    drawPixel(&BGOBJLine[i], curpal[color], 0x01000000<<bgnum);
+                    drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
             }
 
             xoff++;
@@ -1189,7 +1461,6 @@ void SoftRenderer::DrawBG_Affine(u32 line, u32 bgnum)
             {
                 curtile = bgvram[(tilemapaddr + ((((finalY & coordmask) >> 11) << yshift) + ((finalX & coordmask) >> 11))) & bgvrammask];
 
-                // draw pixel
                 u32 tilexoff = (finalX >> 8) & 0x7;
                 u32 tileyoff = (finalY >> 8) & 0x7;
 
@@ -1406,7 +1677,6 @@ void SoftRenderer::DrawBG_Extended(u32 line, u32 bgnum)
                     if (extpal) curpal = CurUnit->GetBGExtPal(bgnum, curtile>>12);
                     else        curpal = pal;
 
-                    // draw pixel
                     u32 tilexoff = (finalX >> 8) & 0x7;
                     u32 tileyoff = (finalY >> 8) & 0x7;
 
@@ -1632,13 +1902,29 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
 
     if (CurUnit->Num == 0)
     {
-        auto objDirty = GPU.VRAMDirty_AOBJ.DeriveState(GPU.VRAMMap_AOBJ, GPU);
-        GPU.MakeVRAMFlat_AOBJCoherent(objDirty);
+        if (line == 0 || SyncedOBJStamp[0] != GPU.VRAMCoherencyStamp_AOBJ)
+        {
+            GPU.SyncVRAMFlat_AOBJ();
+            SyncedOBJStamp[0] = GPU.VRAMCoherencyStamp_AOBJ;
+        }
+        if (line == 0 || SyncedOBJExtPalStamp[0] != GPU.VRAMCoherencyStamp_AOBJExtPal)
+        {
+            GPU.SyncVRAMFlat_AOBJExtPal();
+            SyncedOBJExtPalStamp[0] = GPU.VRAMCoherencyStamp_AOBJExtPal;
+        }
     }
     else
     {
-        auto objDirty = GPU.VRAMDirty_BOBJ.DeriveState(GPU.VRAMMap_BOBJ, GPU);
-        GPU.MakeVRAMFlat_BOBJCoherent(objDirty);
+        if (line == 0 || SyncedOBJStamp[1] != GPU.VRAMCoherencyStamp_BOBJ)
+        {
+            GPU.SyncVRAMFlat_BOBJ();
+            SyncedOBJStamp[1] = GPU.VRAMCoherencyStamp_BOBJ;
+        }
+        if (line == 0 || SyncedOBJExtPalStamp[1] != GPU.VRAMCoherencyStamp_BOBJExtPal)
+        {
+            GPU.SyncVRAMFlat_BOBJExtPal();
+            SyncedOBJExtPalStamp[1] = GPU.VRAMCoherencyStamp_BOBJExtPal;
+        }
     }
 
     NumSprites[CurUnit->Num] = 0;
