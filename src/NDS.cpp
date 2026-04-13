@@ -503,6 +503,7 @@ void NDS::Reset()
     IME[1] = 0;
     IE[1] = 0;
     IF[1] = 0;
+    ARM9LibHLE.Reset();
     IE2 = 0;
     IF2 = 0;
 

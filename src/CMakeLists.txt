@@ -7,6 +7,7 @@ add_library(core STATIC
     ARDatabaseDAT.cpp
     AREngine.cpp
     ARM.cpp
+    ARM9LibHLE.cpp
     ARM_InstrTable.h
     ARMInterpreter.cpp
     ARMInterpreter_ALU.cpp
@@ -257,4 +258,3 @@ endif()
 #    BEFORE PUBLIC -fsanitize=undefined PUBLIC -fsanitize=address
 #  )
 #endif()
-

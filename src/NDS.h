@@ -44,6 +44,7 @@
 #include "MemRegion.h"
 #include "ARMJIT_Memory.h"
 #include "ARM.h"
+#include "ARM9LibHLE.h"
 #include "CRC32.h"
 #include "DMA.h"
 #include "FreeBIOS.h"
@@ -357,6 +358,7 @@ public: // TODO: Encapsulate the rest of these members
 
     virtual void Reset();
     void Start();
+    ARM9LibHLE ARM9LibHLE;
 
     /// Stop the emulator.
     virtual void Stop(Platform::StopReason reason = Platform::StopReason::External);

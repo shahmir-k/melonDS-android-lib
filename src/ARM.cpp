@@ -624,6 +624,13 @@ void ARMv5::Execute()
         if constexpr (mode == CPUExecuteMode::JIT)
         {
             u32 instrAddr = R[15] - ((CPSR&0x20)?2:4);
+            if (NDS.ARM9LibHLE.TryHandle(*this, instrAddr))
+            {
+                NDS.ARM9Timestamp += Cycles;
+                Cycles = 0;
+                continue;
+            }
+
 
             if ((instrAddr < FastBlockLookupStart || instrAddr >= (FastBlockLookupStart + FastBlockLookupSize))
                 && !NDS.JIT.SetupExecutableRegion(0, instrAddr, FastBlockLookup, FastBlockLookupStart, FastBlockLookupSize))
