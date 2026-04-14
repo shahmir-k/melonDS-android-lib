@@ -2274,6 +2274,77 @@ void SoftRenderer::InterleaveSprites(u32 prio)
     }
 }
 
+bool SoftRenderer::PrepareSpriteLineBins()
+{
+    SpriteLineBinCache& cache = SpriteBins[CurUnit->Num];
+    const bool cacheMatches = cache.Valid &&
+                              cache.StateGeneration == CurUnit->StateGeneration &&
+                              cache.OAMStamp == GPU.OAMCoherencyStamp &&
+                              cache.DispCnt == CurUnit->DispCnt;
+
+    if (cacheMatches)
+        return true;
+
+    cache.StateGeneration = CurUnit->StateGeneration;
+    cache.OAMStamp = GPU.OAMCoherencyStamp;
+    cache.DispCnt = CurUnit->DispCnt;
+    cache.Valid = 1;
+    std::memset(cache.Counts, 0, sizeof(cache.Counts));
+
+    if (!(CurUnit->DispCnt & 0x1000))
+        return true;
+
+    u16* oam = reinterpret_cast<u16*>(&GPU.OAM[CurUnit->Num ? 0x400 : 0]);
+    static constexpr s32 spriteheight[16] =
+    {
+        8, 8, 16, 8,
+        16, 8, 32, 8,
+        32, 16, 32, 8,
+        64, 32, 64, 8
+    };
+
+    for (int prio = 3; prio >= 0; prio--)
+    {
+        const u32 bgnum = static_cast<u32>(prio) << 10;
+        for (int sprnum = 127; sprnum >= 0; sprnum--)
+        {
+            u16* attrib = &oam[sprnum * 4];
+            if ((attrib[2] & 0x0C00) != bgnum)
+                continue;
+
+            s32 height;
+            if (attrib[0] & 0x0100)
+            {
+                const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+                height = spriteheight[sizeparam];
+                if (attrib[0] & 0x0200)
+                    height <<= 1;
+            }
+            else
+            {
+                if (attrib[0] & 0x0200)
+                    continue;
+
+                const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+                height = spriteheight[sizeparam];
+            }
+
+            const u32 ypos = attrib[0] & 0xFF;
+            for (u32 y = 0; y < 192; y++)
+            {
+                if (((y - ypos) & 0xFF) >= static_cast<u32>(height))
+                    continue;
+
+                u8& count = cache.Counts[y][prio];
+                if (count < 128)
+                    cache.SpriteNums[y][prio][count++] = static_cast<u8>(sprnum);
+            }
+        }
+    }
+
+    return true;
+}
+
 #define DoDrawSprite(type, ...) \
     if (iswin) \
     { \
@@ -2359,76 +2430,142 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
         64, 32, 64, 8
     };
 
-    for (int bgnum = 0x0C00; bgnum >= 0x0000; bgnum -= 0x0400)
+    const bool useSpriteBins = line < 192 && PrepareSpriteLineBins();
+    if (useSpriteBins)
     {
-        for (int sprnum = 127; sprnum >= 0; sprnum--)
+        const SpriteLineBinCache& bins = SpriteBins[CurUnit->Num];
+        for (int prio = 3; prio >= 0; prio--)
         {
-            u16* attrib = &oam[sprnum*4];
-
-            if ((attrib[2] & 0x0C00) != bgnum)
-                continue;
-
-            bool iswin = (((attrib[0] >> 10) & 0x3) == 2);
-
-            u32 sprline;
-            if ((attrib[0] & 0x1000) && !iswin)
+            const u8 count = bins.Counts[line][prio];
+            for (u8 idx = 0; idx < count; idx++)
             {
-                // apply Y mosaic
-                sprline = CurUnit->OBJMosaicY;
-            }
-            else
-                sprline = line;
+                const int sprnum = bins.SpriteNums[line][prio][idx];
+                u16* attrib = &oam[sprnum * 4];
+                const bool iswin = (((attrib[0] >> 10) & 0x3) == 2);
 
-            if (attrib[0] & 0x0100)
-            {
-                u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-                s32 width = spritewidth[sizeparam];
-                s32 height = spriteheight[sizeparam];
-                s32 boundwidth = width;
-                s32 boundheight = height;
+                const u32 sprline = ((attrib[0] & 0x1000) && !iswin) ? CurUnit->OBJMosaicY : line;
 
-                if (attrib[0] & 0x0200)
+                if (attrib[0] & 0x0100)
                 {
-                    boundwidth <<= 1;
-                    boundheight <<= 1;
+                    const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+                    s32 width = spritewidth[sizeparam];
+                    s32 height = spriteheight[sizeparam];
+                    s32 boundwidth = width;
+                    s32 boundheight = height;
+
+                    if (attrib[0] & 0x0200)
+                    {
+                        boundwidth <<= 1;
+                        boundheight <<= 1;
+                    }
+
+                    u32 ypos = attrib[0] & 0xFF;
+                    if (((line - ypos) & 0xFF) >= (u32)boundheight)
+                        continue;
+                    ypos = (sprline - ypos) & 0xFF;
+
+                    s32 xpos = (s32)(attrib[1] << 23) >> 23;
+                    if (xpos <= -boundwidth)
+                        continue;
+
+                    DoDrawSprite(Rotscale, sprnum, boundwidth, boundheight, width, height, xpos, ypos);
+                    NumSprites[CurUnit->Num]++;
                 }
+                else
+                {
+                    if (attrib[0] & 0x0200)
+                        continue;
 
-                u32 ypos = attrib[0] & 0xFF;
-                if (((line - ypos) & 0xFF) >= (u32)boundheight)
-                    continue;
-                ypos = (sprline - ypos) & 0xFF;
+                    const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+                    s32 width = spritewidth[sizeparam];
+                    s32 height = spriteheight[sizeparam];
 
-                s32 xpos = (s32)(attrib[1] << 23) >> 23;
-                if (xpos <= -boundwidth)
-                    continue;
+                    u32 ypos = attrib[0] & 0xFF;
+                    if (((line - ypos) & 0xFF) >= (u32)height)
+                        continue;
+                    ypos = (sprline - ypos) & 0xFF;
 
-                u32 rotparamgroup = (attrib[1] >> 9) & 0x1F;
+                    s32 xpos = (s32)(attrib[1] << 23) >> 23;
+                    if (xpos <= -width)
+                        continue;
 
-                DoDrawSprite(Rotscale, sprnum, boundwidth, boundheight, width, height, xpos, ypos);
-
-                NumSprites[CurUnit->Num]++;
+                    DoDrawSprite(Normal, sprnum, width, height, xpos, ypos);
+                    NumSprites[CurUnit->Num]++;
+                }
             }
-            else
+        }
+    }
+    else
+    {
+        for (int bgnum = 0x0C00; bgnum >= 0x0000; bgnum -= 0x0400)
+        {
+            for (int sprnum = 127; sprnum >= 0; sprnum--)
             {
-                if (attrib[0] & 0x0200)
+                u16* attrib = &oam[sprnum*4];
+
+                if ((attrib[2] & 0x0C00) != bgnum)
                     continue;
 
-                u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-                s32 width = spritewidth[sizeparam];
-                s32 height = spriteheight[sizeparam];
+                bool iswin = (((attrib[0] >> 10) & 0x3) == 2);
 
-                u32 ypos = attrib[0] & 0xFF;
-                if (((line - ypos) & 0xFF) >= (u32)height)
-                    continue;
-                ypos = (sprline - ypos) & 0xFF;
+                u32 sprline;
+                if ((attrib[0] & 0x1000) && !iswin)
+                {
+                    // apply Y mosaic
+                    sprline = CurUnit->OBJMosaicY;
+                }
+                else
+                    sprline = line;
 
-                s32 xpos = (s32)(attrib[1] << 23) >> 23;
-                if (xpos <= -width)
-                    continue;
+                if (attrib[0] & 0x0100)
+                {
+                    u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+                    s32 width = spritewidth[sizeparam];
+                    s32 height = spriteheight[sizeparam];
+                    s32 boundwidth = width;
+                    s32 boundheight = height;
 
-                DoDrawSprite(Normal, sprnum, width, height, xpos, ypos);
+                    if (attrib[0] & 0x0200)
+                    {
+                        boundwidth <<= 1;
+                        boundheight <<= 1;
+                    }
 
-                NumSprites[CurUnit->Num]++;
+                    u32 ypos = attrib[0] & 0xFF;
+                    if (((line - ypos) & 0xFF) >= (u32)boundheight)
+                        continue;
+                    ypos = (sprline - ypos) & 0xFF;
+
+                    s32 xpos = (s32)(attrib[1] << 23) >> 23;
+                    if (xpos <= -boundwidth)
+                        continue;
+
+                    DoDrawSprite(Rotscale, sprnum, boundwidth, boundheight, width, height, xpos, ypos);
+
+                    NumSprites[CurUnit->Num]++;
+                }
+                else
+                {
+                    if (attrib[0] & 0x0200)
+                        continue;
+
+                    u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+                    s32 width = spritewidth[sizeparam];
+                    s32 height = spriteheight[sizeparam];
+
+                    u32 ypos = attrib[0] & 0xFF;
+                    if (((line - ypos) & 0xFF) >= (u32)height)
+                        continue;
+                    ypos = (sprline - ypos) & 0xFF;
+
+                    s32 xpos = (s32)(attrib[1] << 23) >> 23;
+                    if (xpos <= -width)
+                        continue;
+
+                    DoDrawSprite(Normal, sprnum, width, height, xpos, ypos);
+
+                    NumSprites[CurUnit->Num]++;
+                }
             }
         }
     }
