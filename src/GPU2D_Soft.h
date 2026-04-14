@@ -97,12 +97,36 @@ private:
 
     struct SpriteLineBinCache
     {
-        u32 StateGeneration = 0;
         u32 OAMStamp = 0;
         u32 DispCnt = 0;
         u8 Valid = 0;
         u8 Counts[192][4] {};
         u8 SpriteNums[192][4][128] {};
+    };
+
+    struct PreparedSpriteCache
+    {
+        struct PreparedSprite
+        {
+            u16 Attr0 = 0;
+            u16 Attr1 = 0;
+            u16 Attr2 = 0;
+            s16 XPos = 0;
+            u8 YPos = 0;
+            u8 Width = 0;
+            u8 Height = 0;
+            u8 BoundWidth = 0;
+            u8 BoundHeight = 0;
+            u8 Priority = 0;
+            u8 IsWindow = 0;
+            u8 RotScale = 0;
+            u8 Disabled = 0;
+            u8 UseMosaic = 0;
+        };
+
+        u32 OAMStamp = 0;
+        u8 Valid = 0;
+        PreparedSprite Sprites[128] {};
     };
 
     struct PreparedFrameState
@@ -153,6 +177,7 @@ private:
     TextBGTileRowCache TextBGTileCache[2][4] {};
     ComposedLineCache LineCache[2][192] {};
     SpriteLineBinCache SpriteBins[2] {};
+    PreparedSpriteCache PreparedSprites[2] {};
     PreparedFrameState PreparedFrames[2] {};
 
     u8* CurBGXMosaicTable;
@@ -248,6 +273,7 @@ private:
     void DecodeTextBGTileRow(TextBGTileRowCache& cache, u32 slot, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag);
     template<DrawPixel drawPixel> void ApplyTextBGTileRow(TextBGTileRowCache* tileCache, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag, u32 tilePos, u32 count, u32 dstPos, u32* cacheLine);
     const PreparedFrameState& GetPreparedFrameState();
+    const PreparedSpriteCache& GetPreparedSpriteCache();
     bool PrepareSpriteLineBins();
     template<bool windowMaskFull> void DrawBG_3D();
     template<bool mosaic, bool windowMaskFull, DrawPixel drawPixel> void DrawBG_Text(u32 line, u32 bgnum);

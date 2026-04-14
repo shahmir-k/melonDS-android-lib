@@ -474,6 +474,72 @@ const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
     return prepared;
 }
 
+const SoftRenderer::PreparedSpriteCache& SoftRenderer::GetPreparedSpriteCache()
+{
+    PreparedSpriteCache& cache = PreparedSprites[CurUnit->Num];
+    if (cache.Valid && cache.OAMStamp == GPU.OAMCoherencyStamp)
+        return cache;
+
+    static constexpr u8 spritewidth[16] =
+    {
+        8, 16, 8, 8,
+        16, 32, 8, 8,
+        32, 32, 16, 8,
+        64, 64, 32, 8
+    };
+    static constexpr u8 spriteheight[16] =
+    {
+        8, 8, 16, 8,
+        16, 8, 32, 8,
+        32, 16, 32, 8,
+        64, 32, 64, 8
+    };
+
+    cache.OAMStamp = GPU.OAMCoherencyStamp;
+    cache.Valid = 1;
+
+    u16* oam = reinterpret_cast<u16*>(&GPU.OAM[CurUnit->Num ? 0x400 : 0]);
+    for (u32 sprnum = 0; sprnum < 128; sprnum++)
+    {
+        PreparedSpriteCache::PreparedSprite& sprite = cache.Sprites[sprnum];
+        u16* attrib = &oam[sprnum * 4];
+
+        sprite.Attr0 = attrib[0];
+        sprite.Attr1 = attrib[1];
+        sprite.Attr2 = attrib[2];
+        sprite.Priority = (attrib[2] >> 10) & 0x3;
+        sprite.IsWindow = (((attrib[0] >> 10) & 0x3) == 2);
+        sprite.RotScale = (attrib[0] & 0x0100) != 0;
+        sprite.UseMosaic = ((attrib[0] & 0x1000) != 0) && !sprite.IsWindow;
+        sprite.Disabled = 0;
+        sprite.YPos = attrib[0] & 0xFF;
+        sprite.XPos = static_cast<s16>((static_cast<s32>(attrib[1]) << 23) >> 23);
+
+        const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
+        sprite.Width = spritewidth[sizeparam];
+        sprite.Height = spriteheight[sizeparam];
+        sprite.BoundWidth = sprite.Width;
+        sprite.BoundHeight = sprite.Height;
+
+        if (sprite.RotScale)
+        {
+            if (attrib[0] & 0x0200)
+            {
+                sprite.BoundWidth <<= 1;
+                sprite.BoundHeight <<= 1;
+            }
+        }
+        else if (attrib[0] & 0x0200)
+        {
+            sprite.Disabled = 1;
+            sprite.BoundWidth = 0;
+            sprite.BoundHeight = 0;
+        }
+    }
+
+    return cache;
+}
+
 void SoftRenderer::DoCapture(u32 line, u32 width)
 {
     u32 captureCnt = CurUnit->CaptureCnt;
@@ -2313,64 +2379,34 @@ void SoftRenderer::InterleaveSprites(u32 prio)
 
 bool SoftRenderer::PrepareSpriteLineBins()
 {
-    const PreparedFrameState& prepared = GetPreparedFrameState();
+    const PreparedSpriteCache& preparedSprites = GetPreparedSpriteCache();
     SpriteLineBinCache& cache = SpriteBins[CurUnit->Num];
+    const u32 dispKey = CurUnit->DispCnt & 0x1000;
     const bool cacheMatches = cache.Valid &&
-                              cache.StateGeneration == prepared.StateGeneration &&
-                              cache.OAMStamp == prepared.OAMStamp &&
-                              cache.DispCnt == prepared.DispCnt;
+                              cache.OAMStamp == preparedSprites.OAMStamp &&
+                              cache.DispCnt == dispKey;
 
     if (cacheMatches)
         return true;
 
-    cache.StateGeneration = prepared.StateGeneration;
-    cache.OAMStamp = prepared.OAMStamp;
-    cache.DispCnt = prepared.DispCnt;
+    cache.OAMStamp = preparedSprites.OAMStamp;
+    cache.DispCnt = dispKey;
     cache.Valid = 1;
     std::memset(cache.Counts, 0, sizeof(cache.Counts));
 
-    if (!(prepared.DispCnt & 0x1000))
+    if (!(dispKey & 0x1000))
         return true;
-
-    u16* oam = reinterpret_cast<u16*>(&GPU.OAM[CurUnit->Num ? 0x400 : 0]);
-    static constexpr s32 spriteheight[16] =
-    {
-        8, 8, 16, 8,
-        16, 8, 32, 8,
-        32, 16, 32, 8,
-        64, 32, 64, 8
-    };
 
     for (int prio = 3; prio >= 0; prio--)
     {
-        const u32 bgnum = static_cast<u32>(prio) << 10;
         for (int sprnum = 127; sprnum >= 0; sprnum--)
         {
-            u16* attrib = &oam[sprnum * 4];
-            if ((attrib[2] & 0x0C00) != bgnum)
+            const PreparedSpriteCache::PreparedSprite& sprite = preparedSprites.Sprites[sprnum];
+            if (sprite.Priority != prio || sprite.Disabled)
                 continue;
-
-            s32 height;
-            if (attrib[0] & 0x0100)
-            {
-                const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-                height = spriteheight[sizeparam];
-                if (attrib[0] & 0x0200)
-                    height <<= 1;
-            }
-            else
-            {
-                if (attrib[0] & 0x0200)
-                    continue;
-
-                const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-                height = spriteheight[sizeparam];
-            }
-
-            const u32 ypos = attrib[0] & 0xFF;
             for (u32 y = 0; y < 192; y++)
             {
-                if (((y - ypos) & 0xFF) >= static_cast<u32>(height))
+                if (((y - sprite.YPos) & 0xFF) >= static_cast<u32>(sprite.BoundHeight))
                     continue;
 
                 u8& count = cache.Counts[y][prio];
@@ -2451,8 +2487,6 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
     memset(OBJWindow[CurUnit->Num], 0, 256);
     if (!(CurUnit->DispCnt & 0x1000)) return;
 
-    u16* oam = (u16*)&GPU.OAM[CurUnit->Num ? 0x400 : 0];
-
     const s32 spritewidth[16] =
     {
         8, 16, 8, 8,
@@ -2468,6 +2502,7 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
         64, 32, 64, 8
     };
 
+    const PreparedSpriteCache& preparedSprites = GetPreparedSpriteCache();
     const bool useSpriteBins = line < 192 && PrepareSpriteLineBins();
     if (useSpriteBins)
     {
@@ -2478,56 +2513,26 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
             for (u8 idx = 0; idx < count; idx++)
             {
                 const int sprnum = bins.SpriteNums[line][prio][idx];
-                u16* attrib = &oam[sprnum * 4];
-                const bool iswin = (((attrib[0] >> 10) & 0x3) == 2);
+                const PreparedSpriteCache::PreparedSprite& sprite = preparedSprites.Sprites[sprnum];
+                const bool iswin = sprite.IsWindow != 0;
+                const u32 sprline = sprite.UseMosaic ? CurUnit->OBJMosaicY : line;
 
-                const u32 sprline = ((attrib[0] & 0x1000) && !iswin) ? CurUnit->OBJMosaicY : line;
-
-                if (attrib[0] & 0x0100)
+                if (sprite.RotScale)
                 {
-                    const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-                    s32 width = spritewidth[sizeparam];
-                    s32 height = spriteheight[sizeparam];
-                    s32 boundwidth = width;
-                    s32 boundheight = height;
-
-                    if (attrib[0] & 0x0200)
-                    {
-                        boundwidth <<= 1;
-                        boundheight <<= 1;
-                    }
-
-                    u32 ypos = attrib[0] & 0xFF;
-                    if (((line - ypos) & 0xFF) >= (u32)boundheight)
-                        continue;
-                    ypos = (sprline - ypos) & 0xFF;
-
-                    s32 xpos = (s32)(attrib[1] << 23) >> 23;
-                    if (xpos <= -boundwidth)
+                    if (sprite.XPos <= -sprite.BoundWidth)
                         continue;
 
-                    DoDrawSprite(Rotscale, sprnum, boundwidth, boundheight, width, height, xpos, ypos);
+                    const u32 ypos = (sprline - sprite.YPos) & 0xFF;
+                    DoDrawSprite(Rotscale, sprnum, sprite.BoundWidth, sprite.BoundHeight, sprite.Width, sprite.Height, sprite.XPos, ypos);
                     NumSprites[CurUnit->Num]++;
                 }
                 else
                 {
-                    if (attrib[0] & 0x0200)
+                    if (sprite.Disabled || sprite.XPos <= -sprite.Width)
                         continue;
 
-                    const u32 sizeparam = (attrib[0] >> 14) | ((attrib[1] & 0xC000) >> 12);
-                    s32 width = spritewidth[sizeparam];
-                    s32 height = spriteheight[sizeparam];
-
-                    u32 ypos = attrib[0] & 0xFF;
-                    if (((line - ypos) & 0xFF) >= (u32)height)
-                        continue;
-                    ypos = (sprline - ypos) & 0xFF;
-
-                    s32 xpos = (s32)(attrib[1] << 23) >> 23;
-                    if (xpos <= -width)
-                        continue;
-
-                    DoDrawSprite(Normal, sprnum, width, height, xpos, ypos);
+                    const u32 ypos = (sprline - sprite.YPos) & 0xFF;
+                    DoDrawSprite(Normal, sprnum, sprite.Width, sprite.Height, sprite.XPos, ypos);
                     NumSprites[CurUnit->Num]++;
                 }
             }
@@ -2535,6 +2540,7 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
     }
     else
     {
+        u16* oam = (u16*)&GPU.OAM[CurUnit->Num ? 0x400 : 0];
         for (int bgnum = 0x0C00; bgnum >= 0x0000; bgnum -= 0x0400)
         {
             for (int sprnum = 127; sprnum >= 0; sprnum--)
