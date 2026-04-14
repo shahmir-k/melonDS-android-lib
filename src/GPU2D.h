@@ -89,6 +89,7 @@ public:
 
     u32 DispCnt;
     u16 BGCnt[4];
+    u32 StateGeneration = 1;
 
     u16 BGXPos[4];
     u16 BGYPos[4];

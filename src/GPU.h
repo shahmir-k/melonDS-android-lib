@@ -542,6 +542,7 @@ public:
 
         *(T*)&Palette[addr] = val;
         PaletteDirty |= 1 << (addr / VRAMDirtyGranularity);
+        PaletteCoherencyStamp++;
     }
 
     template<typename T>
@@ -616,6 +617,7 @@ public:
     u32 VRAMCoherencyStamp_AOBJExtPal = 0;
     u32 VRAMCoherencyStamp_BBGExtPal = 0;
     u32 VRAMCoherencyStamp_BOBJExtPal = 0;
+    u32 PaletteCoherencyStamp = 0;
 
     void SyncDirtyFlags() noexcept;
 

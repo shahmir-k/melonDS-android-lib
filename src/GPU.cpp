@@ -213,6 +213,7 @@ void GPU::Reset() noexcept
 
     OAMDirty = 0x3;
     PaletteDirty = 0xF;
+    PaletteCoherencyStamp = 0;
 }
 
 void GPU::Stop() noexcept

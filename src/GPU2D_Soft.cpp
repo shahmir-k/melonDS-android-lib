@@ -1056,6 +1056,55 @@ __attribute((always_inline)) inline void SoftRenderer::DrawPixel_Accel(u32* dst,
     *dst = RGB555ToInternal[color & 0x7FFF] | flag;
 }
 
+template<SoftRenderer::DrawPixel drawPixel>
+__attribute((always_inline)) inline void SoftRenderer::ApplyCachedBGPixel(u32* dst, u32 pixel)
+{
+    if constexpr (drawPixel == DrawPixel_Accel)
+    {
+        *(dst+512) = *(dst+256);
+        *(dst+256) = *dst;
+        *dst = pixel;
+    }
+    else
+    {
+        *(dst+256) = *dst;
+        *dst = pixel;
+    }
+}
+
+bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, TextBGFrameCache*& cache, u32*& cacheLine)
+{
+    cache = &TextBGCache[CurUnit->Num][bgnum];
+    cacheLine = cache->Pixels[line];
+
+    u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
+    u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
+
+    bool cacheMatches = cache->StateGeneration == CurUnit->StateGeneration &&
+                        cache->BGStamp == bgStamp &&
+                        cache->BGExtPalStamp == bgExtPalStamp &&
+                        cache->PaletteStamp == GPU.PaletteCoherencyStamp &&
+                        cache->DispCnt == CurUnit->DispCnt &&
+                        cache->BGCnt == bgcnt &&
+                        cache->BGXPos == CurUnit->BGXPos[bgnum] &&
+                        cache->BGYPos == CurUnit->BGYPos[bgnum];
+
+    if (!cacheMatches)
+    {
+        cache->StateGeneration = CurUnit->StateGeneration;
+        cache->BGStamp = bgStamp;
+        cache->BGExtPalStamp = bgExtPalStamp;
+        cache->PaletteStamp = GPU.PaletteCoherencyStamp;
+        cache->DispCnt = CurUnit->DispCnt;
+        cache->BGCnt = bgcnt;
+        cache->BGXPos = CurUnit->BGXPos[bgnum];
+        cache->BGYPos = CurUnit->BGYPos[bgnum];
+        memset(cache->ValidLines, 0, sizeof(cache->ValidLines));
+    }
+
+    return cache->ValidLines[line] != 0;
+}
+
 template<bool windowMaskFull>
 void SoftRenderer::DrawBG_3D()
 {
@@ -1098,6 +1147,31 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
     asm volatile ("" : : : "memory");
 
     u16 bgcnt = CurUnit->BGCnt[bgnum];
+    TextBGFrameCache* frameCache = nullptr;
+    u32* cacheLine = nullptr;
+
+    if constexpr (!mosaic && windowMaskFull)
+    {
+        bool cacheEligible = CurUnit->BGMosaicSize[0] == 0 &&
+                             CurUnit->BGMosaicSize[1] == 0 &&
+                             (CurUnit->DispCnt & 0xE000) == 0 &&
+                             line < 192;
+        if (cacheEligible)
+        {
+            if (PrepareTextBGFrameCacheLine(line, bgnum, bgcnt, frameCache, cacheLine))
+            {
+                for (int i = 0; i < 256; i++)
+                {
+                    u32 pixel = cacheLine[i];
+                    if (pixel)
+                        ApplyCachedBGPixel<drawPixel>(&BGOBJLine[i], pixel);
+                }
+                return;
+            }
+
+            memset(cacheLine, 0, 256 * sizeof(u32));
+        }
+    }
 
     u32 tilesetaddr, tilemapaddr;
     u16* pal;
@@ -1180,7 +1254,11 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
                         color = bgvram[(pixelsaddr + (7 - tilePos)) & bgvrammask];
 
                         if (color)
+                        {
+                            if (cacheLine)
+                                cacheLine[i] = RGB555ToInternal[curpal[color] & 0x7FFF] | bgFlag;
                             drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                        }
                     }
                 }
                 else
@@ -1190,11 +1268,17 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
                         color = bgvram[(pixelsaddr + tilePos) & bgvrammask];
 
                         if (color)
+                        {
+                            if (cacheLine)
+                                cacheLine[i] = RGB555ToInternal[curpal[color] & 0x7FFF] | bgFlag;
                             drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                        }
                     }
                 }
             }
 
+            if (frameCache)
+                frameCache->ValidLines[line] = 1;
             return;
         }
         // preload shit as needed
@@ -1271,7 +1355,11 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
                         color = (tilexoff & 0x1) ? (pixels >> 4) : (pixels & 0x0F);
 
                         if (color)
+                        {
+                            if (cacheLine)
+                                cacheLine[i] = RGB555ToInternal[curpal[color] & 0x7FFF] | bgFlag;
                             drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                        }
                     }
                 }
                 else
@@ -1282,11 +1370,17 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
                         color = (tilePos & 0x1) ? (pixels >> 4) : (pixels & 0x0F);
 
                         if (color)
+                        {
+                            if (cacheLine)
+                                cacheLine[i] = RGB555ToInternal[curpal[color] & 0x7FFF] | bgFlag;
                             drawPixel(&BGOBJLine[i], curpal[color], bgFlag);
+                        }
                     }
                 }
             }
 
+            if (frameCache)
+                frameCache->ValidLines[line] = 1;
             return;
         }
 

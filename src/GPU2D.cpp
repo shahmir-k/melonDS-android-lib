@@ -94,6 +94,7 @@ Unit::Unit(u32 num, melonDS::GPU& gpu) : Num(num), GPU(gpu)
 void Unit::Reset()
 {
     Enabled = false;
+    StateGeneration = 1;
     DispCnt = 0;
     memset(BGCnt, 0, 4*2);
     memset(BGXPos, 0, 4*2);
@@ -268,6 +269,8 @@ u32 Unit::Read32(u32 addr)
 
 void Unit::Write8(u32 addr, u8 val)
 {
+    StateGeneration++;
+
     switch (addr & 0x00000FFF)
     {
     case 0x000:
@@ -372,6 +375,8 @@ void Unit::Write8(u32 addr, u8 val)
 
 void Unit::Write16(u32 addr, u16 val)
 {
+    StateGeneration++;
+
     switch (addr & 0x00000FFF)
     {
     case 0x000:
@@ -524,6 +529,8 @@ void Unit::Write16(u32 addr, u16 val)
 
 void Unit::Write32(u32 addr, u32 val)
 {
+    StateGeneration++;
+
     switch (addr & 0x00000FFF)
     {
     case 0x000:

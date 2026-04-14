@@ -46,12 +46,27 @@ private:
     alignas(8) u32 OBJLine[2][256];
     alignas(8) u8 OBJWindow[2][256];
 
+    struct TextBGFrameCache
+    {
+        u32 StateGeneration = 0;
+        u32 BGStamp = 0;
+        u32 BGExtPalStamp = 0;
+        u32 PaletteStamp = 0;
+        u32 DispCnt = 0;
+        u16 BGCnt = 0;
+        u16 BGXPos = 0;
+        u16 BGYPos = 0;
+        u8 ValidLines[192] {};
+        alignas(64) u32 Pixels[192][256] {};
+    };
+
     u32 NumSprites[2];
     u32 SyncedBGStamp[2] {};
     u32 SyncedBGExtPalStamp[2] {};
     u32 SyncedOBJStamp[2] {};
     u32 SyncedOBJExtPalStamp[2] {};
     bool LineUsesAccelAux = false;
+    TextBGFrameCache TextBGCache[2][4] {};
 
     u8* CurBGXMosaicTable;
     array2d<u8, 16, 256> MosaicTable = []() constexpr
@@ -133,6 +148,8 @@ private:
     static void DrawPixel_Accel(u32* dst, u16 color, u32 flag);
 
     typedef void (*DrawPixel)(u32* dst, u16 color, u32 flag);
+    template<DrawPixel drawPixel> static void ApplyCachedBGPixel(u32* dst, u32 pixel);
+    bool PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, TextBGFrameCache*& cache, u32*& cacheLine);
 
     template<bool windowMaskFull> void DrawBG_3D();
     template<bool mosaic, bool windowMaskFull, DrawPixel drawPixel> void DrawBG_Text(u32 line, u32 bgnum);
