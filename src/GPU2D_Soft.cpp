@@ -20,6 +20,10 @@
 #include "GPU.h"
 #include "GPU3D.h"
 
+#ifdef LITEV_NEON_RENDERER
+#include "GPU2D_NEON.h"
+#endif
+
 namespace melonDS
 {
 namespace GPU2D
@@ -271,10 +275,14 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
             u32 factor = masterBrightness & 0x1F;
             if (factor > 16) factor = 16;
 
+#ifdef LITEV_NEON_RENDERER
+            GPU2D::NEON_BrightnessUp(dst, 256, factor);
+#else
             for (int i = 0; i < 256; i++)
             {
                 dst[i] = ColorBrightnessUp(dst[i], factor, 0x0);
             }
+#endif
         }
         else if ((masterBrightness >> 14) == 2)
         {
@@ -282,16 +290,23 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
             u32 factor = masterBrightness & 0x1F;
             if (factor > 16) factor = 16;
 
+#ifdef LITEV_NEON_RENDERER
+            GPU2D::NEON_BrightnessDown(dst, 256, factor);
+#else
             for (int i = 0; i < 256; i++)
             {
                 dst[i] = ColorBrightnessDown(dst[i], factor, 0xF);
             }
+#endif
         }
     }
 
     // convert to 32-bit BGRA
     // note: 32-bit RGBA would be more straightforward, but
     // BGRA seems to be more compatible (Direct2D soft, cairo...)
+#ifdef LITEV_NEON_RENDERER
+    GPU2D::NEON_ConvertToBGRA(dst, 256);
+#else
     for (int i = 0; i < 256; i+=2)
     {
         u64 c = *(u64*)&dst[i];
@@ -303,6 +318,7 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
         *(u64*)&dst[i] = c | ((c & 0x00C0C0C000C0C0C0) >> 6) | 0xFF000000FF000000;
     }
+#endif
 }
 
 void SoftRenderer::VBlankEnd(Unit* unitA, Unit* unitB)
