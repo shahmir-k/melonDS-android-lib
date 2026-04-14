@@ -375,6 +375,9 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
 void SoftRenderer::VBlankEnd(Unit* unitA, Unit* unitB)
 {
+    PreparedFrames[unitA->Num].Valid = 0;
+    PreparedFrames[unitB->Num].Valid = 0;
+
 #ifdef OGLRENDERER_ENABLED
     if (Renderer3D& renderer3d = GPU.GPU3D.GetCurrentRenderer(); renderer3d.Accelerated)
     {
@@ -384,6 +387,64 @@ void SoftRenderer::VBlankEnd(Unit* unitA, Unit* unitB)
         }
     }
 #endif
+}
+
+const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
+{
+    PreparedFrameState& prepared = PreparedFrames[CurUnit->Num];
+
+    const u32 dispCnt = CurUnit->DispCnt;
+    const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
+    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
+    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
+    const u32 objStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJ : GPU.VRAMCoherencyStamp_AOBJ;
+    const u32 objExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJExtPal : GPU.VRAMCoherencyStamp_AOBJExtPal;
+    const u32 blendKey = CurUnit->BlendCnt |
+                         (CurUnit->EVA << 16) |
+                         (CurUnit->EVB << 21) |
+                         (CurUnit->EVY << 26);
+    const u32 rendererFlags = (rendererAccelerated ? 1u : 0u) |
+                              ((rendererAccelerated && CurUnit->Num == 0) ? 2u : 0u);
+
+    if (prepared.Valid &&
+        prepared.Epoch == GPU.Renderer2DCacheEpoch &&
+        prepared.StateGeneration == CurUnit->StateGeneration &&
+        prepared.BGStamp == bgStamp &&
+        prepared.BGExtPalStamp == bgExtPalStamp &&
+        prepared.OBJStamp == objStamp &&
+        prepared.OBJExtPalStamp == objExtPalStamp &&
+        prepared.PaletteStamp == GPU.PaletteCoherencyStamp &&
+        prepared.OAMStamp == GPU.OAMCoherencyStamp &&
+        prepared.DispCnt == dispCnt &&
+        prepared.BlendKey == blendKey &&
+        prepared.RendererFlags == rendererFlags)
+    {
+        return prepared;
+    }
+
+    prepared.Epoch = GPU.Renderer2DCacheEpoch;
+    prepared.StateGeneration = CurUnit->StateGeneration;
+    prepared.BGStamp = bgStamp;
+    prepared.BGExtPalStamp = bgExtPalStamp;
+    prepared.OBJStamp = objStamp;
+    prepared.OBJExtPalStamp = objExtPalStamp;
+    prepared.PaletteStamp = GPU.PaletteCoherencyStamp;
+    prepared.OAMStamp = GPU.OAMCoherencyStamp;
+    prepared.DispCnt = dispCnt;
+    prepared.BlendKey = blendKey;
+    prepared.RendererFlags = rendererFlags;
+    prepared.ComposedLineCacheEligible =
+        !(dispCnt & (1 << 7)) &&
+        !(dispCnt & 0xE000) &&
+        !CurUnit->BGMosaicSize[0] &&
+        !CurUnit->BGMosaicSize[1] &&
+        !CurUnit->OBJMosaicSize[0] &&
+        !CurUnit->OBJMosaicSize[1] &&
+        !CurUnit->BGMosaicY &&
+        !CurUnit->BGMosaicYMax &&
+        !(!CurUnit->Num && (dispCnt & 0x0100) && (dispCnt & 0x8) && !rendererAccelerated);
+    prepared.Valid = 1;
+    return prepared;
 }
 
 void SoftRenderer::DoCapture(u32 line, u32 width)
@@ -801,30 +862,12 @@ void SoftRenderer::DrawScanlineBGMode7(u32 line)
     }
 }
 
-bool SoftRenderer::CanUseComposedLineCache(u32 line) const
+bool SoftRenderer::CanUseComposedLineCache(u32 line)
 {
     if (line >= 192)
         return false;
 
-    u32 dispCnt = CurUnit->DispCnt;
-    if (dispCnt & (1 << 7))
-        return false;
-
-    if (dispCnt & 0xE000)
-        return false;
-
-    if (CurUnit->BGMosaicSize[0] || CurUnit->BGMosaicSize[1] ||
-        CurUnit->OBJMosaicSize[0] || CurUnit->OBJMosaicSize[1])
-        return false;
-
-    if (CurUnit->BGMosaicY || CurUnit->BGMosaicYMax)
-        return false;
-
-    if (!CurUnit->Num && (dispCnt & 0x0100) && (dispCnt & 0x8) &&
-        !GPU.GPU3D.IsRendererAccelerated())
-        return false;
-
-    return true;
+    return GetPreparedFrameState().ComposedLineCacheEligible;
 }
 
 u32 SoftRenderer::ComposedLineRendererFlags() const
@@ -839,31 +882,22 @@ bool SoftRenderer::ComposedLineCacheMatches(u32 line, bool compareNumSprites)
     if (!CanUseComposedLineCache(line))
         return false;
 
+    const PreparedFrameState& prepared = GetPreparedFrameState();
     const ComposedLineCache& cache = LineCache[CurUnit->Num][line];
     if (!cache.Valid)
         return false;
 
-    const u32 rendererFlags = ComposedLineRendererFlags();
-    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
-    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
-    const u32 objStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJ : GPU.VRAMCoherencyStamp_AOBJ;
-    const u32 objExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJExtPal : GPU.VRAMCoherencyStamp_AOBJExtPal;
-    const u32 blendKey = CurUnit->BlendCnt |
-                         (CurUnit->EVA << 16) |
-                         (CurUnit->EVB << 21) |
-                         (CurUnit->EVY << 26);
-
-    if (cache.Epoch != GPU.Renderer2DCacheEpoch ||
-        cache.StateGeneration != CurUnit->StateGeneration ||
-        cache.BGStamp != bgStamp ||
-        cache.BGExtPalStamp != bgExtPalStamp ||
-        cache.OBJStamp != objStamp ||
-        cache.OBJExtPalStamp != objExtPalStamp ||
-        cache.PaletteStamp != GPU.PaletteCoherencyStamp ||
-        cache.OAMStamp != GPU.OAMCoherencyStamp ||
-        cache.DispCnt != CurUnit->DispCnt ||
-        cache.BlendKey != blendKey ||
-        cache.RendererFlags != rendererFlags)
+    if (cache.Epoch != prepared.Epoch ||
+        cache.StateGeneration != prepared.StateGeneration ||
+        cache.BGStamp != prepared.BGStamp ||
+        cache.BGExtPalStamp != prepared.BGExtPalStamp ||
+        cache.OBJStamp != prepared.OBJStamp ||
+        cache.OBJExtPalStamp != prepared.OBJExtPalStamp ||
+        cache.PaletteStamp != prepared.PaletteStamp ||
+        cache.OAMStamp != prepared.OAMStamp ||
+        cache.DispCnt != prepared.DispCnt ||
+        cache.BlendKey != prepared.BlendKey ||
+        cache.RendererFlags != prepared.RendererFlags)
         return false;
 
     if (compareNumSprites && cache.NumSprites != NumSprites[CurUnit->Num])
@@ -897,27 +931,20 @@ void SoftRenderer::StoreComposedLineCache(u32 line, const s32 bgXRefInternal[2],
     if (!CanUseComposedLineCache(line))
         return;
 
+    const PreparedFrameState& prepared = GetPreparedFrameState();
     const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
     ComposedLineCache& cache = LineCache[CurUnit->Num][line];
-    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
-    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
-    const u32 objStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJ : GPU.VRAMCoherencyStamp_AOBJ;
-    const u32 objExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJExtPal : GPU.VRAMCoherencyStamp_AOBJExtPal;
-
-    cache.Epoch = GPU.Renderer2DCacheEpoch;
-    cache.StateGeneration = CurUnit->StateGeneration;
-    cache.BGStamp = bgStamp;
-    cache.BGExtPalStamp = bgExtPalStamp;
-    cache.OBJStamp = objStamp;
-    cache.OBJExtPalStamp = objExtPalStamp;
-    cache.PaletteStamp = GPU.PaletteCoherencyStamp;
-    cache.OAMStamp = GPU.OAMCoherencyStamp;
-    cache.DispCnt = CurUnit->DispCnt;
-    cache.BlendKey = CurUnit->BlendCnt |
-                     (CurUnit->EVA << 16) |
-                     (CurUnit->EVB << 21) |
-                     (CurUnit->EVY << 26);
-    cache.RendererFlags = ComposedLineRendererFlags();
+    cache.Epoch = prepared.Epoch;
+    cache.StateGeneration = prepared.StateGeneration;
+    cache.BGStamp = prepared.BGStamp;
+    cache.BGExtPalStamp = prepared.BGExtPalStamp;
+    cache.OBJStamp = prepared.OBJStamp;
+    cache.OBJExtPalStamp = prepared.OBJExtPalStamp;
+    cache.PaletteStamp = prepared.PaletteStamp;
+    cache.OAMStamp = prepared.OAMStamp;
+    cache.DispCnt = prepared.DispCnt;
+    cache.BlendKey = prepared.BlendKey;
+    cache.RendererFlags = prepared.RendererFlags;
     cache.NumSprites = NumSprites[CurUnit->Num];
     std::memcpy(cache.BGCnt, CurUnit->BGCnt, sizeof(cache.BGCnt));
     std::memcpy(cache.BGXPos, CurUnit->BGXPos, sizeof(cache.BGXPos));
@@ -2276,22 +2303,23 @@ void SoftRenderer::InterleaveSprites(u32 prio)
 
 bool SoftRenderer::PrepareSpriteLineBins()
 {
+    const PreparedFrameState& prepared = GetPreparedFrameState();
     SpriteLineBinCache& cache = SpriteBins[CurUnit->Num];
     const bool cacheMatches = cache.Valid &&
-                              cache.StateGeneration == CurUnit->StateGeneration &&
-                              cache.OAMStamp == GPU.OAMCoherencyStamp &&
-                              cache.DispCnt == CurUnit->DispCnt;
+                              cache.StateGeneration == prepared.StateGeneration &&
+                              cache.OAMStamp == prepared.OAMStamp &&
+                              cache.DispCnt == prepared.DispCnt;
 
     if (cacheMatches)
         return true;
 
-    cache.StateGeneration = CurUnit->StateGeneration;
-    cache.OAMStamp = GPU.OAMCoherencyStamp;
-    cache.DispCnt = CurUnit->DispCnt;
+    cache.StateGeneration = prepared.StateGeneration;
+    cache.OAMStamp = prepared.OAMStamp;
+    cache.DispCnt = prepared.DispCnt;
     cache.Valid = 1;
     std::memset(cache.Counts, 0, sizeof(cache.Counts));
 
-    if (!(CurUnit->DispCnt & 0x1000))
+    if (!(prepared.DispCnt & 0x1000))
         return true;
 
     u16* oam = reinterpret_cast<u16*>(&GPU.OAM[CurUnit->Num ? 0x400 : 0]);

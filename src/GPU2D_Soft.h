@@ -105,6 +105,23 @@ private:
         u8 SpriteNums[192][4][128] {};
     };
 
+    struct PreparedFrameState
+    {
+        u32 Epoch = 0;
+        u32 StateGeneration = 0;
+        u32 BGStamp = 0;
+        u32 BGExtPalStamp = 0;
+        u32 OBJStamp = 0;
+        u32 OBJExtPalStamp = 0;
+        u32 PaletteStamp = 0;
+        u32 OAMStamp = 0;
+        u32 DispCnt = 0;
+        u32 BlendKey = 0;
+        u32 RendererFlags = 0;
+        u8 ComposedLineCacheEligible = 0;
+        u8 Valid = 0;
+    };
+
     u32 NumSprites[2] {};
     u32 SyncedBGStamp[2] {};
     u32 SyncedBGExtPalStamp[2] {};
@@ -117,6 +134,7 @@ private:
     TextBGTileRowCache TextBGTileCache[2][4] {};
     ComposedLineCache LineCache[2][192] {};
     SpriteLineBinCache SpriteBins[2] {};
+    PreparedFrameState PreparedFrames[2] {};
 
     u8* CurBGXMosaicTable;
     array2d<u8, 16, 256> MosaicTable = []() constexpr
@@ -193,7 +211,7 @@ private:
     void DrawScanlineBGMode6(u32 line);
     void DrawScanlineBGMode7(u32 line);
     void DrawScanline_BGOBJ(u32 line);
-    bool CanUseComposedLineCache(u32 line) const;
+    bool CanUseComposedLineCache(u32 line);
     u32 ComposedLineRendererFlags() const;
     bool ComposedLineCacheMatches(u32 line, bool compareNumSprites = true);
     bool TryReplayComposedLineCache(u32 line);
@@ -210,6 +228,7 @@ private:
     static u32 TextBGTileRowCacheSlot(u64 key);
     void DecodeTextBGTileRow(TextBGTileRowCache& cache, u32 slot, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag);
     template<DrawPixel drawPixel> void ApplyTextBGTileRow(TextBGTileRowCache* tileCache, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag, u32 tilePos, u32 count, u32 dstPos, u32* cacheLine);
+    const PreparedFrameState& GetPreparedFrameState();
     bool PrepareSpriteLineBins();
     template<bool windowMaskFull> void DrawBG_3D();
     template<bool mosaic, bool windowMaskFull, DrawPixel drawPixel> void DrawBG_Text(u32 line, u32 bgnum);
