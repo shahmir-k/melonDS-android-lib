@@ -146,7 +146,7 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
     CurUnit = unit;
 
     bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
-    int accelMetaIndex = CurUnit->Num == 0 ? (256 * 3) : 256;
+    int accelMetaIndex = 256 * 3;
     int stride = rendererAccelerated ? (accelMetaIndex + 1) : 256;
     u32* dst = &Framebuffer[CurUnit->Num][stride * line];
 
@@ -238,7 +238,7 @@ void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 
     case 1: // regular display
         {
-            int copyWords = LineUsesAccelAux ? (256 * 3) : 256;
+            int copyWords = rendererAccelerated ? (256 * 3) : 256;
             int i = 0;
             for (; i < (copyWords & ~1); i+=2)
                 *(u64*)&dst[i] = *(u64*)&BGOBJLine[i];
@@ -844,17 +844,9 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
     case 7: DrawScanlineBGMode7(line); break;
     }
 
-    // If there is no selected color effect and no target-2 blending mask,
-    // ColorComposite() would return the top pixel unchanged for the whole line.
     u32 blendCnt = CurUnit->BlendCnt;
-    bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
-    bool accelComposite = rendererAccelerated && LineUsesAccelAux;
-    bool preserveAccelAuxPlanes = LineUsesAccelAux;
-    bool noColorEffectTarget2 = (blendCnt & 0x3FC0) == 0;
-    bool skipComposite = noColorEffectTarget2 && !accelComposite;
-    bool accelerated3DLayer = LineUsesAccelAux && ((CurUnit->DispCnt & 0x0108) == 0x0108);
 
-    if (!skipComposite && !accelComposite)
+    if (!GPU.GPU3D.IsRendererAccelerated())
     {
         for (int i = 0; i < 256; i++)
         {
@@ -866,33 +858,7 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
                 : ColorComposite<false>(i, val1, val2);
         }
     }
-    else if (noColorEffectTarget2)
-    {
-        if (accelerated3DLayer)
-        {
-            u32 evyMeta = CurUnit->EVY << 8;
-            constexpr u32 defaultMeta = 0x07000000;
-            for (int i = 0; i < 256; i++)
-            {
-                u32 val1 = BGOBJLine[i];
-                u32 val2 = BGOBJLine[256+i];
-                u32 mask = ((val1 & 0xC0000000u) == 0x40000000u) ? 0xFFFFFFFFu : 0u;
-
-                BGOBJLine[i]     = val1 ^ ((val1 ^ val2) & mask);
-                BGOBJLine[256+i] = val2 & mask;
-                BGOBJLine[512+i] = defaultMeta ^ ((defaultMeta ^ evyMeta) & mask);
-            }
-        }
-        else
-        {
-            if (preserveAccelAuxPlanes)
-            {
-                memset(&BGOBJLine[256], 0, 256 * sizeof(u32));
-                std::fill_n(&BGOBJLine[512], 256, 0x07000000);
-            }
-        }
-    }
-    else if (!skipComposite)
+    else
     {
         if (CurUnit->Num == 0)
         {
@@ -1053,11 +1019,8 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
                     ? ColorComposite<true>(i, val1, val2)
                     : ColorComposite<false>(i, val1, val2);
 
-                if (preserveAccelAuxPlanes)
-                {
-                    BGOBJLine[256+i] = 0;
-                    BGOBJLine[512+i] = 0x07000000;
-                }
+                BGOBJLine[256+i] = 0;
+                BGOBJLine[512+i] = 0x07000000;
             }
         }
     }

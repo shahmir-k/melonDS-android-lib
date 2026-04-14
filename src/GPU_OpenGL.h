@@ -47,12 +47,12 @@ public:
     void SetOutputTexture(int buf, GLuint texture);
     void BindOutputTexture(int buf);
 private:
-    GLCompositor(GLuint topShader, GLuint bottomShader) noexcept;
+    GLCompositor(GLuint CompShader) noexcept;
     int Scale = 0;
     int ScreenH = 0, ScreenW = 0;
 
-    std::array<GLuint, 2> CompShader {};
-    GLuint CompTopScaleLoc = 0;
+    GLuint CompShader {};
+    GLuint CompScaleLoc = 0;
 
     GLuint CompVertexBufferID = 0;
     GLuint CompVertexArrayID = 0;

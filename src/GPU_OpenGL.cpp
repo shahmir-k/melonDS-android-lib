@@ -36,43 +36,27 @@ using namespace OpenGL;
 std::optional<GLCompositor> GLCompositor::New() noexcept
 {
     assert(glBindAttribLocation != nullptr);
-    GLuint topShader {};
-    GLuint bottomShader {};
+    GLuint CompShader {};
 
-    if (!OpenGL::CompileVertexFragmentProgram(topShader,
+    if (!OpenGL::CompileVertexFragmentProgram(CompShader,
             kCompositorVS, kCompositorFS_Nearest,
-            "CompositorTopShader",
+            "CompositorShader",
             {{"vPosition", 0}, {"vTexcoord", 1}},
             {{"oColor", 0}}))
         return std::nullopt;
 
-    if (!OpenGL::CompileVertexFragmentProgram(bottomShader,
-            kCompositorVS, kCompositorFS_Bottom_Nearest,
-            "CompositorBottomShader",
-            {{"vPosition", 0}, {"vTexcoord", 1}},
-            {{"oColor", 0}}))
-    {
-        glDeleteProgram(topShader);
-        return std::nullopt;
-    }
-
-    return { GLCompositor(topShader, bottomShader) };
+    return { GLCompositor(CompShader) };
 }
 
-GLCompositor::GLCompositor(GLuint topShader, GLuint bottomShader) noexcept
-    : CompShader({topShader, bottomShader})
+GLCompositor::GLCompositor(GLuint compShader) noexcept : CompShader(compShader)
 {
-    CompTopScaleLoc = glGetUniformLocation(CompShader[0], "u3DScale");
+    CompScaleLoc = glGetUniformLocation(CompShader, "u3DScale");
 
-    glUseProgram(CompShader[0]);
-    GLuint screenTextureUniform = glGetUniformLocation(CompShader[0], "ScreenTex");
+    glUseProgram(CompShader);
+    GLuint screenTextureUniform = glGetUniformLocation(CompShader, "ScreenTex");
     glUniform1i(screenTextureUniform, 0);
-    GLuint _3dTextureUniform = glGetUniformLocation(CompShader[0], "_3DTex");
+    GLuint _3dTextureUniform = glGetUniformLocation(CompShader, "_3DTex");
     glUniform1i(_3dTextureUniform, 1);
-
-    glUseProgram(CompShader[1]);
-    screenTextureUniform = glGetUniformLocation(CompShader[1], "ScreenTex");
-    glUniform1i(screenTextureUniform, 0);
 
     // all this mess is to prevent bleeding
 #define SETVERTEX(i, x, y, offset) \
@@ -146,8 +130,7 @@ GLCompositor::~GLCompositor()
     glDeleteVertexArrays(1, &CompVertexArrayID);
     glDeleteBuffers(1, &CompVertexBufferID);
 
-    for (GLuint shader : CompShader)
-        glDeleteProgram(shader);
+    glDeleteProgram(CompShader);
 }
 
 
@@ -155,7 +138,7 @@ GLCompositor::GLCompositor(GLCompositor&& other) noexcept :
     Scale(other.Scale),
     ScreenH(other.ScreenH),
     ScreenW(other.ScreenW),
-    CompTopScaleLoc(other.CompTopScaleLoc),
+    CompScaleLoc(other.CompScaleLoc),
     CompVertices(other.CompVertices),
     CompShader(other.CompShader),
     CompVertexBufferID(other.CompVertexBufferID),
@@ -169,7 +152,6 @@ GLCompositor::GLCompositor(GLCompositor&& other) noexcept :
     other.CompScreenOutputTex = {};
     other.CompVertexArrayID = {};
     other.CompVertexBufferID = {};
-    other.CompTopScaleLoc = {};
     other.CompShader = {};
 }
 
@@ -180,12 +162,11 @@ GLCompositor& GLCompositor::operator=(GLCompositor&& other) noexcept
         Scale = other.Scale;
         ScreenH = other.ScreenH;
         ScreenW = other.ScreenW;
-        CompTopScaleLoc = other.CompTopScaleLoc;
+        CompScaleLoc = other.CompScaleLoc;
         CompVertices = other.CompVertices;
 
         // Clean up these resources before overwriting them
-        for (GLuint shader : CompShader)
-            glDeleteProgram(shader);
+        glDeleteProgram(CompShader);
         CompShader = other.CompShader;
 
         glDeleteBuffers(1, &CompVertexBufferID);
@@ -208,7 +189,6 @@ GLCompositor& GLCompositor::operator=(GLCompositor&& other) noexcept
         other.CompScreenOutputTex = {};
         other.CompVertexArrayID = {};
         other.CompVertexBufferID = {};
-        other.CompTopScaleLoc = {};
         other.CompShader = {};
     }
 
@@ -269,6 +249,10 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
 
     glViewport(0, 0, ScreenW, ScreenH);
 
+    // TODO: select more shaders (filtering, etc)
+    glUseProgram(CompShader);
+    glUniform1ui(CompScaleLoc, Scale);
+
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, CompScreenInputTex);
 
@@ -276,7 +260,7 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
     {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256*3 + 1, 192, GL_RGBA_INTEGER,
                         GL_UNSIGNED_BYTE, gpu.Framebuffer[backbuf][0].get());
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256 + 1, 192, GL_RGBA_INTEGER,
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256*3 + 1, 192, GL_RGBA_INTEGER,
                         GL_UNSIGNED_BYTE, gpu.Framebuffer[backbuf][1].get());
     }
 
@@ -285,13 +269,7 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
 
     glBindBuffer(GL_ARRAY_BUFFER, CompVertexBufferID);
     glBindVertexArray(CompVertexArrayID);
-
-    glUseProgram(CompShader[0]);
-    glUniform1ui(CompTopScaleLoc, Scale);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-
-    glUseProgram(CompShader[1]);
-    glDrawArrays(GL_TRIANGLES, 6, 6);
+    glDrawArrays(GL_TRIANGLES, 0, 4*3);
 }
 
 void GLCompositor::SetOutputTexture(int buf, GLuint texture)
