@@ -506,6 +506,7 @@ protected:
     u16 WifiWaitCnt;
     u8 TimerCheckMask[2];
     u64 TimerTimestamp[2];
+    u64 TimerNextOverflow[2];
     DMA DMAs[8];
     u32 DMA9Fill[4];
     u16 IPCSync9, IPCSync7;
@@ -538,7 +539,9 @@ protected:
     void DivDone(u32 param);
     void SqrtDone(u32 param);
     void StartSqrt();
+    void MaybeRunTimers(u32 cpu);
     void RunTimer(u32 tid, s32 cycles);
+    void UpdateTimerNextOverflow(u32 cpu);
     void UpdateWifiTimings();
     void SetWifiWaitCnt(u16 val);
     void SetGBASlotTimings();

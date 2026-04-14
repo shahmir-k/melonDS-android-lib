@@ -516,6 +516,8 @@ void NDS::Reset()
     TimerCheckMask[1] = 0;
     TimerTimestamp[0] = 0;
     TimerTimestamp[1] = 0;
+    TimerNextOverflow[0] = UINT64_MAX;
+    TimerNextOverflow[1] = UINT64_MAX;
 
     for (i = 0; i < 8; i++) DMAs[i].Reset();
     memset(DMA9Fill, 0, 4*4);
@@ -763,6 +765,9 @@ bool NDS::DoSavestate(Savestate* file)
 #ifdef JIT_ENABLED
         JIT.Reset();
 #endif
+
+        UpdateTimerNextOverflow(0);
+        UpdateTimerNextOverflow(1);
     }
 
     file->Finish();
@@ -1004,7 +1009,7 @@ u32 NDS::RunFrame()
                     ARM9.Execute<cpuMode>();
                 }
 
-                RunTimers(0);
+                MaybeRunTimers(0);
                 GPU.GPU3D.Run();
 
                 target = ARM9Timestamp >> ARM9ClockShift;
@@ -1031,7 +1036,7 @@ u32 NDS::RunFrame()
                         ARM7.Execute<cpuMode>();
                     }
 
-                    RunTimers(1);
+                    MaybeRunTimers(1);
                 }
 
                 RunSystem(target);
@@ -1648,22 +1653,63 @@ void NDS::RunTimer(u32 tid, s32 cycles)
     }
 }
 
+void NDS::UpdateTimerNextOverflow(u32 cpu)
+{
+    u32 timermask = TimerCheckMask[cpu];
+    if (!timermask)
+    {
+        TimerNextOverflow[cpu] = UINT64_MAX;
+        return;
+    }
+
+    u64 next = UINT64_MAX;
+    u32 timerBase = cpu << 2;
+    u64 baseTimestamp = TimerTimestamp[cpu];
+
+    for (u32 i = 0; i < 4; i++)
+    {
+        if (!(timermask & (1u << i)))
+            continue;
+
+        const Timer& timer = Timers[timerBase + i];
+        u32 remaining = (1u << 26) - timer.Counter;
+        u64 cyclesToOverflow = (((u64)remaining - 1) >> timer.CycleShift) + 1;
+        u64 deadline = baseTimestamp + cyclesToOverflow;
+        if (deadline < next)
+            next = deadline;
+    }
+
+    TimerNextOverflow[cpu] = next;
+}
+
+void NDS::MaybeRunTimers(u32 cpu)
+{
+    u64 current = cpu == 0 ? (ARM9Timestamp >> ARM9ClockShift) : ARM7Timestamp;
+    if (current < TimerNextOverflow[cpu])
+        return;
+
+    RunTimers(cpu);
+}
+
 void NDS::RunTimers(u32 cpu)
 {
     u32 timermask = TimerCheckMask[cpu];
-    s32 cycles;
+    u64 current = cpu == 0 ? (ARM9Timestamp >> ARM9ClockShift) : ARM7Timestamp;
+    s32 cycles = (s32)(current - TimerTimestamp[cpu]);
 
-    if (cpu == 0)
-        cycles = (ARM9Timestamp >> ARM9ClockShift) - TimerTimestamp[0];
-    else
-        cycles = ARM7Timestamp - TimerTimestamp[1];
+    if (cycles <= 0)
+    {
+        UpdateTimerNextOverflow(cpu);
+        return;
+    }
 
     if (timermask & 0x1) RunTimer((cpu<<2)+0, cycles);
     if (timermask & 0x2) RunTimer((cpu<<2)+1, cycles);
     if (timermask & 0x4) RunTimer((cpu<<2)+2, cycles);
     if (timermask & 0x8) RunTimer((cpu<<2)+3, cycles);
 
-    TimerTimestamp[cpu] += cycles;
+    TimerTimestamp[cpu] = current;
+    UpdateTimerNextOverflow(cpu);
 }
 
 const s32 TimerPrescaler[4] = {0, 6, 8, 10};
@@ -1696,6 +1742,8 @@ void NDS::TimerStart(u32 id, u16 cnt)
         TimerCheckMask[id>>2] |= 0x01 << (id&0x3);
     else
         TimerCheckMask[id>>2] &= ~(0x01 << (id&0x3));
+
+    UpdateTimerNextOverflow(id >> 2);
 }
 
 
