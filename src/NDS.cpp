@@ -49,7 +49,7 @@ namespace melonDS
 {
 using namespace Platform;
 
-const s32 kMaxIterationCycles = 64;
+const s32 kMaxIterationCycles = 512;
 const s32 kIterationCycleMargin = 8;
 
 // timing notes
