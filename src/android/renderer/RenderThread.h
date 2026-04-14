@@ -19,7 +19,7 @@
 
 #pragma once
 
-#ifdef LITEV_THREADED_RENDER
+#ifdef LITEV_PBO_UPLOAD
 
 #include <GLES3/gl3.h>
 #include "types.h"
@@ -85,4 +85,4 @@ private:
 
 } // namespace MelonDSAndroid
 
-#endif // LITEV_THREADED_RENDER
+#endif // LITEV_PBO_UPLOAD

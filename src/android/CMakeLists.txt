@@ -23,6 +23,10 @@ set(ANDROID_SOURCES
         ../frontend/mic_blow.h
 )
 
+if(LITEV_PBO_UPLOAD)
+    list(APPEND ANDROID_SOURCES renderer/RenderThread.cpp)
+endif()
+
 set(OBOE ./oboe)
 set(FAAD2 ./faad2)
 set(RCHEEVOS ./rcheevos)

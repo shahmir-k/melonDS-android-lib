@@ -98,4 +98,3 @@ ARM_RestoreContext:
 #if !defined(__APPLE__) && !defined(__WIN32__)
 .section .note.GNU-stack,"",@progbits
 #endif
-

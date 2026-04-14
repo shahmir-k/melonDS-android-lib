@@ -17,10 +17,11 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
-#ifdef LITEV_THREADED_RENDER
+#ifdef LITEV_PBO_UPLOAD
 
 #include "RenderThread.h"
 
+#include <cstdint>
 #include <cstring>
 #include <GLES3/gl3.h>
 
@@ -130,4 +131,4 @@ void SoftwareRenderUploader::uploadFrame(const melonDS::u32* topScreen,
 
 } // namespace MelonDSAndroid
 
-#endif // LITEV_THREADED_RENDER
+#endif // LITEV_PBO_UPLOAD

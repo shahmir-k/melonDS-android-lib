@@ -212,6 +212,7 @@ public:
         {
             *(T*)&VRAM[bank][addr] = val;
             VRAMDirty[bank][addr / VRAMDirtyGranularity] = true;
+            Invalidate2DVRAMMapping(bank, VRAMCNT[bank]);
         }
     }
 
@@ -240,41 +241,56 @@ public:
     void WriteVRAM_ABG(u32 addr, T val)
     {
         u32 mask = VRAMMap_ABG[(addr >> 14) & 0x1F];
+        bool wrote = false;
+        u32 dirtyStart = (addr & 0x7FFFF) / VRAMDirtyGranularity;
+        u32 dirtyBits = (((addr & 0x7FFFF) + sizeof(T) - 1) / VRAMDirtyGranularity) - dirtyStart + 1;
 
         if (mask & (1<<0))
         {
             VRAMDirty[0][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_A[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<1))
         {
             VRAMDirty[1][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_B[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<2))
         {
             VRAMDirty[2][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_C[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<3))
         {
             VRAMDirty[3][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_D[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<4))
         {
             VRAMDirty[4][(addr & 0xFFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_E[addr & 0xFFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<5))
         {
             VRAMDirty[5][(addr & 0x3FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_F[addr & 0x3FFF] = val;
+            wrote = true;
         }
         if (mask & (1<<6))
         {
             VRAMDirty[6][(addr & 0x3FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_G[addr & 0x3FFF] = val;
+            wrote = true;
+        }
+        if (wrote)
+        {
+            VRAMPending_ABG.SetRange(dirtyStart, dirtyBits);
+            VRAMCoherencyStamp_ABG++;
         }
     }
 
@@ -301,31 +317,44 @@ public:
     void WriteVRAM_AOBJ(u32 addr, T val)
     {
         u32 mask = VRAMMap_AOBJ[(addr >> 14) & 0xF];
+        bool wrote = false;
+        u32 dirtyStart = (addr & 0x3FFFF) / VRAMDirtyGranularity;
+        u32 dirtyBits = (((addr & 0x3FFFF) + sizeof(T) - 1) / VRAMDirtyGranularity) - dirtyStart + 1;
 
         if (mask & (1<<0))
         {
             VRAMDirty[0][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_A[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<1))
         {
             VRAMDirty[1][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_B[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<4))
         {
             VRAMDirty[4][(addr & 0xFFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_E[addr & 0xFFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<5))
         {
             VRAMDirty[5][(addr & 0x3FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_F[addr & 0x3FFF] = val;
+            wrote = true;
         }
         if (mask & (1<<6))
         {
             VRAMDirty[6][(addr & 0x3FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_G[addr & 0x3FFF] = val;
+            wrote = true;
+        }
+        if (wrote)
+        {
+            VRAMPending_AOBJ.SetRange(dirtyStart, dirtyBits);
+            VRAMCoherencyStamp_AOBJ++;
         }
     }
 
@@ -350,21 +379,32 @@ public:
     void WriteVRAM_BBG(u32 addr, T val)
     {
         u32 mask = VRAMMap_BBG[(addr >> 14) & 0x7];
+        bool wrote = false;
+        u32 dirtyStart = (addr & 0x1FFFF) / VRAMDirtyGranularity;
+        u32 dirtyBits = (((addr & 0x1FFFF) + sizeof(T) - 1) / VRAMDirtyGranularity) - dirtyStart + 1;
 
         if (mask & (1<<2))
         {
             VRAMDirty[2][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_C[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<7))
         {
             VRAMDirty[7][(addr & 0x7FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_H[addr & 0x7FFF] = val;
+            wrote = true;
         }
         if (mask & (1<<8))
         {
             VRAMDirty[8][(addr & 0x3FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_I[addr & 0x3FFF] = val;
+            wrote = true;
+        }
+        if (wrote)
+        {
+            VRAMPending_BBG.SetRange(dirtyStart, dirtyBits);
+            VRAMCoherencyStamp_BBG++;
         }
     }
 
@@ -388,16 +428,26 @@ public:
     void WriteVRAM_BOBJ(u32 addr, T val)
     {
         u32 mask = VRAMMap_BOBJ[(addr >> 14) & 0x7];
+        bool wrote = false;
+        u32 dirtyStart = (addr & 0x1FFFF) / VRAMDirtyGranularity;
+        u32 dirtyBits = (((addr & 0x1FFFF) + sizeof(T) - 1) / VRAMDirtyGranularity) - dirtyStart + 1;
 
         if (mask & (1<<3))
         {
             VRAMDirty[3][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_D[addr & 0x1FFFF] = val;
+            wrote = true;
         }
         if (mask & (1<<8))
         {
             VRAMDirty[8][(addr & 0x3FFF) / VRAMDirtyGranularity] = true;
             *(T*)&VRAM_I[addr & 0x3FFF] = val;
+            wrote = true;
+        }
+        if (wrote)
+        {
+            VRAMPending_BOBJ.SetRange(dirtyStart, dirtyBits);
+            VRAMCoherencyStamp_BOBJ++;
         }
     }
 
@@ -418,8 +468,18 @@ public:
     {
         u32 mask = VRAMMap_ARM7[(addr >> 17) & 0x1];
 
-        if (mask & (1<<2)) *(T*)&VRAM_C[addr & 0x1FFFF] = val;
-        if (mask & (1<<3)) *(T*)&VRAM_D[addr & 0x1FFFF] = val;
+        if (mask & (1<<2))
+        {
+            *(T*)&VRAM_C[addr & 0x1FFFF] = val;
+            VRAMDirty[2][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
+            Invalidate2DVRAMMapping(2, VRAMCNT[2]);
+        }
+        if (mask & (1<<3))
+        {
+            *(T*)&VRAM_D[addr & 0x1FFFF] = val;
+            VRAMDirty[3][(addr & 0x1FFFF) / VRAMDirtyGranularity] = true;
+            Invalidate2DVRAMMapping(3, VRAMCNT[3]);
+        }
     }
 
 
@@ -538,6 +598,25 @@ public:
     bool MakeVRAMFlat_TextureCoherent(NonStupidBitField<512*1024/VRAMDirtyGranularity>& dirty) noexcept;
     bool MakeVRAMFlat_TexPalCoherent(NonStupidBitField<128*1024/VRAMDirtyGranularity>& dirty) noexcept;
 
+    void SyncVRAMFlat_ABG() noexcept;
+    void SyncVRAMFlat_BBG() noexcept;
+    void SyncVRAMFlat_AOBJ() noexcept;
+    void SyncVRAMFlat_BOBJ() noexcept;
+    void SyncVRAMFlat_ABGExtPal() noexcept;
+    void SyncVRAMFlat_BBGExtPal() noexcept;
+    void SyncVRAMFlat_AOBJExtPal() noexcept;
+    void SyncVRAMFlat_BOBJExtPal() noexcept;
+    void Invalidate2DVRAMBankWrite(u32 bank) noexcept;
+
+    u32 VRAMCoherencyStamp_ABG = 0;
+    u32 VRAMCoherencyStamp_AOBJ = 0;
+    u32 VRAMCoherencyStamp_BBG = 0;
+    u32 VRAMCoherencyStamp_BOBJ = 0;
+    u32 VRAMCoherencyStamp_ABGExtPal = 0;
+    u32 VRAMCoherencyStamp_AOBJExtPal = 0;
+    u32 VRAMCoherencyStamp_BBGExtPal = 0;
+    u32 VRAMCoherencyStamp_BOBJExtPal = 0;
+
     void SyncDirtyFlags() noexcept;
 
     melonDS::NDS& NDS;
@@ -619,6 +698,25 @@ public:
     VRAMTrackingSet<512*1024, 128*1024> VRAMDirty_Texture {};
     VRAMTrackingSet<128*1024, 16*1024> VRAMDirty_TexPal {};
 
+    NonStupidBitField<512*1024/VRAMDirtyGranularity> VRAMPending_ABG {};
+    NonStupidBitField<256*1024/VRAMDirtyGranularity> VRAMPending_AOBJ {};
+    NonStupidBitField<128*1024/VRAMDirtyGranularity> VRAMPending_BBG {};
+    NonStupidBitField<128*1024/VRAMDirtyGranularity> VRAMPending_BOBJ {};
+
+    NonStupidBitField<32*1024/VRAMDirtyGranularity> VRAMPending_ABGExtPal {};
+    NonStupidBitField<32*1024/VRAMDirtyGranularity> VRAMPending_BBGExtPal {};
+    NonStupidBitField<8*1024/VRAMDirtyGranularity> VRAMPending_AOBJExtPal {};
+    NonStupidBitField<8*1024/VRAMDirtyGranularity> VRAMPending_BOBJExtPal {};
+
+    bool VRAMNeedDerive_ABG = true;
+    bool VRAMNeedDerive_AOBJ = true;
+    bool VRAMNeedDerive_BBG = true;
+    bool VRAMNeedDerive_BOBJ = true;
+    bool VRAMNeedDerive_ABGExtPal = true;
+    bool VRAMNeedDerive_AOBJExtPal = true;
+    bool VRAMNeedDerive_BBGExtPal = true;
+    bool VRAMNeedDerive_BOBJExtPal = true;
+
     u8 VRAMFlat_ABG[512*1024] {};
     u8 VRAMFlat_BBG[128*1024] {};
     u8 VRAMFlat_AOBJ[256*1024] {};
@@ -636,6 +734,7 @@ private:
     void ResetVRAMCache() noexcept;
     void AssignFramebuffers() noexcept;
     void InitFramebuffers() noexcept;
+    void Invalidate2DVRAMMapping(u32 bank, u8 cnt) noexcept;
     template<typename T>
     T ReadVRAM_ABGExtPal(u32 addr) const noexcept
     {

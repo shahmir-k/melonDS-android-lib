@@ -261,13 +261,20 @@ public: // TODO: Encapsulate the rest of these members
     int ConsoleType;
     int CurCPU;
 
-    // ARM7 dedicated thread (OPT-1)
     struct Spinlock {
+#ifdef LITEV_ARM7_THREAD
         std::atomic_flag flag = ATOMIC_FLAG_INIT;
         void lock() noexcept { while (flag.test_and_set(std::memory_order_acquire)) {} }
         void unlock() noexcept { flag.clear(std::memory_order_release); }
+#else
+        void lock() noexcept {}
+        void unlock() noexcept {}
+#endif
     };
     Spinlock ipcLock;
+#ifdef LITEV_ARM7_THREAD
+    // Experimental ARM7 dedicated thread. Disabled by default until JIT fastmem
+    // CPU identity and cross-CPU scheduler ownership are fully thread-safe.
     std::thread arm7Thread;
     std::mutex arm7Mutex;
     std::condition_variable arm7Wake;
@@ -278,6 +285,7 @@ public: // TODO: Encapsulate the rest of these members
     std::atomic<u64> arm7SyncTarget{0};
     CPUExecuteMode arm7CPUMode{CPUExecuteMode::Interpreter};
     void ARM7ThreadFunc();
+#endif
 
     SchedEvent SchedList[Event_MAX] {};
     u8 ARM9MemTimings[0x40000][8];
@@ -349,6 +357,7 @@ public: // TODO: Encapsulate the rest of these members
     GBACart::GBACartSlot GBACartSlot;
     melonDS::GPU GPU;
     melonDS::AREngine AREngine;
+    ARM9LibHLE ARM9LibHLE;
 #ifdef LITEV_ARM7_HLE_AUDIO
     ARM7HLECore ARM7HLE;
 #endif
@@ -358,7 +367,6 @@ public: // TODO: Encapsulate the rest of these members
 
     virtual void Reset();
     void Start();
-    ARM9LibHLE ARM9LibHLE;
 
     /// Stop the emulator.
     virtual void Stop(Platform::StopReason reason = Platform::StopReason::External);
@@ -503,6 +511,8 @@ public: // TODO: Encapsulate the rest of these members
     virtual void ARM9IOWrite8(u32 addr, u8 val);
     virtual void ARM9IOWrite16(u32 addr, u16 val);
     virtual void ARM9IOWrite32(u32 addr, u32 val);
+    virtual bool ARM9FastIOWrite16(u32 addr, u16 val);
+    virtual bool ARM9FastIOWrite32(u32 addr, u32 val);
 
     virtual u8 ARM7IORead8(u32 addr);
     virtual u16 ARM7IORead16(u32 addr);
@@ -536,6 +546,7 @@ protected:
     u16 WifiWaitCnt;
     u8 TimerCheckMask[2];
     u64 TimerTimestamp[2];
+    u64 TimerNextOverflow[2];
     DMA DMAs[8];
     u32 DMA9Fill[4];
     u16 IPCSync9, IPCSync7;
@@ -569,6 +580,8 @@ protected:
     void SqrtDone(u32 param);
     void StartSqrt();
     void RunTimer(u32 tid, s32 cycles);
+    void MaybeRunTimers(u32 cpu);
+    void UpdateTimerNextOverflow(u32 cpu);
     void UpdateWifiTimings();
     void SetWifiWaitCnt(u16 val);
     void SetGBASlotTimings();
@@ -585,7 +598,11 @@ public:
     NDS(NDS&&) = delete;
     NDS& operator=(NDS&&) = delete;
 
+#ifdef LITEV_SINGLE_INSTANCE_CURRENT
+    static NDS* Current;
+#else
     static thread_local NDS* Current;
+#endif
 protected:
     explicit NDS(NDSArgs&& args, int type, void* userdata) noexcept;
     virtual u32 GetSavestateConfig();

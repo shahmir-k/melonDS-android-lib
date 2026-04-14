@@ -675,7 +675,7 @@ s32 SPUChannel::Run(u32 cycles)
 
     // interpolation (emulation improvement, not a hardware feature)
 #ifdef LITEV_SPU_FAST_INTERP
-    if (type < 3)
+    if ((type < 3) && (InterpType != AudioInterpolation::None))
     {
         s32 frac = (Timer >> 8) & 0xFF;
         val = ((val * frac) + ((s32)PrevSample[0] * (0xFF - frac))) >> 8;

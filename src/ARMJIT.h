@@ -67,6 +67,31 @@ public:
         if (CodeMemRegions[region][(localAddr & 0x7FFFFFF) / 512].Code & (1 << ((localAddr & 0x1FF) / 16)))
             InvalidateByAddr(localAddr);
     }
+    template <u32 num, int region>
+    void CheckAndInvalidateRange(u32 addr, u32 size) noexcept
+    {
+        if (!size)
+            return;
+
+        u32 localAddr = Memory.LocaliseAddress(region, num, addr);
+        u32 endAddr = localAddr + size - 1;
+
+        for (u32 page = localAddr & ~0x1FF; page <= (endAddr & ~0x1FF); page += 0x200)
+        {
+            AddressRange* range = &CodeMemRegions[region][(page & 0x7FFFFFF) / 512];
+            if (!range->Code)
+                continue;
+
+            u32 firstChunk = (page == (localAddr & ~0x1FF)) ? ((localAddr & 0x1FF) >> 4) : 0;
+            u32 lastChunk = (page == (endAddr & ~0x1FF)) ? ((endAddr & 0x1FF) >> 4) : 31;
+
+            for (u32 chunk = firstChunk; chunk <= lastChunk; chunk++)
+            {
+                if (range->Code & (1u << chunk))
+                    InvalidateByAddr(page | (chunk << 4));
+            }
+        }
+    }
     JitBlockEntry LookUpBlock(u32 num, u64* entries, u32 offset, u32 addr) noexcept;
     bool SetupExecutableRegion(u32 num, u32 blockAddr, u64*& entry, u32& start, u32& size) noexcept;
     u32 LocaliseCodeAddress(u32 num, u32 addr) const noexcept;
@@ -239,4 +264,3 @@ public:
 #endif // JIT_ENABLED
 
 #endif // ARMJIT_H
-

@@ -75,7 +75,6 @@ void ARM::GdbCheckB() {}
 void ARM::GdbCheckC() {}
 #endif
 
-
 // instruction timing notes
 //
 // * simple instruction: 1S (code)
@@ -193,6 +192,7 @@ void ARM::Reset()
     FastBlockLookup = NULL;
     FastBlockLookupStart = 0;
     FastBlockLookupSize = 0;
+    ClearJitCache();
 #endif
 
 #ifdef GDBSTUB_ENABLED
@@ -624,13 +624,13 @@ void ARMv5::Execute()
         if constexpr (mode == CPUExecuteMode::JIT)
         {
             u32 instrAddr = R[15] - ((CPSR&0x20)?2:4);
+
             if (NDS.ARM9LibHLE.TryHandle(*this, instrAddr))
             {
                 NDS.ARM9Timestamp += Cycles;
                 Cycles = 0;
                 continue;
             }
-
 
             if ((instrAddr < FastBlockLookupStart || instrAddr >= (FastBlockLookupStart + FastBlockLookupSize))
                 && !NDS.JIT.SetupExecutableRegion(0, instrAddr, FastBlockLookup, FastBlockLookupStart, FastBlockLookupSize))
@@ -640,8 +640,19 @@ void ARMv5::Execute()
                 return;
             }
 
-            JitBlockEntry block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
-                instrAddr - FastBlockLookupStart, instrAddr);
+            JitBlockEntry block = nullptr;
+            if (LastJitBlockAddr == instrAddr)
+                block = LastJitBlockEntry;
+            else
+            {
+                block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
+                    instrAddr - FastBlockLookupStart, instrAddr);
+                if (block)
+                {
+                    LastJitBlockAddr = instrAddr;
+                    LastJitBlockEntry = block;
+                }
+            }
             if (block)
                 ARM_Dispatch(this, block);
             else
@@ -788,8 +799,19 @@ void ARMv4::Execute()
                 return;
             }
 
-            JitBlockEntry block = NDS.JIT.LookUpBlock(1, FastBlockLookup,
-                instrAddr - FastBlockLookupStart, instrAddr);
+            JitBlockEntry block = nullptr;
+            if (LastJitBlockAddr == instrAddr)
+                block = LastJitBlockEntry;
+            else
+            {
+                block = NDS.JIT.LookUpBlock(1, FastBlockLookup,
+                    instrAddr - FastBlockLookupStart, instrAddr);
+                if (block)
+                {
+                    LastJitBlockAddr = instrAddr;
+                    LastJitBlockEntry = block;
+                }
+            }
             if (block)
                 ARM_Dispatch(this, block);
             else
@@ -1324,4 +1346,3 @@ void ARMv4::BusWrite32(u32 addr, u32 val)
     NDS.ARM7Write32(addr, val);
 }
 }
-

@@ -81,6 +81,42 @@ const u32 CodeRegionSizes[ARMJIT_Memory::memregions_Count] =
     NWRAMSize,
 };
 
+template <bool Write>
+__attribute__((always_inline)) inline void CopyBlockWords(u8* mem, u32 addr, u64* data, u32 num)
+{
+    u32* words = reinterpret_cast<u32*>(&mem[addr]);
+    if constexpr (Write)
+    {
+        for (u32 i = 0; i < num; i++)
+            words[i] = static_cast<u32>(data[i]);
+    }
+    else
+    {
+        for (u32 i = 0; i < num; i++)
+            data[i] = words[i];
+    }
+}
+
+template <bool Write, u32 num, int region>
+__attribute__((always_inline)) inline bool TryBlockTransferLinear(
+    ARMJIT& jit,
+    u8* mem,
+    u32 mask,
+    u32 addr,
+    u64* data,
+    u32 words) noexcept
+{
+    u32 offset = addr & mask;
+    u32 bytes = words * sizeof(u32);
+    if (offset > mask || bytes > (mask + 1) - offset)
+        return false;
+
+    if constexpr (Write)
+        jit.CheckAndInvalidateRange<num, region>(addr, bytes);
+    CopyBlockWords<Write>(mem, offset, data, words);
+    return true;
+}
+
 u32 ARMJIT::LocaliseCodeAddress(u32 num, u32 addr) const noexcept
 {
     int region = num == 0
@@ -98,19 +134,39 @@ T SlowRead9(u32 addr, ARMv5* cpu)
     u32 offset = addr & 0x3;
     addr &= ~(sizeof(T) - 1);
 
+    auto& nds = cpu->NDS;
     T val;
     if (addr < cpu->ITCMSize)
         val = *(T*)&cpu->ITCM[addr & 0x7FFF];
     else if ((addr & cpu->DTCMMask) == cpu->DTCMBase)
         val = *(T*)&cpu->DTCM[addr & 0x3FFF];
-    else if (std::is_same<T, u32>::value)
-        val = NDS::Current->ARM9Read32(addr);
-    else if (std::is_same<T, u16>::value)
-        val = NDS::Current->ARM9Read16(addr);
     else
-        val = NDS::Current->ARM9Read8(addr);
+    {
+        switch (addr & 0xFF000000)
+        {
+        case 0x02000000:
+            val = *(T*)&nds.MainRAM[addr & nds.MainRAMMask];
+            break;
 
-    if (std::is_same<T, u32>::value)
+        case 0x03000000:
+            if (nds.SWRAM_ARM9.Mem)
+                val = *(T*)&nds.SWRAM_ARM9.Mem[addr & nds.SWRAM_ARM9.Mask];
+            else
+                val = 0;
+            break;
+
+        default:
+            if constexpr (std::is_same_v<T, u32>)
+                val = nds.ARM9Read32(addr);
+            else if constexpr (std::is_same_v<T, u16>)
+                val = nds.ARM9Read16(addr);
+            else
+                val = nds.ARM9Read8(addr);
+            break;
+        }
+    }
+
+    if constexpr (std::is_same_v<T, u32>)
         return ROR(val, offset << 3);
     else
         return val;
@@ -141,26 +197,50 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
 {
     addr &= ~(sizeof(T) - 1);
 
+    auto& nds = cpu->NDS;
     if (addr < cpu->ITCMSize)
     {
-        cpu->NDS.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_ITCM>(addr);
+        nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_ITCM>(addr);
         *(T*)&cpu->ITCM[addr & 0x7FFF] = val;
     }
     else if ((addr & cpu->DTCMMask) == cpu->DTCMBase)
     {
         *(T*)&cpu->DTCM[addr & 0x3FFF] = val;
     }
-    else if (std::is_same<T, u32>::value)
-    {
-        NDS::Current->ARM9Write32(addr, val);
-    }
-    else if (std::is_same<T, u16>::value)
-    {
-        NDS::Current->ARM9Write16(addr, val);
-    }
     else
     {
-        NDS::Current->ARM9Write8(addr, val);
+        switch (addr & 0xFF000000)
+        {
+        case 0x02000000:
+            nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_MainRAM>(addr);
+            *(T*)&nds.MainRAM[addr & nds.MainRAMMask] = val;
+            break;
+
+        case 0x03000000:
+            if (nds.SWRAM_ARM9.Mem)
+            {
+                nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_SharedWRAM>(addr);
+                *(T*)&nds.SWRAM_ARM9.Mem[addr & nds.SWRAM_ARM9.Mask] = val;
+            }
+            break;
+
+        default:
+            if constexpr (std::is_same_v<T, u32>)
+            {
+                if ((addr & 0xFF000000) == 0x04000000 && nds.ARM9FastIOWrite32(addr, val))
+                    return;
+                nds.ARM9Write32(addr, val);
+            }
+            else if constexpr (std::is_same_v<T, u16>)
+            {
+                if ((addr & 0xFF000000) == 0x04000000 && nds.ARM9FastIOWrite16(addr, val))
+                    return;
+                nds.ARM9Write16(addr, val);
+            }
+            else
+                nds.ARM9Write8(addr, val);
+            break;
+        }
     }
 }
 
@@ -181,6 +261,49 @@ template <bool Write, int ConsoleType>
 void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
     addr &= ~0x3;
+    auto& nds = cpu->NDS;
+
+    if (addr < cpu->ITCMSize)
+    {
+        u32 bytes = num * sizeof(u32);
+        u32 offset = addr & 0x7FFF;
+        if (bytes <= cpu->ITCMSize - addr)
+        {
+            if constexpr (Write)
+                nds.JIT.CheckAndInvalidateRange<0, ARMJIT_Memory::memregion_ITCM>(addr, bytes);
+            CopyBlockWords<Write>(cpu->ITCM, offset, data, num);
+            return;
+        }
+    }
+    else if ((addr & cpu->DTCMMask) == cpu->DTCMBase)
+    {
+        u32 offset = addr & 0x3FFF;
+        u32 bytes = num * sizeof(u32);
+        if (bytes <= 0x4000 - offset)
+        {
+            CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
+            return;
+        }
+    }
+    else
+    {
+        switch (addr & 0xFF000000)
+        {
+        case 0x02000000:
+            if (TryBlockTransferLinear<Write, 0, ARMJIT_Memory::memregion_MainRAM>(
+                    nds.JIT, nds.MainRAM, nds.MainRAMMask, addr, data, num))
+                return;
+            break;
+
+        case 0x03000000:
+            if (nds.SWRAM_ARM9.Mem
+                && TryBlockTransferLinear<Write, 0, ARMJIT_Memory::memregion_SharedWRAM>(
+                    nds.JIT, nds.SWRAM_ARM9.Mem, nds.SWRAM_ARM9.Mask, addr, data, num))
+                return;
+            break;
+        }
+    }
+
     for (u32 i = 0; i < num; i++)
     {
         if (Write)
@@ -533,6 +656,9 @@ void ARMJIT::SetFastMemory(bool enabled) noexcept
 
 void ARMJIT::CompileBlock(ARM* cpu) noexcept
 {
+    NDS.ARM9.ClearJitCache();
+    NDS.ARM7.ClearJitCache();
+
     bool thumb = cpu->CPSR & 0x20;
 
     u32 blockAddr = cpu->R[15] - (thumb ? 2 : 4);
@@ -947,6 +1073,8 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 void ARMJIT::InvalidateByAddr(u32 localAddr) noexcept
 {
     JIT_DEBUGPRINT("invalidating by addr %x\n", localAddr);
+    NDS.ARM9.ClearJitCache();
+    NDS.ARM7.ClearJitCache();
 
     AddressRange* region = CodeMemRegions[localAddr >> 27];
     AddressRange* range = &region[(localAddr & 0x7FFFFFF) / 512];
@@ -1130,6 +1258,8 @@ template void ARMJIT::CheckAndInvalidate<1, ARMJIT_Memory::memregion_NewSharedWR
 void ARMJIT::ResetBlockCache() noexcept
 {
     Log(LogLevel::Debug, "Resetting JIT block cache...\n");
+    NDS.ARM9.ClearJitCache();
+    NDS.ARM7.ClearJitCache();
 
     // could be replace through a function which only resets
     // the permissions but we're too lazy

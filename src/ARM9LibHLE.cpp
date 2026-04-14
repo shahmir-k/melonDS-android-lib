@@ -33,6 +33,24 @@ namespace melonDS
 {
 namespace
 {
+u32 EstimateStrCmpCycles(u32 charsCompared) noexcept
+{
+    // The guest loop does multiple loads, compares, pointer bumps, and branches
+    // per matched character. Keep timing conservative so the HLE path does not
+    // outrun surrounding guest/device state changes.
+    return 8 + (charsCompared * 8);
+}
+
+void SetCmpFlags(ARMv5& cpu, u32 lhs, u32 rhs) noexcept
+{
+    const u32 res = lhs - rhs;
+    const bool n = (res & 0x80000000u) != 0;
+    const bool z = res == 0;
+    const bool c = lhs >= rhs;
+    const bool v = ((lhs ^ rhs) & (lhs ^ res) & 0x80000000u) != 0;
+    cpu.SetNZCV(n, z, c, v);
+}
+
 template <size_t N>
 u32 FindPattern(const u8* code, u32 size, const std::array<u32, N>& words) noexcept
 {
@@ -125,8 +143,6 @@ bool ARM9LibHLE::TryHandle(ARMv5& cpu, u32 pc) noexcept
     if (!Scanned)
         EnsureScanned(cpu.NDS);
 
-    if (pc == Entries[static_cast<size_t>(Func::StrCmp)].Addr)
-        return HandleStrCmp(cpu);
     if (pc == Entries[static_cast<size_t>(Func::StrChr)].Addr)
         return HandleStrChr(cpu);
     if (pc == Entries[static_cast<size_t>(Func::MemSet8)].Addr)
@@ -206,17 +222,40 @@ bool ARM9LibHLE::HandleStrCmp(ARMv5& cpu) noexcept
     if (!limit)
         return false;
 
-    u32 i = 0;
-    for (; i < limit; i++)
+    u32 lhsAddr = cpu.R[0];
+    u32 rhsAddr = cpu.R[1];
+    u32 r2 = cpu.R[2];
+    u32 r3 = cpu.R[3];
+
+    for (u32 i = 0; i < limit; i++)
     {
-        const u8 a = lhs.Ptr[i];
-        const u8 b = rhs.Ptr[i];
-        if (a != b || a == 0)
+        r3 = lhs.Ptr[i];
+        if (r3 == 0)
         {
-            cpu.R[0] = a - b;
-            FinishCall(cpu, EstimateCycles(i + 1, 3, 4));
+            SetCmpFlags(cpu, r3, 0);
+            cpu.R[0] = rhs.Ptr[i];
+            cpu.R[1] = rhsAddr;
+            cpu.R[2] = r2;
+            cpu.R[3] = r3;
+            cpu.R[0] = r3 - cpu.R[0];
+            FinishCall(cpu, EstimateStrCmpCycles(i + 1));
             return true;
         }
+
+        r2 = rhs.Ptr[i];
+        SetCmpFlags(cpu, r3, r2);
+        if (r3 != r2)
+        {
+            cpu.R[0] = r3 - r2;
+            cpu.R[1] = rhsAddr;
+            cpu.R[2] = r2;
+            cpu.R[3] = r3;
+            FinishCall(cpu, EstimateStrCmpCycles(i + 1));
+            return true;
+        }
+
+        lhsAddr++;
+        rhsAddr++;
     }
 
     return false;

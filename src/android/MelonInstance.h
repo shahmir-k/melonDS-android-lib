@@ -11,6 +11,9 @@
 #include "renderer/FrameQueue.h"
 #include "renderer/Renderer.h"
 #include "renderer/ScreenshotRenderer.h"
+#ifdef LITEV_PBO_UPLOAD
+#include "renderer/RenderThread.h"
+#endif
 #include "retroachievements/RetroAchievementsManager.h"
 #include "net/Net.h"
 
@@ -88,6 +91,9 @@ private:
     std::shared_ptr<EmulatorConfiguration> currentConfiguration;
     FrameQueue frameQueue;
     ScreenshotRenderer screenshotRenderer;
+#ifdef LITEV_PBO_UPLOAD
+    SoftwareRenderUploader softwareRenderUploader;
+#endif
     RewindManager rewindManager;
     Renderer currentRenderer;
     bool isRenderConfigurationDirty;

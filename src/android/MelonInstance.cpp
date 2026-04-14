@@ -28,6 +28,7 @@ namespace MelonDSAndroid
 
 const int kRewindBufferSize = 1024 * 1024 * 20; // Use 20MB per savestate
 const int kRewindScreenshotSize = 256 * 384 * 4;
+const int kScreenshotRefreshIntervalFrames = 60;
 
 MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfiguration> configuration, std::unique_ptr<melonDS::NDSArgs> args, std::shared_ptr<Net> net, ScreenshotRenderer screenshotRenderer, int consoleType) :
     instanceId(instanceId),
@@ -82,6 +83,9 @@ MelonInstance::MelonInstance(int instanceId, std::shared_ptr<EmulatorConfigurati
 
 MelonInstance::~MelonInstance()
 {
+#ifdef LITEV_PBO_UPLOAD
+    softwareRenderUploader.cleanup();
+#endif
     frameQueue.clear();
     net->UnregisterInstance(instanceId);
     delete nds;
@@ -352,10 +356,19 @@ u32 MelonInstance::runFrame()
         int frontbuf = nds->GPU.FrontBuffer;
         if (nds->GPU.Framebuffer[frontbuf][0] && nds->GPU.Framebuffer[frontbuf][1])
         {
+#ifdef LITEV_PBO_UPLOAD
+            softwareRenderUploader.init(screenHeight * 2);
+            softwareRenderUploader.uploadFrame(
+                nds->GPU.Framebuffer[frontbuf][0].get(),
+                nds->GPU.Framebuffer[frontbuf][1].get(),
+                renderFrame->frameTexture,
+                192 + 2);
+#else
             glBindTexture(GL_TEXTURE_2D, renderFrame->frameTexture);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, nds->GPU.Framebuffer[frontbuf][0].get());
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192 + 2, 256, 192, GL_RGBA, GL_UNSIGNED_BYTE, nds->GPU.Framebuffer[frontbuf][1].get());
             glBindTexture(GL_TEXTURE_2D, 0);
+#endif
         }
     }
     else
@@ -375,7 +388,14 @@ u32 MelonInstance::runFrame()
         frameQueue.discardRenderedFrame(renderFrame);
     }
 
-    screenshotRenderer.renderScreenshot(&nds->GPU, currentRenderer, renderFrame);
+    const int currentFrame = frame + 1;
+    const bool captureRewindState = rewindManager.ShouldCaptureState(currentFrame);
+    const bool refreshScreenshot =
+        currentFrame == 1 ||
+        captureRewindState ||
+        (currentFrame % kScreenshotRefreshIntervalFrames) == 0;
+    if (refreshScreenshot)
+        screenshotRenderer.renderScreenshot(&nds->GPU, currentRenderer, renderFrame);
 
     if (ndsSave)
         ndsSave->CheckFlush();
@@ -386,8 +406,8 @@ u32 MelonInstance::runFrame()
     if (firmwareSave)
         firmwareSave->CheckFlush();
 
-    frame++;
-    if (rewindManager.ShouldCaptureState(frame))
+    frame = currentFrame;
+    if (captureRewindState)
     {
         auto nextRewindState = rewindManager.GetNextRewindSaveState(frame);
         saveRewindState(nextRewindState);

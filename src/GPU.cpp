@@ -105,6 +105,24 @@ void GPU::ResetVRAMCache() noexcept
     VRAMDirty_Texture.Reset();
     VRAMDirty_TexPal.Reset();
 
+    VRAMPending_ABG.Clear();
+    VRAMPending_AOBJ.Clear();
+    VRAMPending_BBG.Clear();
+    VRAMPending_BOBJ.Clear();
+    VRAMPending_ABGExtPal.Clear();
+    VRAMPending_AOBJExtPal.Clear();
+    VRAMPending_BBGExtPal.Clear();
+    VRAMPending_BOBJExtPal.Clear();
+
+    VRAMNeedDerive_ABG = true;
+    VRAMNeedDerive_AOBJ = true;
+    VRAMNeedDerive_BBG = true;
+    VRAMNeedDerive_BOBJ = true;
+    VRAMNeedDerive_ABGExtPal = true;
+    VRAMNeedDerive_AOBJExtPal = true;
+    VRAMNeedDerive_BBGExtPal = true;
+    VRAMNeedDerive_BOBJExtPal = true;
+
     memset(VRAMFlat_ABG, 0, sizeof(VRAMFlat_ABG));
     memset(VRAMFlat_BBG, 0, sizeof(VRAMFlat_BBG));
     memset(VRAMFlat_AOBJ, 0, sizeof(VRAMFlat_AOBJ));
@@ -377,6 +395,73 @@ const u8* GPU::GetUniqueBankPtr(u32 mask, u32 offset) const noexcept
 #define UNMAP_RANGE_PTR(map, base, n) \
     for (int i = 0; i < n; i++) { VRAMMap_##map[(base)+i] &= ~bankmask; VRAMPtr_##map[(base)+i] = GetUniqueBankPtr(VRAMMap_##map[(base)+i], ((base)+i)<<14); }
 
+void GPU::Invalidate2DVRAMMapping(u32 bank, u8 cnt) noexcept
+{
+    if (!(cnt & (1 << 7)))
+        return;
+
+    switch (bank)
+    {
+    case 0:
+    case 1:
+        switch (cnt & 0x3)
+        {
+        case 1: VRAMNeedDerive_ABG = true; VRAMCoherencyStamp_ABG++; break;
+        case 2: VRAMNeedDerive_AOBJ = true; VRAMCoherencyStamp_AOBJ++; break;
+        }
+        break;
+
+    case 2:
+    case 3:
+        switch (cnt & 0x7)
+        {
+        case 1: VRAMNeedDerive_ABG = true; VRAMCoherencyStamp_ABG++; break;
+        case 4:
+            if (bank == 2) { VRAMNeedDerive_BBG = true; VRAMCoherencyStamp_BBG++; }
+            else           { VRAMNeedDerive_BOBJ = true; VRAMCoherencyStamp_BOBJ++; }
+            break;
+        }
+        break;
+
+    case 4:
+        switch (cnt & 0x7)
+        {
+        case 1: VRAMNeedDerive_ABG = true; VRAMCoherencyStamp_ABG++; break;
+        case 2: VRAMNeedDerive_AOBJ = true; VRAMCoherencyStamp_AOBJ++; break;
+        case 4: VRAMNeedDerive_ABGExtPal = true; VRAMCoherencyStamp_ABGExtPal++; break;
+        }
+        break;
+
+    case 5:
+    case 6:
+        switch (cnt & 0x7)
+        {
+        case 1: VRAMNeedDerive_ABG = true; VRAMCoherencyStamp_ABG++; break;
+        case 2: VRAMNeedDerive_AOBJ = true; VRAMCoherencyStamp_AOBJ++; break;
+        case 4: VRAMNeedDerive_ABGExtPal = true; VRAMCoherencyStamp_ABGExtPal++; break;
+        case 5: VRAMNeedDerive_AOBJExtPal = true; VRAMCoherencyStamp_AOBJExtPal++; break;
+        }
+        break;
+
+    case 7:
+        switch (cnt & 0x3)
+        {
+        case 1: VRAMNeedDerive_BBG = true; VRAMCoherencyStamp_BBG++; break;
+        case 2: VRAMNeedDerive_BBGExtPal = true; VRAMCoherencyStamp_BBGExtPal++; break;
+        }
+        break;
+
+    case 8:
+        switch (cnt & 0x3)
+        {
+        case 1: VRAMNeedDerive_BBG = true; VRAMCoherencyStamp_BBG++; break;
+        case 2: VRAMNeedDerive_BOBJ = true; VRAMCoherencyStamp_BOBJ++; break;
+        case 3: VRAMNeedDerive_BOBJExtPal = true; VRAMCoherencyStamp_BOBJExtPal++; break;
+        }
+        break;
+    }
+}
+
 void GPU::MapVRAM_AB(u32 bank, u8 cnt) noexcept
 {
     cnt &= 0x9B;
@@ -392,6 +477,7 @@ void GPU::MapVRAM_AB(u32 bank, u8 cnt) noexcept
 
     if (oldcnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, oldcnt);
         switch (oldcnt & 0x3)
         {
         case 0: // LCDC
@@ -415,6 +501,7 @@ void GPU::MapVRAM_AB(u32 bank, u8 cnt) noexcept
 
     if (cnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, cnt);
         switch (cnt & 0x3)
         {
         case 0: // LCDC
@@ -454,6 +541,7 @@ void GPU::MapVRAM_CD(u32 bank, u8 cnt) noexcept
 
     if (oldcnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, oldcnt);
         switch (oldcnt & 0x7)
         {
         case 0: // LCDC
@@ -488,6 +576,7 @@ void GPU::MapVRAM_CD(u32 bank, u8 cnt) noexcept
 
     if (cnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, cnt);
         switch (cnt & 0x7)
         {
         case 0: // LCDC
@@ -537,6 +626,7 @@ void GPU::MapVRAM_E(u32 bank, u8 cnt) noexcept
 
     if (oldcnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, oldcnt);
         switch (oldcnt & 0x7)
         {
         case 0: // LCDC
@@ -563,6 +653,7 @@ void GPU::MapVRAM_E(u32 bank, u8 cnt) noexcept
 
     if (cnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, cnt);
         switch (cnt & 0x7)
         {
         case 0: // LCDC
@@ -603,6 +694,7 @@ void GPU::MapVRAM_FG(u32 bank, u8 cnt) noexcept
 
     if (oldcnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, oldcnt);
         switch (oldcnt & 0x7)
         {
         case 0: // LCDC
@@ -646,6 +738,7 @@ void GPU::MapVRAM_FG(u32 bank, u8 cnt) noexcept
 
     if (cnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, cnt);
         switch (cnt & 0x7)
         {
         case 0: // LCDC
@@ -701,6 +794,7 @@ void GPU::MapVRAM_H(u32 bank, u8 cnt) noexcept
 
     if (oldcnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, oldcnt);
         switch (oldcnt & 0x3)
         {
         case 0: // LCDC
@@ -726,6 +820,7 @@ void GPU::MapVRAM_H(u32 bank, u8 cnt) noexcept
 
     if (cnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, cnt);
         switch (cnt & 0x3)
         {
         case 0: // LCDC
@@ -763,6 +858,7 @@ void GPU::MapVRAM_I(u32 bank, u8 cnt) noexcept
 
     if (oldcnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, oldcnt);
         switch (oldcnt & 0x3)
         {
         case 0: // LCDC
@@ -792,6 +888,7 @@ void GPU::MapVRAM_I(u32 bank, u8 cnt) noexcept
 
     if (cnt & (1<<7))
     {
+        Invalidate2DVRAMMapping(bank, cnt);
         switch (cnt & 0x3)
         {
         case 0: // LCDC
@@ -1179,6 +1276,88 @@ template NonStupidBitField<512*1024/VRAMDirtyGranularity> VRAMTrackingSet<512*10
 template NonStupidBitField<128*1024/VRAMDirtyGranularity> VRAMTrackingSet<128*1024, 16*1024>::DeriveState(const u32*, GPU& gpu);
 template NonStupidBitField<256*1024/VRAMDirtyGranularity> VRAMTrackingSet<256*1024, 16*1024>::DeriveState(const u32*, GPU& gpu);
 template NonStupidBitField<512*1024/VRAMDirtyGranularity> VRAMTrackingSet<512*1024, 16*1024>::DeriveState(const u32*, GPU& gpu);
+
+template <u32 Size, u32 MappingGranularity, typename CopyFn>
+static void SyncVRAMRegion(
+    GPU& gpu,
+    VRAMTrackingSet<Size, MappingGranularity>& tracking,
+    NonStupidBitField<Size/VRAMDirtyGranularity>& pending,
+    bool& needDerive,
+    const u32* currentMappings,
+    CopyFn&& copyFn)
+{
+    if (needDerive)
+    {
+        auto dirty = tracking.DeriveState(currentMappings, gpu);
+        for (u32 i = 0; i < NonStupidBitField<Size/VRAMDirtyGranularity>::DataLength; i++)
+            dirty.Data[i] |= pending.Data[i];
+        pending.Clear();
+        needDerive = false;
+        copyFn(dirty);
+        return;
+    }
+
+    if (!pending.Any())
+        return;
+
+    auto dirty = pending;
+    pending.Clear();
+    copyFn(dirty);
+}
+
+void GPU::SyncVRAMFlat_ABG() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_ABG, VRAMPending_ABG, VRAMNeedDerive_ABG, VRAMMap_ABG,
+        [this](auto& dirty) { MakeVRAMFlat_ABGCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_BBG() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_BBG, VRAMPending_BBG, VRAMNeedDerive_BBG, VRAMMap_BBG,
+        [this](auto& dirty) { MakeVRAMFlat_BBGCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_AOBJ() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_AOBJ, VRAMPending_AOBJ, VRAMNeedDerive_AOBJ, VRAMMap_AOBJ,
+        [this](auto& dirty) { MakeVRAMFlat_AOBJCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_BOBJ() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_BOBJ, VRAMPending_BOBJ, VRAMNeedDerive_BOBJ, VRAMMap_BOBJ,
+        [this](auto& dirty) { MakeVRAMFlat_BOBJCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_ABGExtPal() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_ABGExtPal, VRAMPending_ABGExtPal, VRAMNeedDerive_ABGExtPal, VRAMMap_ABGExtPal,
+        [this](auto& dirty) { MakeVRAMFlat_ABGExtPalCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_BBGExtPal() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_BBGExtPal, VRAMPending_BBGExtPal, VRAMNeedDerive_BBGExtPal, VRAMMap_BBGExtPal,
+        [this](auto& dirty) { MakeVRAMFlat_BBGExtPalCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_AOBJExtPal() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_AOBJExtPal, VRAMPending_AOBJExtPal, VRAMNeedDerive_AOBJExtPal, &VRAMMap_AOBJExtPal,
+        [this](auto& dirty) { MakeVRAMFlat_AOBJExtPalCoherent(dirty); });
+}
+
+void GPU::SyncVRAMFlat_BOBJExtPal() noexcept
+{
+    SyncVRAMRegion(*this, VRAMDirty_BOBJExtPal, VRAMPending_BOBJExtPal, VRAMNeedDerive_BOBJExtPal, &VRAMMap_BOBJExtPal,
+        [this](auto& dirty) { MakeVRAMFlat_BOBJExtPalCoherent(dirty); });
+}
+
+void GPU::Invalidate2DVRAMBankWrite(u32 bank) noexcept
+{
+    Invalidate2DVRAMMapping(bank, VRAMCNT[bank]);
+}
+
 
 
 

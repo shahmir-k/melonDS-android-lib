@@ -49,11 +49,27 @@ namespace melonDS
 {
 using namespace Platform;
 
+#ifdef LITEV_WIDE_SCHEDULER
 const s32 kMaxIterationCycles = 512;
+#else
+const s32 kMaxIterationCycles = 64;
+#endif
 const s32 kIterationCycleMargin = 8;
 
+#ifdef LITEV_ARM7_THREAD
 // Per-thread current CPU index (0=ARM9, 1=ARM7).
 thread_local int t_CurCPU = 0;
+
+static int GetCurrentCPU(const NDS&) noexcept
+{
+    return t_CurCPU;
+}
+#else
+static int GetCurrentCPU(const NDS& nds) noexcept
+{
+    return nds.CurCPU;
+}
+#endif
 
 // timing notes
 //
@@ -77,7 +93,11 @@ thread_local int t_CurCPU = 0;
 //
 // timings for GBA slot and wifi are set up at runtime
 
+#ifdef LITEV_SINGLE_INSTANCE_CURRENT
+NDS* NDS::Current = nullptr;
+#else
 thread_local NDS* NDS::Current = nullptr;
+#endif
 
 NDS::NDS() noexcept :
     NDS(
@@ -133,14 +153,15 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
     SharedWRAM = JIT.Memory.GetSharedWRAM();
     ARM7WRAM = JIT.Memory.GetARM7WRAM();
 
-    // Start the ARM7 dedicated thread.
+#ifdef LITEV_ARM7_THREAD
     arm7ThreadRunning.store(true, std::memory_order_relaxed);
     arm7Thread = std::thread(&NDS::ARM7ThreadFunc, this);
+#endif
 }
 
 NDS::~NDS() noexcept
 {
-    // Stop the ARM7 thread before any members are destroyed.
+#ifdef LITEV_ARM7_THREAD
     {
         std::unique_lock<std::mutex> lock(arm7Mutex);
         arm7ThreadRunning.store(false, std::memory_order_relaxed);
@@ -149,6 +170,7 @@ NDS::~NDS() noexcept
     arm7Wake.notify_all();
     if (arm7Thread.joinable())
         arm7Thread.join();
+#endif
 
     UnregisterEventFuncs(Event_Div);
     UnregisterEventFuncs(Event_Sqrt);
@@ -481,6 +503,7 @@ void NDS::Reset()
 
     ARM9Timestamp = 0; ARM9Target = 0;
     ARM7Timestamp = 0; ARM7Target = 0;
+    ARM9LibHLE.Reset();
     SysTimestamp = 0;
 
     InitTimings();
@@ -503,7 +526,6 @@ void NDS::Reset()
     IME[1] = 0;
     IE[1] = 0;
     IF[1] = 0;
-    ARM9LibHLE.Reset();
     IE2 = 0;
     IF2 = 0;
 
@@ -540,6 +562,8 @@ void NDS::Reset()
     TimerCheckMask[1] = 0;
     TimerTimestamp[0] = 0;
     TimerTimestamp[1] = 0;
+    TimerNextOverflow[0] = UINT64_MAX;
+    TimerNextOverflow[1] = UINT64_MAX;
 
     for (i = 0; i < 8; i++) DMAs[i].Reset();
     memset(DMA9Fill, 0, 4*4);
@@ -784,6 +808,9 @@ bool NDS::DoSavestate(Savestate* file)
         SPU.SetPowerCnt(PowerControl7 & 0x0001);
         Wifi.SetPowerCnt(PowerControl7 & 0x0002);
 
+        UpdateTimerNextOverflow(0);
+        UpdateTimerNextOverflow(1);
+
 #ifdef JIT_ENABLED
         JIT.Reset();
 #endif
@@ -862,7 +889,6 @@ void NDS::RunSystem(u64 timestamp)
     u32 mask = SchedListMask;
     for (int i = 0; i < Event_MAX; i++)
     {
-        if (!mask) break;
         if (mask & 0x1)
         {
             SchedEvent& evt = SchedList[i];
@@ -939,6 +965,7 @@ void NDS::RunSystemSleep(u64 timestamp)
     }
 }
 
+#ifdef LITEV_ARM7_THREAD
 void NDS::ARM7ThreadFunc()
 {
     t_CurCPU = 1;
@@ -994,7 +1021,7 @@ void NDS::ARM7ThreadFunc()
                 }
             }
 
-            RunTimers(1);
+            MaybeRunTimers(1);
         }
 
         {
@@ -1004,12 +1031,15 @@ void NDS::ARM7ThreadFunc()
         arm7Done.notify_one();
     }
 }
+#endif
 
 template <CPUExecuteMode cpuMode>
 u32 NDS::RunFrame()
 {
     Current = this;
+#ifdef LITEV_ARM7_THREAD
     arm7CPUMode = cpuMode;
+#endif
 
     FrameStartTimestamp = SysTimestamp;
 
@@ -1065,7 +1095,10 @@ u32 NDS::RunFrame()
             {
                 u64 target = NextTarget();
                 ARM9Target = target << ARM9ClockShift;
-                CurCPU = 0; t_CurCPU = 0;
+                CurCPU = 0;
+#ifdef LITEV_ARM7_THREAD
+                t_CurCPU = 0;
+#endif
 
                 if (CPUStop & CPUStop_GXStall)
                 {
@@ -1091,11 +1124,11 @@ u32 NDS::RunFrame()
                     ARM9.Execute<cpuMode>();
                 }
 
-                RunTimers(0);
+                MaybeRunTimers(0);
                 GPU.GPU3D.Run();
 
-                // Signal ARM7 thread to run the same number of system cycles in parallel.
                 target = ARM9Timestamp >> ARM9ClockShift;
+#ifdef LITEV_ARM7_THREAD
                 {
                     std::unique_lock<std::mutex> lock(arm7Mutex);
                     arm7SyncTarget.store(target, std::memory_order_relaxed);
@@ -1111,6 +1144,33 @@ u32 NDS::RunFrame()
                         return arm7WorkDone.load(std::memory_order_relaxed);
                     });
                 }
+#else
+                CurCPU = 1;
+
+                while (ARM7Timestamp < target)
+                {
+                    ARM7Target = target; // might be changed by a reschedule
+
+                    if (CPUStop & CPUStop_DMA7)
+                    {
+                        DMAs[4].Run();
+                        DMAs[5].Run();
+                        DMAs[6].Run();
+                        DMAs[7].Run();
+                        if (ConsoleType == 1)
+                        {
+                            auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
+                            dsi.RunNDMAs(1);
+                        }
+                    }
+                    else
+                    {
+                        ARM7.Execute<cpuMode>();
+                    }
+
+                    MaybeRunTimers(1);
+                }
+#endif
 
                 RunSystem(target);
 
@@ -1169,7 +1229,7 @@ u32 NDS::RunFrame()
 
 void NDS::Reschedule(u64 target)
 {
-    if (t_CurCPU == 0)
+    if (GetCurrentCPU(*this) == 0)
     {
         if (target < (ARM9Target >> ARM9ClockShift))
             ARM9Target = (target << ARM9ClockShift);
@@ -1217,7 +1277,7 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
         evt.Timestamp += delay;
     else
     {
-        if (t_CurCPU == 0)
+        if (GetCurrentCPU(*this) == 0)
             evt.Timestamp = (ARM9Timestamp >> ARM9ClockShift) + delay;
         else
             evt.Timestamp = ARM7Timestamp + delay;
@@ -1522,7 +1582,7 @@ void NDS::GXFIFOStall()
 
     CPUStop |= CPUStop_GXStall;
 
-    if (t_CurCPU == 1) ARM9.Halt(2);
+    if (GetCurrentCPU(*this) == 1) ARM9.Halt(2);
     else
     {
         DMAs[0].StallIfRunning();
@@ -1561,7 +1621,7 @@ u64 NDS::GetSysClockCycles(int num)
 
     if (num == 0 || num == 2)
     {
-        if (t_CurCPU == 0)
+        if (GetCurrentCPU(*this) == 0)
             ret = ARM9Timestamp >> ARM9ClockShift;
         else
             ret = ARM7Timestamp;
@@ -1573,7 +1633,7 @@ u64 NDS::GetSysClockCycles(int num)
         ret = LastSysClockCycles;
         LastSysClockCycles = 0;
 
-        if (t_CurCPU == 0)
+        if (GetCurrentCPU(*this) == 0)
             LastSysClockCycles = ARM9Timestamp >> ARM9ClockShift;
         else
             LastSysClockCycles = ARM7Timestamp;
@@ -1726,22 +1786,63 @@ void NDS::RunTimer(u32 tid, s32 cycles)
     }
 }
 
+void NDS::UpdateTimerNextOverflow(u32 cpu)
+{
+    u32 timermask = TimerCheckMask[cpu];
+    if (!timermask)
+    {
+        TimerNextOverflow[cpu] = UINT64_MAX;
+        return;
+    }
+
+    u64 next = UINT64_MAX;
+    u32 timerBase = cpu << 2;
+    u64 baseTimestamp = TimerTimestamp[cpu];
+
+    for (u32 i = 0; i < 4; i++)
+    {
+        if (!(timermask & (1u << i)))
+            continue;
+
+        const Timer& timer = Timers[timerBase + i];
+        u32 remaining = (1u << 26) - timer.Counter;
+        u64 cyclesToOverflow = (((u64)remaining - 1) >> timer.CycleShift) + 1;
+        u64 deadline = baseTimestamp + cyclesToOverflow;
+        if (deadline < next)
+            next = deadline;
+    }
+
+    TimerNextOverflow[cpu] = next;
+}
+
+void NDS::MaybeRunTimers(u32 cpu)
+{
+    u64 current = cpu == 0 ? (ARM9Timestamp >> ARM9ClockShift) : ARM7Timestamp;
+    if (current < TimerNextOverflow[cpu])
+        return;
+
+    RunTimers(cpu);
+}
+
 void NDS::RunTimers(u32 cpu)
 {
     u32 timermask = TimerCheckMask[cpu];
-    s32 cycles;
+    u64 current = cpu == 0 ? (ARM9Timestamp >> ARM9ClockShift) : ARM7Timestamp;
+    s32 cycles = (s32)(current - TimerTimestamp[cpu]);
 
-    if (cpu == 0)
-        cycles = (ARM9Timestamp >> ARM9ClockShift) - TimerTimestamp[0];
-    else
-        cycles = ARM7Timestamp - TimerTimestamp[1];
+    if (cycles <= 0)
+    {
+        UpdateTimerNextOverflow(cpu);
+        return;
+    }
 
     if (timermask & 0x1) RunTimer((cpu<<2)+0, cycles);
     if (timermask & 0x2) RunTimer((cpu<<2)+1, cycles);
     if (timermask & 0x4) RunTimer((cpu<<2)+2, cycles);
     if (timermask & 0x8) RunTimer((cpu<<2)+3, cycles);
 
-    TimerTimestamp[cpu] += cycles;
+    TimerTimestamp[cpu] = current;
+    UpdateTimerNextOverflow(cpu);
 }
 
 const s32 TimerPrescaler[4] = {0, 6, 8, 10};
@@ -1774,6 +1875,8 @@ void NDS::TimerStart(u32 id, u16 cnt)
         TimerCheckMask[id>>2] |= 0x01 << (id&0x3);
     else
         TimerCheckMask[id>>2] &= ~(0x01 << (id&0x3));
+
+    UpdateTimerNextOverflow(id >> 2);
 }
 
 
@@ -1900,9 +2003,13 @@ void NDS::DivDone(u32 param)
 
 void NDS::StartDiv()
 {
-    CancelEvent(Event_Div);
     DivCnt |= 0x8000;
-    ScheduleEvent(Event_Div, false, ((DivCnt&0x3)==0) ? 18:34, 0, 0);
+    SchedEvent& evt = SchedList[Event_Div];
+    evt.Timestamp = (ARM9Timestamp >> ARM9ClockShift) + (((DivCnt & 0x3) == 0) ? 18 : 34);
+    evt.FuncID = 0;
+    evt.Param = 0;
+    __atomic_fetch_or(&SchedListMask, 1u << Event_Div, __ATOMIC_ACQ_REL);
+    Reschedule(evt.Timestamp);
 }
 
 // http://stackoverflow.com/questions/1100090/looking-for-an-efficient-integer-square-root-algorithm-for-arm-thumb2
@@ -1948,9 +2055,13 @@ void NDS::SqrtDone(u32 param)
 
 void NDS::StartSqrt()
 {
-    CancelEvent(Event_Sqrt);
     SqrtCnt |= 0x8000;
-    ScheduleEvent(Event_Sqrt, false, 13, 0, 0);
+    SchedEvent& evt = SchedList[Event_Sqrt];
+    evt.Timestamp = (ARM9Timestamp >> ARM9ClockShift) + 13;
+    evt.FuncID = 0;
+    evt.Param = 0;
+    __atomic_fetch_or(&SchedListMask, 1u << Event_Sqrt, __ATOMIC_ACQ_REL);
+    Reschedule(evt.Timestamp);
 }
 
 
@@ -3789,6 +3900,100 @@ void NDS::ARM9IOWrite32(u32 addr, u32 val)
     }
 
     Log(LogLevel::Debug, "unknown ARM9 IO write32 %08X %08X %08X\n", addr, val, ARM9.R[15]);
+}
+
+bool NDS::ARM9FastIOWrite32(u32 addr, u32 val)
+{
+    switch (addr)
+    {
+    case 0x040000B0: DMAs[0].SrcAddr = val; return true;
+    case 0x040000B4: DMAs[0].DstAddr = val; return true;
+    case 0x040000B8: DMAs[0].WriteCnt(val); return true;
+    case 0x040000BC: DMAs[1].SrcAddr = val; return true;
+    case 0x040000C0: DMAs[1].DstAddr = val; return true;
+    case 0x040000C4: DMAs[1].WriteCnt(val); return true;
+    case 0x040000C8: DMAs[2].SrcAddr = val; return true;
+    case 0x040000CC: DMAs[2].DstAddr = val; return true;
+    case 0x040000D0: DMAs[2].WriteCnt(val); return true;
+    case 0x040000D4: DMAs[3].SrcAddr = val; return true;
+    case 0x040000D8: DMAs[3].DstAddr = val; return true;
+    case 0x040000DC: DMAs[3].WriteCnt(val); return true;
+
+    case 0x040000E0: DMA9Fill[0] = val; return true;
+    case 0x040000E4: DMA9Fill[1] = val; return true;
+    case 0x040000E8: DMA9Fill[2] = val; return true;
+    case 0x040000EC: DMA9Fill[3] = val; return true;
+
+    case 0x04000100: Timers[0].Reload = val & 0xFFFF; TimerStart(0, val >> 16); return true;
+    case 0x04000104: Timers[1].Reload = val & 0xFFFF; TimerStart(1, val >> 16); return true;
+    case 0x04000108: Timers[2].Reload = val & 0xFFFF; TimerStart(2, val >> 16); return true;
+    case 0x0400010C: Timers[3].Reload = val & 0xFFFF; TimerStart(3, val >> 16); return true;
+    case 0x04000130: KeyCnt[0] = val >> 16; return true;
+
+    case 0x04000208: IME[0] = val & 0x1; UpdateIRQ(0); return true;
+    case 0x04000210: IE[0] = val; UpdateIRQ(0); return true;
+    case 0x04000214: IF[0] &= ~val; GPU.GPU3D.CheckFIFOIRQ(); UpdateIRQ(0); return true;
+
+    case 0x04000280: DivCnt = val; StartDiv(); return true;
+    case 0x04000290: DivNumerator[0] = val; StartDiv(); return true;
+    case 0x04000294: DivNumerator[1] = val; StartDiv(); return true;
+    case 0x04000298: DivDenominator[0] = val; StartDiv(); return true;
+    case 0x0400029C: DivDenominator[1] = val; StartDiv(); return true;
+
+    case 0x040002B0: SqrtCnt = val; StartSqrt(); return true;
+    case 0x040002B8: SqrtVal[0] = val; StartSqrt(); return true;
+    case 0x040002BC: SqrtVal[1] = val; StartSqrt(); return true;
+
+    default:
+        return false;
+    }
+}
+
+bool NDS::ARM9FastIOWrite16(u32 addr, u16 val)
+{
+    switch (addr)
+    {
+    case 0x040000B8: DMAs[0].WriteCnt((DMAs[0].Cnt & 0xFFFF0000) | val); return true;
+    case 0x040000BA: DMAs[0].WriteCnt((DMAs[0].Cnt & 0x0000FFFF) | (val << 16)); return true;
+    case 0x040000C4: DMAs[1].WriteCnt((DMAs[1].Cnt & 0xFFFF0000) | val); return true;
+    case 0x040000C6: DMAs[1].WriteCnt((DMAs[1].Cnt & 0x0000FFFF) | (val << 16)); return true;
+    case 0x040000D0: DMAs[2].WriteCnt((DMAs[2].Cnt & 0xFFFF0000) | val); return true;
+    case 0x040000D2: DMAs[2].WriteCnt((DMAs[2].Cnt & 0x0000FFFF) | (val << 16)); return true;
+    case 0x040000DC: DMAs[3].WriteCnt((DMAs[3].Cnt & 0xFFFF0000) | val); return true;
+    case 0x040000DE: DMAs[3].WriteCnt((DMAs[3].Cnt & 0x0000FFFF) | (val << 16)); return true;
+
+    case 0x040000E0: DMA9Fill[0] = (DMA9Fill[0] & 0xFFFF0000) | val; return true;
+    case 0x040000E2: DMA9Fill[0] = (DMA9Fill[0] & 0x0000FFFF) | (val << 16); return true;
+    case 0x040000E4: DMA9Fill[1] = (DMA9Fill[1] & 0xFFFF0000) | val; return true;
+    case 0x040000E6: DMA9Fill[1] = (DMA9Fill[1] & 0x0000FFFF) | (val << 16); return true;
+    case 0x040000E8: DMA9Fill[2] = (DMA9Fill[2] & 0xFFFF0000) | val; return true;
+    case 0x040000EA: DMA9Fill[2] = (DMA9Fill[2] & 0x0000FFFF) | (val << 16); return true;
+    case 0x040000EC: DMA9Fill[3] = (DMA9Fill[3] & 0xFFFF0000) | val; return true;
+    case 0x040000EE: DMA9Fill[3] = (DMA9Fill[3] & 0x0000FFFF) | (val << 16); return true;
+
+    case 0x04000100: Timers[0].Reload = val; return true;
+    case 0x04000102: TimerStart(0, val); return true;
+    case 0x04000104: Timers[1].Reload = val; return true;
+    case 0x04000106: TimerStart(1, val); return true;
+    case 0x04000108: Timers[2].Reload = val; return true;
+    case 0x0400010A: TimerStart(2, val); return true;
+    case 0x0400010C: Timers[3].Reload = val; return true;
+    case 0x0400010E: TimerStart(3, val); return true;
+
+    case 0x04000132: KeyCnt[0] = val; return true;
+
+    case 0x04000208: IME[0] = val & 0x1; UpdateIRQ(0); return true;
+    case 0x04000210: IE[0] = (IE[0] & 0xFFFF0000) | val; UpdateIRQ(0); return true;
+    case 0x04000212: IE[0] = (IE[0] & 0x0000FFFF) | (val << 16); UpdateIRQ(0); return true;
+    case 0x04000214: IF[0] &= ~val; GPU.GPU3D.CheckFIFOIRQ(); UpdateIRQ(0); return true;
+    case 0x04000216: IF[0] &= ~(val << 16); GPU.GPU3D.CheckFIFOIRQ(); UpdateIRQ(0); return true;
+
+    case 0x04000280: DivCnt = val; StartDiv(); return true;
+    case 0x040002B0: SqrtCnt = val; StartSqrt(); return true;
+
+    default:
+        return false;
+    }
 }
 
 
