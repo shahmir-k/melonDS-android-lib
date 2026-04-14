@@ -188,6 +188,16 @@ struct NonStupidBitField
         memset(Data, 0, sizeof(Data));
     }
 
+    bool Any() const
+    {
+        for (u64 entry : Data)
+        {
+            if (entry)
+                return true;
+        }
+        return false;
+    }
+
     Ref operator[](u32 idx)
     {
         return Ref{*this, idx};
