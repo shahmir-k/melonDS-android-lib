@@ -112,7 +112,16 @@ private:
             u16 BGCnt = 0;
             u16 BGXPos = 0;
             u16 BGYPos = 0;
+            u16 PaletteBaseOffset = 0;
+            u8 ExtPalSlot = 0;
+            u8 Color256 = 0;
+            u8 ExtPalEnabled = 0;
             u32 TileDispKey = 0;
+            u32 TileSetAddr = 0;
+            u32 TileMapBase = 0;
+            u32 WideXMask = 0;
+            u32 BGWindowBit = 0;
+            u32 BGFlag = 0;
         };
 
         u32 Epoch = 0;
@@ -127,6 +136,7 @@ private:
         u32 BlendKey = 0;
         u32 RendererFlags = 0;
         u8 ComposedLineCacheEligible = 0;
+        u8 TextBGLineCacheEligible = 0;
         u8 Valid = 0;
         PreparedTextBGState TextBG[4] {};
     };

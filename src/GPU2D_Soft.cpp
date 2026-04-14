@@ -443,14 +443,32 @@ const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
         !CurUnit->BGMosaicY &&
         !CurUnit->BGMosaicYMax &&
         !(!CurUnit->Num && (dispCnt & 0x0100) && (dispCnt & 0x8) && !rendererAccelerated);
+    prepared.TextBGLineCacheEligible =
+        !CurUnit->BGMosaicSize[0] &&
+        !CurUnit->BGMosaicSize[1] &&
+        ((dispCnt & 0xE000) == 0);
     for (u32 bgnum = 0; bgnum < 4; bgnum++)
     {
         auto& textBG = prepared.TextBG[bgnum];
-        textBG.BGCnt = CurUnit->BGCnt[bgnum];
+        const u16 bgcnt = CurUnit->BGCnt[bgnum];
+        textBG.BGCnt = bgcnt;
         textBG.BGXPos = CurUnit->BGXPos[bgnum];
         textBG.BGYPos = CurUnit->BGYPos[bgnum];
+        textBG.PaletteBaseOffset = CurUnit->Num ? 0x400 : 0;
+        textBG.ExtPalEnabled = (dispCnt & 0x40000000) != 0;
+        textBG.ExtPalSlot = ((bgnum < 2) && (bgcnt & 0x2000)) ? (2 + bgnum) : bgnum;
         textBG.TileDispKey = CurUnit->Num ? (dispCnt & 0x40000000)
                                           : (dispCnt & 0x7F000000);
+        textBG.TileSetAddr = CurUnit->Num
+            ? ((bgcnt & 0x003C) << 12)
+            : (((dispCnt & 0x07000000) >> 8) + ((bgcnt & 0x003C) << 12));
+        textBG.TileMapBase = CurUnit->Num
+            ? ((bgcnt & 0x1F00) << 3)
+            : (((dispCnt & 0x38000000) >> 11) + ((bgcnt & 0x1F00) << 3));
+        textBG.WideXMask = (bgcnt & 0x4000) ? 0x100 : 0;
+        textBG.BGWindowBit = 1u << bgnum;
+        textBG.BGFlag = 0x01000000u << bgnum;
+        textBG.Color256 = (bgcnt & 0x0080) != 0;
     }
     prepared.Valid = 1;
     return prepared;
@@ -1450,17 +1468,16 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
     // workaround for backgrounds missing on aarch64 with lto build
     asm volatile ("" : : : "memory");
 
-    u16 bgcnt = CurUnit->BGCnt[bgnum];
+    const PreparedFrameState& prepared = GetPreparedFrameState();
+    const auto& textBG = prepared.TextBG[bgnum];
+    u16 bgcnt = textBG.BGCnt;
     TextBGFrameCache* frameCache = nullptr;
     TextBGTileRowCache* tileCache = nullptr;
     u32* cacheLine = nullptr;
 
     if constexpr (!mosaic && windowMaskFull)
     {
-        bool cacheEligible = CurUnit->BGMosaicSize[0] == 0 &&
-                             CurUnit->BGMosaicSize[1] == 0 &&
-                             (CurUnit->DispCnt & 0xE000) == 0 &&
-                             line < 192;
+        bool cacheEligible = prepared.TextBGLineCacheEligible && line < 192;
         if (cacheEligible)
         {
             if (PrepareTextBGFrameCacheLine(line, bgnum, bgcnt, frameCache, cacheLine))
@@ -1479,12 +1496,11 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
         }
     }
 
-    u32 tilesetaddr, tilemapaddr;
+    u32 tilemapaddr;
     u16* pal;
-    u32 extpal, extpalslot;
 
-    u16 xoff = CurUnit->BGXPos[bgnum];
-    u16 yoff = CurUnit->BGYPos[bgnum] + line;
+    u16 xoff = textBG.BGXPos;
+    u16 yoff = textBG.BGYPos + line;
 
     if (bgcnt & 0x0040)
     {
@@ -1492,28 +1508,16 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
         yoff -= CurUnit->BGMosaicY;
     }
 
-    u32 widexmask = (bgcnt & 0x4000) ? 0x100 : 0;
-
-    extpal = (CurUnit->DispCnt & 0x40000000);
-    if (extpal) extpalslot = ((bgnum<2) && (bgcnt&0x2000)) ? (2+bgnum) : bgnum;
+    const u32 widexmask = textBG.WideXMask;
+    const bool extpal = textBG.ExtPalEnabled != 0;
+    const u32 extpalslot = textBG.ExtPalSlot;
 
     u8* bgvram;
     u32 bgvrammask;
     CurUnit->GetBGVRAM(bgvram, bgvrammask);
-    if (CurUnit->Num)
-    {
-        tilesetaddr = ((bgcnt & 0x003C) << 12);
-        tilemapaddr = ((bgcnt & 0x1F00) << 3);
-
-        pal = (u16*)&GPU.Palette[0x400];
-    }
-    else
-    {
-        tilesetaddr = ((CurUnit->DispCnt & 0x07000000) >> 8) + ((bgcnt & 0x003C) << 12);
-        tilemapaddr = ((CurUnit->DispCnt & 0x38000000) >> 11) + ((bgcnt & 0x1F00) << 3);
-
-        pal = (u16*)&GPU.Palette[0];
-    }
+    const u32 tilesetaddr = textBG.TileSetAddr;
+    tilemapaddr = textBG.TileMapBase;
+    pal = reinterpret_cast<u16*>(&GPU.Palette[textBG.PaletteBaseOffset]);
 
     // adjust Y position in tilemap
     if (bgcnt & 0x8000)
@@ -1530,10 +1534,10 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
     u32 pixelsaddr;
     u8 color;
     u32 lastxpos;
-    const u32 bgWindowBit = 1u << bgnum;
-    const u32 bgFlag = 0x01000000u << bgnum;
+    const u32 bgWindowBit = textBG.BGWindowBit;
+    const u32 bgFlag = textBG.BGFlag;
 
-    if (bgcnt & 0x0080)
+    if (textBG.Color256)
     {
         // 256-color
 
