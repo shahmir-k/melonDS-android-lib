@@ -443,6 +443,15 @@ const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
         !CurUnit->BGMosaicY &&
         !CurUnit->BGMosaicYMax &&
         !(!CurUnit->Num && (dispCnt & 0x0100) && (dispCnt & 0x8) && !rendererAccelerated);
+    for (u32 bgnum = 0; bgnum < 4; bgnum++)
+    {
+        auto& textBG = prepared.TextBG[bgnum];
+        textBG.BGCnt = CurUnit->BGCnt[bgnum];
+        textBG.BGXPos = CurUnit->BGXPos[bgnum];
+        textBG.BGYPos = CurUnit->BGYPos[bgnum];
+        textBG.TileDispKey = CurUnit->Num ? (dispCnt & 0x40000000)
+                                          : (dispCnt & 0x7F000000);
+    }
     prepared.Valid = 1;
     return prepared;
 }
@@ -1289,31 +1298,30 @@ __attribute((always_inline)) inline void SoftRenderer::ApplyCachedBGPixel(u32* d
 
 bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, TextBGFrameCache*& cache, u32*& cacheLine)
 {
+    const PreparedFrameState& prepared = GetPreparedFrameState();
+    const auto& textBG = prepared.TextBG[bgnum];
     cache = &TextBGCache[CurUnit->Num][bgnum];
     cacheLine = cache->Pixels[line];
 
-    u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
-    u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
-
-    bool cacheMatches = cache->StateGeneration == CurUnit->StateGeneration &&
-                        cache->BGStamp == bgStamp &&
-                        cache->BGExtPalStamp == bgExtPalStamp &&
-                        cache->PaletteStamp == GPU.PaletteCoherencyStamp &&
-                        cache->DispCnt == CurUnit->DispCnt &&
+    bool cacheMatches = cache->StateGeneration == prepared.StateGeneration &&
+                        cache->BGStamp == prepared.BGStamp &&
+                        cache->BGExtPalStamp == prepared.BGExtPalStamp &&
+                        cache->PaletteStamp == prepared.PaletteStamp &&
+                        cache->DispCnt == prepared.DispCnt &&
                         cache->BGCnt == bgcnt &&
-                        cache->BGXPos == CurUnit->BGXPos[bgnum] &&
-                        cache->BGYPos == CurUnit->BGYPos[bgnum];
+                        cache->BGXPos == textBG.BGXPos &&
+                        cache->BGYPos == textBG.BGYPos;
 
     if (!cacheMatches)
     {
-        cache->StateGeneration = CurUnit->StateGeneration;
-        cache->BGStamp = bgStamp;
-        cache->BGExtPalStamp = bgExtPalStamp;
-        cache->PaletteStamp = GPU.PaletteCoherencyStamp;
-        cache->DispCnt = CurUnit->DispCnt;
+        cache->StateGeneration = prepared.StateGeneration;
+        cache->BGStamp = prepared.BGStamp;
+        cache->BGExtPalStamp = prepared.BGExtPalStamp;
+        cache->PaletteStamp = prepared.PaletteStamp;
+        cache->DispCnt = prepared.DispCnt;
         cache->BGCnt = bgcnt;
-        cache->BGXPos = CurUnit->BGXPos[bgnum];
-        cache->BGYPos = CurUnit->BGYPos[bgnum];
+        cache->BGXPos = textBG.BGXPos;
+        cache->BGYPos = textBG.BGYPos;
         memset(cache->ValidLines, 0, sizeof(cache->ValidLines));
     }
 
@@ -1322,26 +1330,24 @@ bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, T
 
 bool SoftRenderer::PrepareTextBGTileRowCache(u32 bgnum, TextBGTileRowCache*& cache)
 {
+    const PreparedFrameState& prepared = GetPreparedFrameState();
     cache = &TextBGTileCache[CurUnit->Num][bgnum];
 
-    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
-    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
-    const u32 dispKey = CurUnit->Num ? (CurUnit->DispCnt & 0x40000000)
-                                     : (CurUnit->DispCnt & 0x7F000000);
+    const auto& textBG = prepared.TextBG[bgnum];
 
     if (cache->Valid &&
-        cache->BGStamp == bgStamp &&
-        cache->BGExtPalStamp == bgExtPalStamp &&
-        cache->PaletteStamp == GPU.PaletteCoherencyStamp &&
-        cache->DispKey == dispKey)
+        cache->BGStamp == prepared.BGStamp &&
+        cache->BGExtPalStamp == prepared.BGExtPalStamp &&
+        cache->PaletteStamp == prepared.PaletteStamp &&
+        cache->DispKey == textBG.TileDispKey)
     {
         return true;
     }
 
-    cache->BGStamp = bgStamp;
-    cache->BGExtPalStamp = bgExtPalStamp;
-    cache->PaletteStamp = GPU.PaletteCoherencyStamp;
-    cache->DispKey = dispKey;
+    cache->BGStamp = prepared.BGStamp;
+    cache->BGExtPalStamp = prepared.BGExtPalStamp;
+    cache->PaletteStamp = prepared.PaletteStamp;
+    cache->DispKey = textBG.TileDispKey;
     cache->Valid = 1;
     std::memset(cache->ValidSlots, 0, sizeof(cache->ValidSlots));
     return true;

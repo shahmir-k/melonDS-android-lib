@@ -107,6 +107,14 @@ private:
 
     struct PreparedFrameState
     {
+        struct PreparedTextBGState
+        {
+            u16 BGCnt = 0;
+            u16 BGXPos = 0;
+            u16 BGYPos = 0;
+            u32 TileDispKey = 0;
+        };
+
         u32 Epoch = 0;
         u32 StateGeneration = 0;
         u32 BGStamp = 0;
@@ -120,6 +128,7 @@ private:
         u32 RendererFlags = 0;
         u8 ComposedLineCacheEligible = 0;
         u8 Valid = 0;
+        PreparedTextBGState TextBG[4] {};
     };
 
     u32 NumSprites[2] {};
