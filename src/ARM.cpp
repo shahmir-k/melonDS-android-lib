@@ -190,6 +190,7 @@ void ARM::Reset()
     FastBlockLookup = NULL;
     FastBlockLookupStart = 0;
     FastBlockLookupSize = 0;
+    ClearJitCache();
 #endif
 
 #ifdef GDBSTUB_ENABLED
@@ -629,8 +630,19 @@ void ARMv5::Execute()
                 return;
             }
 
-            JitBlockEntry block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
-                instrAddr - FastBlockLookupStart, instrAddr);
+            JitBlockEntry block = nullptr;
+            if (LastJitBlockAddr == instrAddr)
+                block = LastJitBlockEntry;
+            else
+            {
+                block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
+                    instrAddr - FastBlockLookupStart, instrAddr);
+                if (block)
+                {
+                    LastJitBlockAddr = instrAddr;
+                    LastJitBlockEntry = block;
+                }
+            }
             if (block)
                 ARM_Dispatch(this, block);
             else
@@ -769,8 +781,19 @@ void ARMv4::Execute()
                 return;
             }
 
-            JitBlockEntry block = NDS.JIT.LookUpBlock(1, FastBlockLookup,
-                instrAddr - FastBlockLookupStart, instrAddr);
+            JitBlockEntry block = nullptr;
+            if (LastJitBlockAddr == instrAddr)
+                block = LastJitBlockEntry;
+            else
+            {
+                block = NDS.JIT.LookUpBlock(1, FastBlockLookup,
+                    instrAddr - FastBlockLookupStart, instrAddr);
+                if (block)
+                {
+                    LastJitBlockAddr = instrAddr;
+                    LastJitBlockEntry = block;
+                }
+            }
             if (block)
                 ARM_Dispatch(this, block);
             else
@@ -1308,4 +1331,3 @@ void ARMv4::BusWrite32(u32 addr, u32 val)
     NDS.ARM7Write32(addr, val);
 }
 }
-

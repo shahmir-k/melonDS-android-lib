@@ -58,6 +58,9 @@ class GPU;
 class ARMJIT_Memory;
 class NDS;
 class Savestate;
+#ifdef JIT_ENABLED
+typedef void (*JitBlockEntry)();
+#endif
 
 class ARM
 #ifdef GDBSTUB_ENABLED
@@ -188,6 +191,14 @@ public:
 #ifdef JIT_ENABLED
     u32 FastBlockLookupStart, FastBlockLookupSize;
     u64* FastBlockLookup;
+    u32 LastJitBlockAddr;
+    JitBlockEntry LastJitBlockEntry;
+
+    void ClearJitCache() noexcept
+    {
+        LastJitBlockAddr = UINT32_MAX;
+        LastJitBlockEntry = nullptr;
+    }
 #endif
 
     static const u32 ConditionTable[16];
