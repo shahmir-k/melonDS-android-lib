@@ -91,6 +91,8 @@ GPU::~GPU() noexcept
 
 void GPU::ResetVRAMCache() noexcept
 {
+    Renderer2DCacheEpoch++;
+
     for (int i = 0; i < 9; i++)
         VRAMDirty[i] = NonStupidBitField<128*1024/VRAMDirtyGranularity>();
 
@@ -214,6 +216,7 @@ void GPU::Reset() noexcept
     OAMDirty = 0x3;
     PaletteDirty = 0xF;
     PaletteCoherencyStamp = 0;
+    OAMCoherencyStamp = 0;
 }
 
 void GPU::Stop() noexcept

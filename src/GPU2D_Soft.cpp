@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 
 #ifdef LITEV_NEON_RENDERER
 #include "GPU2D_NEON.h"
@@ -800,6 +801,175 @@ void SoftRenderer::DrawScanlineBGMode7(u32 line)
     }
 }
 
+bool SoftRenderer::CanUseComposedLineCache(u32 line) const
+{
+    if (line >= 192)
+        return false;
+
+    u32 dispCnt = CurUnit->DispCnt;
+    if (dispCnt & (1 << 7))
+        return false;
+
+    if (dispCnt & 0xE000)
+        return false;
+
+    if (CurUnit->BGMosaicSize[0] || CurUnit->BGMosaicSize[1] ||
+        CurUnit->OBJMosaicSize[0] || CurUnit->OBJMosaicSize[1])
+        return false;
+
+    if (CurUnit->BGMosaicY || CurUnit->BGMosaicYMax)
+        return false;
+
+    if (!CurUnit->Num && (dispCnt & 0x0100) && (dispCnt & 0x8) &&
+        !GPU.GPU3D.IsRendererAccelerated())
+        return false;
+
+    return true;
+}
+
+u32 SoftRenderer::ComposedLineRendererFlags() const
+{
+    const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
+    return (rendererAccelerated ? 1u : 0u) |
+           ((rendererAccelerated && CurUnit->Num == 0) ? 2u : 0u);
+}
+
+bool SoftRenderer::ComposedLineCacheMatches(u32 line, bool compareNumSprites)
+{
+    if (!CanUseComposedLineCache(line))
+        return false;
+
+    const ComposedLineCache& cache = LineCache[CurUnit->Num][line];
+    if (!cache.Valid)
+        return false;
+
+    const u32 rendererFlags = ComposedLineRendererFlags();
+    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
+    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
+    const u32 objStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJ : GPU.VRAMCoherencyStamp_AOBJ;
+    const u32 objExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJExtPal : GPU.VRAMCoherencyStamp_AOBJExtPal;
+    const u32 blendKey = CurUnit->BlendCnt |
+                         (CurUnit->EVA << 16) |
+                         (CurUnit->EVB << 21) |
+                         (CurUnit->EVY << 26);
+
+    if (cache.Epoch != GPU.Renderer2DCacheEpoch ||
+        cache.StateGeneration != CurUnit->StateGeneration ||
+        cache.BGStamp != bgStamp ||
+        cache.BGExtPalStamp != bgExtPalStamp ||
+        cache.OBJStamp != objStamp ||
+        cache.OBJExtPalStamp != objExtPalStamp ||
+        cache.PaletteStamp != GPU.PaletteCoherencyStamp ||
+        cache.OAMStamp != GPU.OAMCoherencyStamp ||
+        cache.DispCnt != CurUnit->DispCnt ||
+        cache.BlendKey != blendKey ||
+        cache.RendererFlags != rendererFlags)
+        return false;
+
+    if (compareNumSprites && cache.NumSprites != NumSprites[CurUnit->Num])
+        return false;
+
+    if (std::memcmp(cache.BGCnt, CurUnit->BGCnt, sizeof(cache.BGCnt)) != 0 ||
+        std::memcmp(cache.BGXPos, CurUnit->BGXPos, sizeof(cache.BGXPos)) != 0 ||
+        std::memcmp(cache.BGYPos, CurUnit->BGYPos, sizeof(cache.BGYPos)) != 0 ||
+        std::memcmp(cache.BGXRefInternal, CurUnit->BGXRefInternal, sizeof(cache.BGXRefInternal)) != 0 ||
+        std::memcmp(cache.BGYRefInternal, CurUnit->BGYRefInternal, sizeof(cache.BGYRefInternal)) != 0)
+        return false;
+
+    return true;
+}
+
+bool SoftRenderer::TryReplayComposedLineCache(u32 line)
+{
+    if (!ComposedLineCacheMatches(line))
+        return false;
+
+    const ComposedLineCache& cache = LineCache[CurUnit->Num][line];
+    const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
+    const u32 words = rendererAccelerated ? 256 * 3 : 256;
+    std::memcpy(BGOBJLine, cache.Pixels, words * sizeof(u32));
+    AdvanceCachedAffineState();
+    return true;
+}
+
+void SoftRenderer::StoreComposedLineCache(u32 line, const s32 bgXRefInternal[2], const s32 bgYRefInternal[2])
+{
+    if (!CanUseComposedLineCache(line))
+        return;
+
+    const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
+    ComposedLineCache& cache = LineCache[CurUnit->Num][line];
+    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
+    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
+    const u32 objStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJ : GPU.VRAMCoherencyStamp_AOBJ;
+    const u32 objExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BOBJExtPal : GPU.VRAMCoherencyStamp_AOBJExtPal;
+
+    cache.Epoch = GPU.Renderer2DCacheEpoch;
+    cache.StateGeneration = CurUnit->StateGeneration;
+    cache.BGStamp = bgStamp;
+    cache.BGExtPalStamp = bgExtPalStamp;
+    cache.OBJStamp = objStamp;
+    cache.OBJExtPalStamp = objExtPalStamp;
+    cache.PaletteStamp = GPU.PaletteCoherencyStamp;
+    cache.OAMStamp = GPU.OAMCoherencyStamp;
+    cache.DispCnt = CurUnit->DispCnt;
+    cache.BlendKey = CurUnit->BlendCnt |
+                     (CurUnit->EVA << 16) |
+                     (CurUnit->EVB << 21) |
+                     (CurUnit->EVY << 26);
+    cache.RendererFlags = ComposedLineRendererFlags();
+    cache.NumSprites = NumSprites[CurUnit->Num];
+    std::memcpy(cache.BGCnt, CurUnit->BGCnt, sizeof(cache.BGCnt));
+    std::memcpy(cache.BGXPos, CurUnit->BGXPos, sizeof(cache.BGXPos));
+    std::memcpy(cache.BGYPos, CurUnit->BGYPos, sizeof(cache.BGYPos));
+    std::memcpy(cache.BGXRefInternal, bgXRefInternal, sizeof(cache.BGXRefInternal));
+    std::memcpy(cache.BGYRefInternal, bgYRefInternal, sizeof(cache.BGYRefInternal));
+
+    const u32 words = rendererAccelerated ? 256 * 3 : 256;
+    std::memcpy(cache.Pixels, BGOBJLine, words * sizeof(u32));
+    cache.Valid = 1;
+}
+
+void SoftRenderer::AdvanceCachedAffineState()
+{
+    auto advance = [this](u32 bgnum)
+    {
+        const u32 idx = bgnum - 2;
+        CurUnit->BGXRefInternal[idx] += CurUnit->BGRotB[idx];
+        CurUnit->BGYRefInternal[idx] += CurUnit->BGRotD[idx];
+    };
+
+    const u32 dispCnt = CurUnit->DispCnt;
+    const u32 mode = dispCnt & 0x7;
+    const bool bg2Enabled = (dispCnt & 0x0400) != 0;
+    const bool bg3Enabled = (dispCnt & 0x0800) != 0;
+
+    switch (mode)
+    {
+    case 1:
+        if (bg3Enabled) advance(3);
+        break;
+    case 2:
+        if (bg3Enabled) advance(3);
+        if (bg2Enabled) advance(2);
+        break;
+    case 3:
+        if (bg3Enabled) advance(3);
+        break;
+    case 4:
+        if (bg3Enabled) advance(3);
+        if (bg2Enabled) advance(2);
+        break;
+    case 5:
+        if (bg3Enabled) advance(3);
+        if (bg2Enabled) advance(2);
+        break;
+    case 6:
+        if (bg2Enabled) advance(2);
+        break;
+    }
+}
+
 void SoftRenderer::DrawScanline_BGOBJ(u32 line)
 {
     // forced blank disables BG/OBJ compositing
@@ -809,6 +979,21 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
             BGOBJLine[i] = 0xFF3F3F3F;
 
         return;
+    }
+
+    const bool lineCacheEligible = CanUseComposedLineCache(line);
+    s32 lineCacheBGXRefInternal[2] = {CurUnit->BGXRefInternal[0], CurUnit->BGXRefInternal[1]};
+    s32 lineCacheBGYRefInternal[2] = {CurUnit->BGYRefInternal[0], CurUnit->BGYRefInternal[1]};
+
+    if (lineCacheEligible && TryReplayComposedLineCache(line))
+        return;
+
+    if (line < 192 && SpriteLineSkipped[CurUnit->Num][line])
+    {
+        bool oldForceSpriteDraw = ForceSpriteDraw;
+        ForceSpriteDraw = true;
+        DrawSprites(line, CurUnit);
+        ForceSpriteDraw = oldForceSpriteDraw;
     }
 
     u64 backdrop;
@@ -1032,6 +1217,9 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
     }
     else
         CurUnit->BGMosaicY++;
+
+    if (lineCacheEligible)
+        StoreComposedLineCache(line, lineCacheBGXRefInternal, lineCacheBGYRefInternal);
 
     /*if (OBJMosaicY >= OBJMosaicYMax)
     {
@@ -1983,6 +2171,16 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
             SyncedOBJExtPalStamp[1] = GPU.VRAMCoherencyStamp_BOBJExtPal;
         }
     }
+
+    if (line < 192 && !ForceSpriteDraw && ComposedLineCacheMatches(line, false))
+    {
+        SpriteLineSkipped[CurUnit->Num][line] = true;
+        NumSprites[CurUnit->Num] = LineCache[CurUnit->Num][line].NumSprites;
+        return;
+    }
+
+    if (line < 192)
+        SpriteLineSkipped[CurUnit->Num][line] = false;
 
     NumSprites[CurUnit->Num] = 0;
     memset(OBJLine[CurUnit->Num], 0, 256*4);

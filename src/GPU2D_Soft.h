@@ -60,13 +60,39 @@ private:
         alignas(64) u32 Pixels[192][256] {};
     };
 
-    u32 NumSprites[2];
+    struct ComposedLineCache
+    {
+        u32 Epoch = 0;
+        u32 StateGeneration = 0;
+        u32 BGStamp = 0;
+        u32 BGExtPalStamp = 0;
+        u32 OBJStamp = 0;
+        u32 OBJExtPalStamp = 0;
+        u32 PaletteStamp = 0;
+        u32 OAMStamp = 0;
+        u32 DispCnt = 0;
+        u32 BlendKey = 0;
+        u32 RendererFlags = 0;
+        u32 NumSprites = 0;
+        u16 BGCnt[4] {};
+        u16 BGXPos[4] {};
+        u16 BGYPos[4] {};
+        s32 BGXRefInternal[2] {};
+        s32 BGYRefInternal[2] {};
+        u8 Valid = 0;
+        alignas(64) u32 Pixels[256*3] {};
+    };
+
+    u32 NumSprites[2] {};
     u32 SyncedBGStamp[2] {};
     u32 SyncedBGExtPalStamp[2] {};
     u32 SyncedOBJStamp[2] {};
     u32 SyncedOBJExtPalStamp[2] {};
     bool LineUsesAccelAux = false;
+    bool ForceSpriteDraw = false;
+    bool SpriteLineSkipped[2][192] {};
     TextBGFrameCache TextBGCache[2][4] {};
+    ComposedLineCache LineCache[2][192] {};
 
     u8* CurBGXMosaicTable;
     array2d<u8, 16, 256> MosaicTable = []() constexpr
@@ -143,6 +169,12 @@ private:
     void DrawScanlineBGMode6(u32 line);
     void DrawScanlineBGMode7(u32 line);
     void DrawScanline_BGOBJ(u32 line);
+    bool CanUseComposedLineCache(u32 line) const;
+    u32 ComposedLineRendererFlags() const;
+    bool ComposedLineCacheMatches(u32 line, bool compareNumSprites = true);
+    bool TryReplayComposedLineCache(u32 line);
+    void StoreComposedLineCache(u32 line, const s32 bgXRefInternal[2], const s32 bgYRefInternal[2]);
+    void AdvanceCachedAffineState();
 
     static void DrawPixel_Normal(u32* dst, u16 color, u32 flag);
     static void DrawPixel_Accel(u32* dst, u16 color, u32 flag);

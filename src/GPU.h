@@ -558,6 +558,7 @@ public:
 
         *(T*)&OAM[addr] = val;
         OAMDirty |= 1 << (addr / 1024);
+        OAMCoherencyStamp++;
     }
 
     template <typename T>
@@ -618,6 +619,8 @@ public:
     u32 VRAMCoherencyStamp_BBGExtPal = 0;
     u32 VRAMCoherencyStamp_BOBJExtPal = 0;
     u32 PaletteCoherencyStamp = 0;
+    u32 OAMCoherencyStamp = 0;
+    u32 Renderer2DCacheEpoch = 1;
 
     void SyncDirtyFlags() noexcept;
 
