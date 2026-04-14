@@ -60,6 +60,18 @@ private:
         alignas(64) u32 Pixels[192][256] {};
     };
 
+    struct TextBGTileRowCache
+    {
+        u32 BGStamp = 0;
+        u32 BGExtPalStamp = 0;
+        u32 PaletteStamp = 0;
+        u32 DispKey = 0;
+        u8 Valid = 0;
+        u8 ValidSlots[4096] {};
+        u64 Keys[4096] {};
+        alignas(64) u32 Pixels[4096][8] {};
+    };
+
     struct ComposedLineCache
     {
         u32 Epoch = 0;
@@ -92,6 +104,7 @@ private:
     bool ForceSpriteDraw = false;
     bool SpriteLineSkipped[2][192] {};
     TextBGFrameCache TextBGCache[2][4] {};
+    TextBGTileRowCache TextBGTileCache[2][4] {};
     ComposedLineCache LineCache[2][192] {};
 
     u8* CurBGXMosaicTable;
@@ -182,6 +195,10 @@ private:
     typedef void (*DrawPixel)(u32* dst, u16 color, u32 flag);
     template<DrawPixel drawPixel> static void ApplyCachedBGPixel(u32* dst, u32 pixel);
     bool PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, TextBGFrameCache*& cache, u32*& cacheLine);
+    bool PrepareTextBGTileRowCache(u32 bgnum, TextBGTileRowCache*& cache);
+    static u32 TextBGTileRowCacheSlot(u64 key);
+    void DecodeTextBGTileRow(TextBGTileRowCache& cache, u32 slot, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag);
+    template<DrawPixel drawPixel> void ApplyTextBGTileRow(TextBGTileRowCache* tileCache, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag, u32 tilePos, u32 count, u32 dstPos, u32* cacheLine);
 
     template<bool windowMaskFull> void DrawBG_3D();
     template<bool mosaic, bool windowMaskFull, DrawPixel drawPixel> void DrawBG_Text(u32 line, u32 bgnum);

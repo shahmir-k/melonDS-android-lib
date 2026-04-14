@@ -1293,6 +1293,89 @@ bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, T
     return cache->ValidLines[line] != 0;
 }
 
+bool SoftRenderer::PrepareTextBGTileRowCache(u32 bgnum, TextBGTileRowCache*& cache)
+{
+    cache = &TextBGTileCache[CurUnit->Num][bgnum];
+
+    const u32 bgStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBG : GPU.VRAMCoherencyStamp_ABG;
+    const u32 bgExtPalStamp = CurUnit->Num ? GPU.VRAMCoherencyStamp_BBGExtPal : GPU.VRAMCoherencyStamp_ABGExtPal;
+    const u32 dispKey = CurUnit->Num ? (CurUnit->DispCnt & 0x40000000)
+                                     : (CurUnit->DispCnt & 0x7F000000);
+
+    if (cache->Valid &&
+        cache->BGStamp == bgStamp &&
+        cache->BGExtPalStamp == bgExtPalStamp &&
+        cache->PaletteStamp == GPU.PaletteCoherencyStamp &&
+        cache->DispKey == dispKey)
+    {
+        return true;
+    }
+
+    cache->BGStamp = bgStamp;
+    cache->BGExtPalStamp = bgExtPalStamp;
+    cache->PaletteStamp = GPU.PaletteCoherencyStamp;
+    cache->DispKey = dispKey;
+    cache->Valid = 1;
+    std::memset(cache->ValidSlots, 0, sizeof(cache->ValidSlots));
+    return true;
+}
+
+u32 SoftRenderer::TextBGTileRowCacheSlot(u64 key)
+{
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    return static_cast<u32>(key) & 0x0FFF;
+}
+
+void SoftRenderer::DecodeTextBGTileRow(TextBGTileRowCache& cache, u32 slot, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag)
+{
+    u32* dst = cache.Pixels[slot];
+
+    if (color256)
+    {
+        for (u32 x = 0; x < 8; x++)
+        {
+            const u32 tilex = hflip ? (7 - x) : x;
+            const u8 color = bgvram[(pixelsaddr + tilex) & bgvrammask];
+            dst[x] = color ? (RGB555ToInternal[pal[color] & 0x7FFF] | bgFlag) : 0;
+        }
+    }
+    else
+    {
+        for (u32 x = 0; x < 8; x++)
+        {
+            const u32 tilex = hflip ? (7 - x) : x;
+            const u8 pixels = bgvram[(pixelsaddr + (tilex >> 1)) & bgvrammask];
+            const u8 color = (tilex & 0x1) ? (pixels >> 4) : (pixels & 0x0F);
+            dst[x] = color ? (RGB555ToInternal[pal[color] & 0x7FFF] | bgFlag) : 0;
+        }
+    }
+
+    cache.Keys[slot] = key;
+    cache.ValidSlots[slot] = 1;
+}
+
+template<SoftRenderer::DrawPixel drawPixel>
+void SoftRenderer::ApplyTextBGTileRow(TextBGTileRowCache* tileCache, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag, u32 tilePos, u32 count, u32 dstPos, u32* cacheLine)
+{
+    const u32 slot = TextBGTileRowCacheSlot(key);
+    if (!tileCache->ValidSlots[slot] || tileCache->Keys[slot] != key)
+        DecodeTextBGTileRow(*tileCache, slot, key, bgvram, bgvrammask, pixelsaddr, hflip, color256, pal, bgFlag);
+
+    const u32* src = &tileCache->Pixels[slot][tilePos];
+    for (u32 i = 0; i < count; i++)
+    {
+        const u32 pixel = src[i];
+        if (pixel)
+        {
+            if (cacheLine)
+                cacheLine[dstPos + i] = pixel;
+            ApplyCachedBGPixel<drawPixel>(&BGOBJLine[dstPos + i], pixel);
+        }
+    }
+}
+
 template<bool windowMaskFull>
 void SoftRenderer::DrawBG_3D()
 {
@@ -1336,6 +1419,7 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
 
     u16 bgcnt = CurUnit->BGCnt[bgnum];
     TextBGFrameCache* frameCache = nullptr;
+    TextBGTileRowCache* tileCache = nullptr;
     u32* cacheLine = nullptr;
 
     if constexpr (!mosaic && windowMaskFull)
@@ -1358,6 +1442,7 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
             }
 
             memset(cacheLine, 0, 256 * sizeof(u32));
+            PrepareTextBGTileRowCache(bgnum, tileCache);
         }
     }
 
@@ -1421,6 +1506,47 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
 
         if constexpr (!mosaic && windowMaskFull)
         {
+            if (tileCache)
+            {
+                u16 xpos = xoff;
+                for (int i = 0; i < 256;)
+                {
+                    curtile = *(u16*)&bgvram[(tilemapaddr + ((xpos & 0xF8) >> 2) + ((xpos & widexmask) << 3)) & bgvrammask];
+
+                    u32 paletteKey;
+                    if (extpal)
+                    {
+                        curpal = CurUnit->GetBGExtPal(extpalslot, curtile>>12);
+                        paletteKey = (extpalslot << 4) | (curtile >> 12);
+                    }
+                    else
+                    {
+                        curpal = pal;
+                        paletteKey = 0;
+                    }
+
+                    pixelsaddr = tilesetaddr + ((curtile & 0x03FF) << 6)
+                                             + (((curtile & 0x0800) ? (7-(yoff&0x7)) : (yoff&0x7)) << 3);
+
+                    u32 tilePos = xpos & 0x7;
+                    u32 count = std::min<u32>(8 - tilePos, 256 - i);
+                    const bool hflip = (curtile & 0x0400) != 0;
+                    const u64 key = static_cast<u64>(pixelsaddr) |
+                                    (static_cast<u64>(hflip) << 32) |
+                                    (1ULL << 33) |
+                                    (static_cast<u64>(paletteKey) << 34);
+
+                    ApplyTextBGTileRow<drawPixel>(tileCache, key, bgvram, bgvrammask, pixelsaddr, hflip, true, curpal, bgFlag, tilePos, count, i, cacheLine);
+
+                    i += count;
+                    xpos += count;
+                }
+
+                if (frameCache)
+                    frameCache->ValidLines[line] = 1;
+                return;
+            }
+
             u16 xpos = xoff;
             for (int i = 0; i < 256;)
             {
@@ -1523,6 +1649,35 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
 
         if constexpr (!mosaic && windowMaskFull)
         {
+            if (tileCache)
+            {
+                u16 xpos = xoff;
+                for (int i = 0; i < 256;)
+                {
+                    curtile = *(u16*)&bgvram[((tilemapaddr + ((xpos & 0xF8) >> 2) + ((xpos & widexmask) << 3))) & bgvrammask];
+                    curpal = pal + ((curtile & 0xF000) >> 8);
+                    pixelsaddr = tilesetaddr + ((curtile & 0x03FF) << 5)
+                                             + (((curtile & 0x0800) ? (7-(yoff&0x7)) : (yoff&0x7)) << 2);
+
+                    u32 tilePos = xpos & 0x7;
+                    u32 count = std::min<u32>(8 - tilePos, 256 - i);
+                    const bool hflip = (curtile & 0x0400) != 0;
+                    const u32 paletteKey = (curtile >> 12) & 0xF;
+                    const u64 key = static_cast<u64>(pixelsaddr) |
+                                    (static_cast<u64>(hflip) << 32) |
+                                    (static_cast<u64>(paletteKey) << 34);
+
+                    ApplyTextBGTileRow<drawPixel>(tileCache, key, bgvram, bgvrammask, pixelsaddr, hflip, false, curpal, bgFlag, tilePos, count, i, cacheLine);
+
+                    i += count;
+                    xpos += count;
+                }
+
+                if (frameCache)
+                    frameCache->ValidLines[line] = 1;
+                return;
+            }
+
             u16 xpos = xoff;
             for (int i = 0; i < 256;)
             {
