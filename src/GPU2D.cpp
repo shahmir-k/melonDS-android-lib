@@ -95,6 +95,7 @@ void Unit::Reset()
 {
     Enabled = false;
     StateGeneration = 1;
+    VisibleState = {};
     DispCnt = 0;
     memset(BGCnt, 0, 4*2);
     memset(BGXPos, 0, 4*2);
@@ -140,6 +141,65 @@ void Unit::Reset()
     CaptureLatch = false;
 
     MasterBrightness = 0;
+}
+
+void Unit::SetEnabled(bool enable)
+{
+    if (Enabled == enable)
+        return;
+
+    Enabled = enable;
+    BumpDisplayState();
+}
+
+void Unit::BumpTextBGState(u32 bgnum)
+{
+    if (GPU.VCount < 192)
+        VisibleState.TextBG[bgnum]++;
+}
+
+void Unit::BumpAffineBGState(u32 bgnum)
+{
+    if (GPU.VCount < 192)
+        VisibleState.AffineBG[bgnum - 2]++;
+}
+
+void Unit::BumpBGState(u32 bgnum)
+{
+    BumpTextBGState(bgnum);
+    if (bgnum >= 2)
+        BumpAffineBGState(bgnum);
+}
+
+void Unit::BumpDisplayState()
+{
+    if (GPU.VCount >= 192)
+        return;
+
+    VisibleState.Display++;
+    for (u32 bgnum = 0; bgnum < 4; bgnum++)
+        VisibleState.TextBG[bgnum]++;
+    for (u32 bgnum = 2; bgnum < 4; bgnum++)
+        VisibleState.AffineBG[bgnum - 2]++;
+    VisibleState.WindowBlend++;
+}
+
+void Unit::BumpWindowBlendState()
+{
+    if (GPU.VCount < 192)
+        VisibleState.WindowBlend++;
+}
+
+void Unit::BumpMosaicState()
+{
+    if (GPU.VCount >= 192)
+        return;
+
+    VisibleState.Mosaic++;
+    for (u32 bgnum = 0; bgnum < 4; bgnum++)
+        VisibleState.TextBG[bgnum]++;
+    for (u32 bgnum = 2; bgnum < 4; bgnum++)
+        VisibleState.AffineBG[bgnum - 2]++;
 }
 
 void Unit::DoSavestate(Savestate* file)
@@ -274,18 +334,22 @@ void Unit::Write8(u32 addr, u8 val)
     switch (addr & 0x00000FFF)
     {
     case 0x000:
+        BumpDisplayState();
         DispCnt = (DispCnt & 0xFFFFFF00) | val;
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
     case 0x001:
+        BumpDisplayState();
         DispCnt = (DispCnt & 0xFFFF00FF) | (val << 8);
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
     case 0x002:
+        BumpDisplayState();
         DispCnt = (DispCnt & 0xFF00FFFF) | (val << 16);
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
     case 0x003:
+        BumpDisplayState();
         DispCnt = (DispCnt & 0x00FFFFFF) | (val << 24);
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
@@ -302,69 +366,74 @@ void Unit::Write8(u32 addr, u8 val)
 
     switch (addr & 0x00000FFF)
     {
-    case 0x008: BGCnt[0] = (BGCnt[0] & 0xFF00) | val; return;
-    case 0x009: BGCnt[0] = (BGCnt[0] & 0x00FF) | (val << 8); return;
-    case 0x00A: BGCnt[1] = (BGCnt[1] & 0xFF00) | val; return;
-    case 0x00B: BGCnt[1] = (BGCnt[1] & 0x00FF) | (val << 8); return;
-    case 0x00C: BGCnt[2] = (BGCnt[2] & 0xFF00) | val; return;
-    case 0x00D: BGCnt[2] = (BGCnt[2] & 0x00FF) | (val << 8); return;
-    case 0x00E: BGCnt[3] = (BGCnt[3] & 0xFF00) | val; return;
-    case 0x00F: BGCnt[3] = (BGCnt[3] & 0x00FF) | (val << 8); return;
+    case 0x008: BumpBGState(0); BGCnt[0] = (BGCnt[0] & 0xFF00) | val; return;
+    case 0x009: BumpBGState(0); BGCnt[0] = (BGCnt[0] & 0x00FF) | (val << 8); return;
+    case 0x00A: BumpBGState(1); BGCnt[1] = (BGCnt[1] & 0xFF00) | val; return;
+    case 0x00B: BumpBGState(1); BGCnt[1] = (BGCnt[1] & 0x00FF) | (val << 8); return;
+    case 0x00C: BumpBGState(2); BGCnt[2] = (BGCnt[2] & 0xFF00) | val; return;
+    case 0x00D: BumpBGState(2); BGCnt[2] = (BGCnt[2] & 0x00FF) | (val << 8); return;
+    case 0x00E: BumpBGState(3); BGCnt[3] = (BGCnt[3] & 0xFF00) | val; return;
+    case 0x00F: BumpBGState(3); BGCnt[3] = (BGCnt[3] & 0x00FF) | (val << 8); return;
 
-    case 0x010: BGXPos[0] = (BGXPos[0] & 0xFF00) | val; return;
-    case 0x011: BGXPos[0] = (BGXPos[0] & 0x00FF) | (val << 8); return;
-    case 0x012: BGYPos[0] = (BGYPos[0] & 0xFF00) | val; return;
-    case 0x013: BGYPos[0] = (BGYPos[0] & 0x00FF) | (val << 8); return;
-    case 0x014: BGXPos[1] = (BGXPos[1] & 0xFF00) | val; return;
-    case 0x015: BGXPos[1] = (BGXPos[1] & 0x00FF) | (val << 8); return;
-    case 0x016: BGYPos[1] = (BGYPos[1] & 0xFF00) | val; return;
-    case 0x017: BGYPos[1] = (BGYPos[1] & 0x00FF) | (val << 8); return;
-    case 0x018: BGXPos[2] = (BGXPos[2] & 0xFF00) | val; return;
-    case 0x019: BGXPos[2] = (BGXPos[2] & 0x00FF) | (val << 8); return;
-    case 0x01A: BGYPos[2] = (BGYPos[2] & 0xFF00) | val; return;
-    case 0x01B: BGYPos[2] = (BGYPos[2] & 0x00FF) | (val << 8); return;
-    case 0x01C: BGXPos[3] = (BGXPos[3] & 0xFF00) | val; return;
-    case 0x01D: BGXPos[3] = (BGXPos[3] & 0x00FF) | (val << 8); return;
-    case 0x01E: BGYPos[3] = (BGYPos[3] & 0xFF00) | val; return;
-    case 0x01F: BGYPos[3] = (BGYPos[3] & 0x00FF) | (val << 8); return;
+    case 0x010: BumpBGState(0); BGXPos[0] = (BGXPos[0] & 0xFF00) | val; return;
+    case 0x011: BumpBGState(0); BGXPos[0] = (BGXPos[0] & 0x00FF) | (val << 8); return;
+    case 0x012: BumpBGState(0); BGYPos[0] = (BGYPos[0] & 0xFF00) | val; return;
+    case 0x013: BumpBGState(0); BGYPos[0] = (BGYPos[0] & 0x00FF) | (val << 8); return;
+    case 0x014: BumpBGState(1); BGXPos[1] = (BGXPos[1] & 0xFF00) | val; return;
+    case 0x015: BumpBGState(1); BGXPos[1] = (BGXPos[1] & 0x00FF) | (val << 8); return;
+    case 0x016: BumpBGState(1); BGYPos[1] = (BGYPos[1] & 0xFF00) | val; return;
+    case 0x017: BumpBGState(1); BGYPos[1] = (BGYPos[1] & 0x00FF) | (val << 8); return;
+    case 0x018: BumpBGState(2); BGXPos[2] = (BGXPos[2] & 0xFF00) | val; return;
+    case 0x019: BumpBGState(2); BGXPos[2] = (BGXPos[2] & 0x00FF) | (val << 8); return;
+    case 0x01A: BumpBGState(2); BGYPos[2] = (BGYPos[2] & 0xFF00) | val; return;
+    case 0x01B: BumpBGState(2); BGYPos[2] = (BGYPos[2] & 0x00FF) | (val << 8); return;
+    case 0x01C: BumpBGState(3); BGXPos[3] = (BGXPos[3] & 0xFF00) | val; return;
+    case 0x01D: BumpBGState(3); BGXPos[3] = (BGXPos[3] & 0x00FF) | (val << 8); return;
+    case 0x01E: BumpBGState(3); BGYPos[3] = (BGYPos[3] & 0xFF00) | val; return;
+    case 0x01F: BumpBGState(3); BGYPos[3] = (BGYPos[3] & 0x00FF) | (val << 8); return;
 
-    case 0x040: Win0Coords[1] = val; return;
-    case 0x041: Win0Coords[0] = val; return;
-    case 0x042: Win1Coords[1] = val; return;
-    case 0x043: Win1Coords[0] = val; return;
+    case 0x040: BumpWindowBlendState(); Win0Coords[1] = val; return;
+    case 0x041: BumpWindowBlendState(); Win0Coords[0] = val; return;
+    case 0x042: BumpWindowBlendState(); Win1Coords[1] = val; return;
+    case 0x043: BumpWindowBlendState(); Win1Coords[0] = val; return;
 
-    case 0x044: Win0Coords[3] = val; return;
-    case 0x045: Win0Coords[2] = val; return;
-    case 0x046: Win1Coords[3] = val; return;
-    case 0x047: Win1Coords[2] = val; return;
+    case 0x044: BumpWindowBlendState(); Win0Coords[3] = val; return;
+    case 0x045: BumpWindowBlendState(); Win0Coords[2] = val; return;
+    case 0x046: BumpWindowBlendState(); Win1Coords[3] = val; return;
+    case 0x047: BumpWindowBlendState(); Win1Coords[2] = val; return;
 
-    case 0x048: WinCnt[0] = val; return;
-    case 0x049: WinCnt[1] = val; return;
-    case 0x04A: WinCnt[2] = val; return;
-    case 0x04B: WinCnt[3] = val; return;
+    case 0x048: BumpWindowBlendState(); WinCnt[0] = val; return;
+    case 0x049: BumpWindowBlendState(); WinCnt[1] = val; return;
+    case 0x04A: BumpWindowBlendState(); WinCnt[2] = val; return;
+    case 0x04B: BumpWindowBlendState(); WinCnt[3] = val; return;
 
     case 0x04C:
+        BumpMosaicState();
         BGMosaicSize[0] = val & 0xF;
         BGMosaicSize[1] = val >> 4;
         return;
     case 0x04D:
+        BumpMosaicState();
         OBJMosaicSize[0] = val & 0xF;
         OBJMosaicSize[1] = val >> 4;
         return;
 
-    case 0x050: BlendCnt = (BlendCnt & 0x3F00) | val; return;
-    case 0x051: BlendCnt = (BlendCnt & 0x00FF) | (val << 8); return;
+    case 0x050: BumpWindowBlendState(); BlendCnt = (BlendCnt & 0x3F00) | val; return;
+    case 0x051: BumpWindowBlendState(); BlendCnt = (BlendCnt & 0x00FF) | (val << 8); return;
     case 0x052:
+        BumpWindowBlendState();
         BlendAlpha = (BlendAlpha & 0x1F00) | (val & 0x1F);
         EVA = val & 0x1F;
         if (EVA > 16) EVA = 16;
         return;
     case 0x053:
+        BumpWindowBlendState();
         BlendAlpha = (BlendAlpha & 0x001F) | ((val & 0x1F) << 8);
         EVB = val & 0x1F;
         if (EVB > 16) EVB = 16;
         return;
     case 0x054:
+        BumpWindowBlendState();
         EVY = val & 0x1F;
         if (EVY > 16) EVY = 16;
         return;
@@ -380,10 +449,12 @@ void Unit::Write16(u32 addr, u16 val)
     switch (addr & 0x00000FFF)
     {
     case 0x000:
+        BumpDisplayState();
         DispCnt = (DispCnt & 0xFFFF0000) | val;
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
     case 0x002:
+        BumpDisplayState();
         DispCnt = (DispCnt & 0x0000FFFF) | (val << 16);
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
@@ -416,102 +487,118 @@ void Unit::Write16(u32 addr, u16 val)
 
     switch (addr & 0x00000FFF)
     {
-    case 0x008: BGCnt[0] = val; return;
-    case 0x00A: BGCnt[1] = val; return;
-    case 0x00C: BGCnt[2] = val; return;
-    case 0x00E: BGCnt[3] = val; return;
+    case 0x008: BumpBGState(0); BGCnt[0] = val; return;
+    case 0x00A: BumpBGState(1); BGCnt[1] = val; return;
+    case 0x00C: BumpBGState(2); BGCnt[2] = val; return;
+    case 0x00E: BumpBGState(3); BGCnt[3] = val; return;
 
-    case 0x010: BGXPos[0] = val; return;
-    case 0x012: BGYPos[0] = val; return;
-    case 0x014: BGXPos[1] = val; return;
-    case 0x016: BGYPos[1] = val; return;
-    case 0x018: BGXPos[2] = val; return;
-    case 0x01A: BGYPos[2] = val; return;
-    case 0x01C: BGXPos[3] = val; return;
-    case 0x01E: BGYPos[3] = val; return;
+    case 0x010: BumpBGState(0); BGXPos[0] = val; return;
+    case 0x012: BumpBGState(0); BGYPos[0] = val; return;
+    case 0x014: BumpBGState(1); BGXPos[1] = val; return;
+    case 0x016: BumpBGState(1); BGYPos[1] = val; return;
+    case 0x018: BumpBGState(2); BGXPos[2] = val; return;
+    case 0x01A: BumpBGState(2); BGYPos[2] = val; return;
+    case 0x01C: BumpBGState(3); BGXPos[3] = val; return;
+    case 0x01E: BumpBGState(3); BGYPos[3] = val; return;
 
-    case 0x020: BGRotA[0] = val; return;
-    case 0x022: BGRotB[0] = val; return;
-    case 0x024: BGRotC[0] = val; return;
-    case 0x026: BGRotD[0] = val; return;
+    case 0x020: BumpAffineBGState(2); BGRotA[0] = val; return;
+    case 0x022: BumpAffineBGState(2); BGRotB[0] = val; return;
+    case 0x024: BumpAffineBGState(2); BGRotC[0] = val; return;
+    case 0x026: BumpAffineBGState(2); BGRotD[0] = val; return;
     case 0x028:
+        BumpAffineBGState(2);
         BGXRef[0] = (BGXRef[0] & 0xFFFF0000) | val;
         if (GPU.VCount < 192) BGXRefInternal[0] = BGXRef[0];
         return;
     case 0x02A:
+        BumpAffineBGState(2);
         if (val & 0x0800) val |= 0xF000;
         BGXRef[0] = (BGXRef[0] & 0xFFFF) | (val << 16);
         if (GPU.VCount < 192) BGXRefInternal[0] = BGXRef[0];
         return;
     case 0x02C:
+        BumpAffineBGState(2);
         BGYRef[0] = (BGYRef[0] & 0xFFFF0000) | val;
         if (GPU.VCount < 192) BGYRefInternal[0] = BGYRef[0];
         return;
     case 0x02E:
+        BumpAffineBGState(2);
         if (val & 0x0800) val |= 0xF000;
         BGYRef[0] = (BGYRef[0] & 0xFFFF) | (val << 16);
         if (GPU.VCount < 192) BGYRefInternal[0] = BGYRef[0];
         return;
 
-    case 0x030: BGRotA[1] = val; return;
-    case 0x032: BGRotB[1] = val; return;
-    case 0x034: BGRotC[1] = val; return;
-    case 0x036: BGRotD[1] = val; return;
+    case 0x030: BumpAffineBGState(3); BGRotA[1] = val; return;
+    case 0x032: BumpAffineBGState(3); BGRotB[1] = val; return;
+    case 0x034: BumpAffineBGState(3); BGRotC[1] = val; return;
+    case 0x036: BumpAffineBGState(3); BGRotD[1] = val; return;
     case 0x038:
+        BumpAffineBGState(3);
         BGXRef[1] = (BGXRef[1] & 0xFFFF0000) | val;
         if (GPU.VCount < 192) BGXRefInternal[1] = BGXRef[1];
         return;
     case 0x03A:
+        BumpAffineBGState(3);
         if (val & 0x0800) val |= 0xF000;
         BGXRef[1] = (BGXRef[1] & 0xFFFF) | (val << 16);
         if (GPU.VCount < 192) BGXRefInternal[1] = BGXRef[1];
         return;
     case 0x03C:
+        BumpAffineBGState(3);
         BGYRef[1] = (BGYRef[1] & 0xFFFF0000) | val;
         if (GPU.VCount < 192) BGYRefInternal[1] = BGYRef[1];
         return;
     case 0x03E:
+        BumpAffineBGState(3);
         if (val & 0x0800) val |= 0xF000;
         BGYRef[1] = (BGYRef[1] & 0xFFFF) | (val << 16);
         if (GPU.VCount < 192) BGYRefInternal[1] = BGYRef[1];
         return;
 
     case 0x040:
+        BumpWindowBlendState();
         Win0Coords[1] = val & 0xFF;
         Win0Coords[0] = val >> 8;
         return;
     case 0x042:
+        BumpWindowBlendState();
         Win1Coords[1] = val & 0xFF;
         Win1Coords[0] = val >> 8;
         return;
 
     case 0x044:
+        BumpWindowBlendState();
         Win0Coords[3] = val & 0xFF;
         Win0Coords[2] = val >> 8;
         return;
     case 0x046:
+        BumpWindowBlendState();
         Win1Coords[3] = val & 0xFF;
         Win1Coords[2] = val >> 8;
         return;
 
     case 0x048:
+        BumpWindowBlendState();
         WinCnt[0] = val & 0xFF;
         WinCnt[1] = val >> 8;
         return;
     case 0x04A:
+        BumpWindowBlendState();
         WinCnt[2] = val & 0xFF;
         WinCnt[3] = val >> 8;
         return;
 
     case 0x04C:
+        BumpMosaicState();
         BGMosaicSize[0] = val & 0xF;
         BGMosaicSize[1] = (val >> 4) & 0xF;
         OBJMosaicSize[0] = (val >> 8) & 0xF;
         OBJMosaicSize[1] = val >> 12;
         return;
 
-    case 0x050: BlendCnt = val & 0x3FFF; return;
+    case 0x050: BumpWindowBlendState(); BlendCnt = val & 0x3FFF; return;
     case 0x052:
+        BumpWindowBlendState();
         BlendAlpha = val & 0x1F1F;
         EVA = val & 0x1F;
         if (EVA > 16) EVA = 16;
@@ -519,6 +606,7 @@ void Unit::Write16(u32 addr, u16 val)
         if (EVB > 16) EVB = 16;
         return;
     case 0x054:
+        BumpWindowBlendState();
         EVY = val & 0x1F;
         if (EVY > 16) EVY = 16;
         return;
@@ -534,6 +622,7 @@ void Unit::Write32(u32 addr, u32 val)
     switch (addr & 0x00000FFF)
     {
     case 0x000:
+        BumpDisplayState();
         DispCnt = val;
         if (Num) DispCnt &= 0xC0B1FFF7;
         return;
@@ -555,22 +644,26 @@ void Unit::Write32(u32 addr, u32 val)
         switch (addr & 0x00000FFF)
         {
         case 0x028:
+            BumpAffineBGState(2);
             if (val & 0x08000000) val |= 0xF0000000;
             BGXRef[0] = val;
             if (GPU.VCount < 192) BGXRefInternal[0] = BGXRef[0];
             return;
         case 0x02C:
+            BumpAffineBGState(2);
             if (val & 0x08000000) val |= 0xF0000000;
             BGYRef[0] = val;
             if (GPU.VCount < 192) BGYRefInternal[0] = BGYRef[0];
             return;
 
         case 0x038:
+            BumpAffineBGState(3);
             if (val & 0x08000000) val |= 0xF0000000;
             BGXRef[1] = val;
             if (GPU.VCount < 192) BGXRefInternal[1] = BGXRef[1];
             return;
         case 0x03C:
+            BumpAffineBGState(3);
             if (val & 0x08000000) val |= 0xF0000000;
             BGYRef[1] = val;
             if (GPU.VCount < 192) BGYRefInternal[1] = BGYRef[1];
@@ -618,6 +711,7 @@ void Unit::VBlankEnd()
     BGXRefInternal[1] = BGXRef[1];
     BGYRefInternal[0] = BGYRef[0];
     BGYRefInternal[1] = BGYRef[1];
+    VisibleState = {};
 
     BGMosaicY = 0;
     BGMosaicYMax = BGMosaicSize[1];

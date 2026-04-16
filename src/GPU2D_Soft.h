@@ -48,7 +48,9 @@ private:
 
     struct TextBGFrameCache
     {
-        u32 StateGeneration = 0;
+        u32 TextBGVersion = 0;
+        u32 DisplayVersion = 0;
+        u32 MosaicVersion = 0;
         u32 BGStamp = 0;
         u32 BGExtPalStamp = 0;
         u32 PaletteStamp = 0;
@@ -75,7 +77,11 @@ private:
     struct ComposedLineCache
     {
         u32 Epoch = 0;
-        u32 StateGeneration = 0;
+        u32 TextBGVersion[4] {};
+        u32 AffineBGVersion[2] {};
+        u32 DisplayVersion = 0;
+        u32 WindowBlendVersion = 0;
+        u32 MosaicVersion = 0;
         u32 BGStamp = 0;
         u32 BGExtPalStamp = 0;
         u32 OBJStamp = 0;
@@ -149,7 +155,11 @@ private:
         };
 
         u32 Epoch = 0;
-        u32 StateGeneration = 0;
+        u32 TextBGVersion[4] {};
+        u32 AffineBGVersion[2] {};
+        u32 DisplayVersion = 0;
+        u32 WindowBlendVersion = 0;
+        u32 MosaicVersion = 0;
         u32 BGStamp = 0;
         u32 BGExtPalStamp = 0;
         u32 OBJStamp = 0;

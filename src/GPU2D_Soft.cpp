@@ -408,7 +408,11 @@ const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
 
     if (prepared.Valid &&
         prepared.Epoch == GPU.Renderer2DCacheEpoch &&
-        prepared.StateGeneration == CurUnit->StateGeneration &&
+        std::memcmp(prepared.TextBGVersion, CurUnit->VisibleState.TextBG, sizeof(prepared.TextBGVersion)) == 0 &&
+        std::memcmp(prepared.AffineBGVersion, CurUnit->VisibleState.AffineBG, sizeof(prepared.AffineBGVersion)) == 0 &&
+        prepared.DisplayVersion == CurUnit->VisibleState.Display &&
+        prepared.WindowBlendVersion == CurUnit->VisibleState.WindowBlend &&
+        prepared.MosaicVersion == CurUnit->VisibleState.Mosaic &&
         prepared.BGStamp == bgStamp &&
         prepared.BGExtPalStamp == bgExtPalStamp &&
         prepared.OBJStamp == objStamp &&
@@ -423,7 +427,11 @@ const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
     }
 
     prepared.Epoch = GPU.Renderer2DCacheEpoch;
-    prepared.StateGeneration = CurUnit->StateGeneration;
+    std::memcpy(prepared.TextBGVersion, CurUnit->VisibleState.TextBG, sizeof(prepared.TextBGVersion));
+    std::memcpy(prepared.AffineBGVersion, CurUnit->VisibleState.AffineBG, sizeof(prepared.AffineBGVersion));
+    prepared.DisplayVersion = CurUnit->VisibleState.Display;
+    prepared.WindowBlendVersion = CurUnit->VisibleState.WindowBlend;
+    prepared.MosaicVersion = CurUnit->VisibleState.Mosaic;
     prepared.BGStamp = bgStamp;
     prepared.BGExtPalStamp = bgExtPalStamp;
     prepared.OBJStamp = objStamp;
@@ -981,7 +989,11 @@ bool SoftRenderer::ComposedLineCacheMatches(u32 line, bool compareNumSprites)
         return false;
 
     if (cache.Epoch != prepared.Epoch ||
-        cache.StateGeneration != prepared.StateGeneration ||
+        std::memcmp(cache.TextBGVersion, prepared.TextBGVersion, sizeof(cache.TextBGVersion)) != 0 ||
+        std::memcmp(cache.AffineBGVersion, prepared.AffineBGVersion, sizeof(cache.AffineBGVersion)) != 0 ||
+        cache.DisplayVersion != prepared.DisplayVersion ||
+        cache.WindowBlendVersion != prepared.WindowBlendVersion ||
+        cache.MosaicVersion != prepared.MosaicVersion ||
         cache.BGStamp != prepared.BGStamp ||
         cache.BGExtPalStamp != prepared.BGExtPalStamp ||
         cache.OBJStamp != prepared.OBJStamp ||
@@ -1028,7 +1040,11 @@ void SoftRenderer::StoreComposedLineCache(u32 line, const s32 bgXRefInternal[2],
     const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
     ComposedLineCache& cache = LineCache[CurUnit->Num][line];
     cache.Epoch = prepared.Epoch;
-    cache.StateGeneration = prepared.StateGeneration;
+    std::memcpy(cache.TextBGVersion, prepared.TextBGVersion, sizeof(cache.TextBGVersion));
+    std::memcpy(cache.AffineBGVersion, prepared.AffineBGVersion, sizeof(cache.AffineBGVersion));
+    cache.DisplayVersion = prepared.DisplayVersion;
+    cache.WindowBlendVersion = prepared.WindowBlendVersion;
+    cache.MosaicVersion = prepared.MosaicVersion;
     cache.BGStamp = prepared.BGStamp;
     cache.BGExtPalStamp = prepared.BGExtPalStamp;
     cache.OBJStamp = prepared.OBJStamp;
@@ -1387,7 +1403,9 @@ bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, T
     cache = &TextBGCache[CurUnit->Num][bgnum];
     cacheLine = cache->Pixels[line];
 
-    bool cacheMatches = cache->StateGeneration == prepared.StateGeneration &&
+    bool cacheMatches = cache->TextBGVersion == prepared.TextBGVersion[bgnum] &&
+                        cache->DisplayVersion == prepared.DisplayVersion &&
+                        cache->MosaicVersion == prepared.MosaicVersion &&
                         cache->BGStamp == prepared.BGStamp &&
                         cache->BGExtPalStamp == prepared.BGExtPalStamp &&
                         cache->PaletteStamp == prepared.PaletteStamp &&
@@ -1398,7 +1416,9 @@ bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, T
 
     if (!cacheMatches)
     {
-        cache->StateGeneration = prepared.StateGeneration;
+        cache->TextBGVersion = prepared.TextBGVersion[bgnum];
+        cache->DisplayVersion = prepared.DisplayVersion;
+        cache->MosaicVersion = prepared.MosaicVersion;
         cache->BGStamp = prepared.BGStamp;
         cache->BGExtPalStamp = prepared.BGExtPalStamp;
         cache->PaletteStamp = prepared.PaletteStamp;
