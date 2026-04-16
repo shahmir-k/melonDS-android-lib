@@ -1396,24 +1396,36 @@ __attribute((always_inline)) inline void SoftRenderer::ApplyCachedBGPixel(u32* d
     }
 }
 
-bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, TextBGFrameCache*& cache, u32*& cacheLine)
+bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, TextBGFrameCache*& cache, u32*& cacheLine)
 {
     const PreparedFrameState& prepared = GetPreparedFrameState();
     const auto& textBG = prepared.TextBG[bgnum];
     cache = &TextBGCache[CurUnit->Num][bgnum];
     cacheLine = cache->Pixels[line];
 
-    bool cacheMatches = cache->BGStamp == prepared.BGStamp &&
+    bool cacheMatches = cache->TextBGVersion == prepared.TextBGVersion[bgnum] &&
+                        cache->DisplayVersion == prepared.DisplayVersion &&
+                        cache->MosaicVersion == prepared.MosaicVersion &&
+                        cache->BGStamp == prepared.BGStamp &&
                         cache->BGExtPalStamp == prepared.BGExtPalStamp &&
                         cache->PaletteStamp == prepared.PaletteStamp &&
-                        std::memcmp(&cache->State, &textBG, sizeof(textBG)) == 0;
+                        cache->DispCnt == prepared.DispCnt &&
+                        cache->BGCnt == bgcnt &&
+                        cache->BGXPos == textBG.BGXPos &&
+                        cache->BGYPos == textBG.BGYPos;
 
     if (!cacheMatches)
     {
+        cache->TextBGVersion = prepared.TextBGVersion[bgnum];
+        cache->DisplayVersion = prepared.DisplayVersion;
+        cache->MosaicVersion = prepared.MosaicVersion;
         cache->BGStamp = prepared.BGStamp;
         cache->BGExtPalStamp = prepared.BGExtPalStamp;
         cache->PaletteStamp = prepared.PaletteStamp;
-        cache->State = textBG;
+        cache->DispCnt = prepared.DispCnt;
+        cache->BGCnt = bgcnt;
+        cache->BGXPos = textBG.BGXPos;
+        cache->BGYPos = textBG.BGYPos;
         memset(cache->ValidLines, 0, sizeof(cache->ValidLines));
     }
 
@@ -1554,7 +1566,7 @@ void SoftRenderer::DrawBG_Text(u32 line, u32 bgnum)
         bool cacheEligible = prepared.TextBGLineCacheEligible && line < 192;
         if (cacheEligible)
         {
-            if (PrepareTextBGFrameCacheLine(line, bgnum, frameCache, cacheLine))
+            if (PrepareTextBGFrameCacheLine(line, bgnum, bgcnt, frameCache, cacheLine))
             {
                 for (int i = 0; i < 256; i++)
                 {
