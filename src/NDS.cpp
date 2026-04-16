@@ -1926,6 +1926,8 @@ void NDS::StopDMAs(u32 cpu, u32 mode)
 void NDS::DivDone(u32 param)
 {
     DivCnt &= ~0xC000;
+    SchedList[Event_Div].Timestamp = 0;
+    __atomic_fetch_and(&SchedListMask, ~(1u << Event_Div), __ATOMIC_ACQ_REL);
 
     switch (DivCnt & 0x0003)
     {
@@ -2001,6 +2003,19 @@ void NDS::DivDone(u32 param)
         DivCnt |= 0x4000;
 }
 
+void NDS::MaybeFinishDiv()
+{
+    if (!(DivCnt & 0x8000))
+        return;
+
+    u64 deadline = SchedList[Event_Div].Timestamp;
+    if (deadline == 0)
+        return;
+
+    if ((ARM9Timestamp >> ARM9ClockShift) >= deadline)
+        DivDone(0);
+}
+
 void NDS::StartDiv()
 {
     DivCnt |= 0x8000;
@@ -2008,8 +2023,7 @@ void NDS::StartDiv()
     evt.Timestamp = (ARM9Timestamp >> ARM9ClockShift) + (((DivCnt & 0x3) == 0) ? 18 : 34);
     evt.FuncID = 0;
     evt.Param = 0;
-    __atomic_fetch_or(&SchedListMask, 1u << Event_Div, __ATOMIC_ACQ_REL);
-    Reschedule(evt.Timestamp);
+    __atomic_fetch_and(&SchedListMask, ~(1u << Event_Div), __ATOMIC_ACQ_REL);
 }
 
 // http://stackoverflow.com/questions/1100090/looking-for-an-efficient-integer-square-root-algorithm-for-arm-thumb2
@@ -2022,6 +2036,8 @@ void NDS::SqrtDone(u32 param)
     u32 nbits, topshift;
 
     SqrtCnt &= ~0x8000;
+    SchedList[Event_Sqrt].Timestamp = 0;
+    __atomic_fetch_and(&SchedListMask, ~(1u << Event_Sqrt), __ATOMIC_ACQ_REL);
 
     if (SqrtCnt & 0x0001)
     {
@@ -2053,6 +2069,19 @@ void NDS::SqrtDone(u32 param)
     SqrtRes = res;
 }
 
+void NDS::MaybeFinishSqrt()
+{
+    if (!(SqrtCnt & 0x8000))
+        return;
+
+    u64 deadline = SchedList[Event_Sqrt].Timestamp;
+    if (deadline == 0)
+        return;
+
+    if ((ARM9Timestamp >> ARM9ClockShift) >= deadline)
+        SqrtDone(0);
+}
+
 void NDS::StartSqrt()
 {
     SqrtCnt |= 0x8000;
@@ -2060,8 +2089,7 @@ void NDS::StartSqrt()
     evt.Timestamp = (ARM9Timestamp >> ARM9ClockShift) + 13;
     evt.FuncID = 0;
     evt.Param = 0;
-    __atomic_fetch_or(&SchedListMask, 1u << Event_Sqrt, __ATOMIC_ACQ_REL);
-    Reschedule(evt.Timestamp);
+    __atomic_fetch_and(&SchedListMask, ~(1u << Event_Sqrt), __ATOMIC_ACQ_REL);
 }
 
 
@@ -2954,6 +2982,11 @@ bool NDS::ARM7GetMemRegion(u32 addr, bool write, MemRegion* region)
 
 u8 NDS::ARM9IORead8(u32 addr)
 {
+    if (addr >= 0x04000280 && addr < 0x040002B0)
+        MaybeFinishDiv();
+    else if (addr >= 0x040002B0 && addr < 0x040002C0)
+        MaybeFinishSqrt();
+
     switch (addr)
     {
     case 0x04000130: LagFrameFlag = false; return KeyInput & 0xFF;
@@ -3087,6 +3120,11 @@ u8 NDS::ARM9IORead8(u32 addr)
 
 u16 NDS::ARM9IORead16(u32 addr)
 {
+    if (addr >= 0x04000280 && addr < 0x040002B0)
+        MaybeFinishDiv();
+    else if (addr >= 0x040002B0 && addr < 0x040002C0)
+        MaybeFinishSqrt();
+
     switch (addr)
     {
     case 0x04000004: return GPU.DispStat[0];
@@ -3245,6 +3283,11 @@ u16 NDS::ARM9IORead16(u32 addr)
 
 u32 NDS::ARM9IORead32(u32 addr)
 {
+    if (addr >= 0x04000280 && addr < 0x040002B0)
+        MaybeFinishDiv();
+    else if (addr >= 0x040002B0 && addr < 0x040002C0)
+        MaybeFinishSqrt();
+
     switch (addr)
     {
     case 0x04000004: return GPU.DispStat[0] | (GPU.VCount << 16);

@@ -577,8 +577,10 @@ protected:
     void TimerStart(u32 id, u16 cnt);
     void StartDiv();
     void DivDone(u32 param);
+    void MaybeFinishDiv();
     void SqrtDone(u32 param);
     void StartSqrt();
+    void MaybeFinishSqrt();
     void RunTimer(u32 tid, s32 cycles);
     void MaybeRunTimers(u32 cpu);
     void UpdateTimerNextOverflow(u32 cpu);
