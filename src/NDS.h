@@ -73,6 +73,8 @@ enum
     Event_SPITransfer,
     Event_Div,
     Event_Sqrt,
+    Event_Timer9,
+    Event_Timer7,
 
     // DSi
     Event_DSi_SDMMCTransfer,
@@ -575,6 +577,7 @@ protected:
     void HandleTimerOverflow(u32 tid);
     u16 TimerGetCounter(u32 timer);
     void TimerStart(u32 id, u16 cnt);
+    void TimerOverflowEvent(u32 cpu);
     void StartDiv();
     void DivDone(u32 param);
     void MaybeFinishDiv();
@@ -583,6 +586,7 @@ protected:
     void MaybeFinishSqrt();
     void RunTimer(u32 tid, s32 cycles);
     void MaybeRunTimers(u32 cpu);
+    void SyncTimerOverflowEvent(u32 cpu);
     void UpdateTimerNextOverflow(u32 cpu);
     void UpdateWifiTimings();
     void SetWifiWaitCnt(u16 val);

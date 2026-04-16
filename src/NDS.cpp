@@ -148,6 +148,8 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
 {
     RegisterEventFuncs(Event_Div, this, {MakeEventThunk(NDS, DivDone)});
     RegisterEventFuncs(Event_Sqrt, this, {MakeEventThunk(NDS, SqrtDone)});
+    RegisterEventFuncs(Event_Timer9, this, {MakeEventThunk(NDS, TimerOverflowEvent)});
+    RegisterEventFuncs(Event_Timer7, this, {MakeEventThunk(NDS, TimerOverflowEvent)});
 
     MainRAM = JIT.Memory.GetMainRAM();
     SharedWRAM = JIT.Memory.GetSharedWRAM();
@@ -174,6 +176,8 @@ NDS::~NDS() noexcept
 
     UnregisterEventFuncs(Event_Div);
     UnregisterEventFuncs(Event_Sqrt);
+    UnregisterEventFuncs(Event_Timer9);
+    UnregisterEventFuncs(Event_Timer7);
     // The destructor for each component is automatically called by the compiler
 }
 
@@ -1021,7 +1025,6 @@ void NDS::ARM7ThreadFunc()
                 }
             }
 
-            MaybeRunTimers(1);
         }
 
         {
@@ -1124,7 +1127,6 @@ u32 NDS::RunFrame()
                     ARM9.Execute<cpuMode>();
                 }
 
-                MaybeRunTimers(0);
                 GPU.GPU3D.Run();
 
                 target = ARM9Timestamp >> ARM9ClockShift;
@@ -1168,7 +1170,6 @@ u32 NDS::RunFrame()
                         ARM7.Execute<cpuMode>();
                     }
 
-                    MaybeRunTimers(1);
                 }
 #endif
 
@@ -1792,6 +1793,7 @@ void NDS::UpdateTimerNextOverflow(u32 cpu)
     if (!timermask)
     {
         TimerNextOverflow[cpu] = UINT64_MAX;
+        SyncTimerOverflowEvent(cpu);
         return;
     }
 
@@ -1813,6 +1815,7 @@ void NDS::UpdateTimerNextOverflow(u32 cpu)
     }
 
     TimerNextOverflow[cpu] = next;
+    SyncTimerOverflowEvent(cpu);
 }
 
 void NDS::MaybeRunTimers(u32 cpu)
@@ -1822,6 +1825,31 @@ void NDS::MaybeRunTimers(u32 cpu)
         return;
 
     RunTimers(cpu);
+}
+
+void NDS::TimerOverflowEvent(u32 cpu)
+{
+    RunTimers(cpu);
+}
+
+void NDS::SyncTimerOverflowEvent(u32 cpu)
+{
+    const u32 eventId = cpu == 0 ? Event_Timer9 : Event_Timer7;
+    SchedEvent& evt = SchedList[eventId];
+
+    if (TimerNextOverflow[cpu] == UINT64_MAX)
+    {
+        evt.Timestamp = 0;
+        __atomic_fetch_and(&SchedListMask, ~(1u << eventId), __ATOMIC_ACQ_REL);
+        return;
+    }
+
+    evt.Timestamp = TimerNextOverflow[cpu];
+    evt.FuncID = 0;
+    evt.Param = cpu;
+
+    __atomic_fetch_or(&SchedListMask, 1u << eventId, __ATOMIC_ACQ_REL);
+    Reschedule(evt.Timestamp);
 }
 
 void NDS::RunTimers(u32 cpu)
