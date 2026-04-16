@@ -46,18 +46,29 @@ private:
     alignas(8) u32 OBJLine[2][256];
     alignas(8) u8 OBJWindow[2][256];
 
-    struct TextBGFrameCache
+    struct PreparedTextBGState
     {
-        u32 TextBGVersion = 0;
-        u32 DisplayVersion = 0;
-        u32 MosaicVersion = 0;
-        u32 BGStamp = 0;
-        u32 BGExtPalStamp = 0;
-        u32 PaletteStamp = 0;
-        u32 DispCnt = 0;
         u16 BGCnt = 0;
         u16 BGXPos = 0;
         u16 BGYPos = 0;
+        u16 PaletteBaseOffset = 0;
+        u8 ExtPalSlot = 0;
+        u8 Color256 = 0;
+        u8 ExtPalEnabled = 0;
+        u32 TileDispKey = 0;
+        u32 TileSetAddr = 0;
+        u32 TileMapBase = 0;
+        u32 WideXMask = 0;
+        u32 BGWindowBit = 0;
+        u32 BGFlag = 0;
+    };
+
+    struct TextBGFrameCache
+    {
+        u32 BGStamp = 0;
+        u32 BGExtPalStamp = 0;
+        u32 PaletteStamp = 0;
+        PreparedTextBGState State {};
         u8 ValidLines[192] {};
         alignas(64) u32 Pixels[192][256] {};
     };
@@ -137,23 +148,6 @@ private:
 
     struct PreparedFrameState
     {
-        struct PreparedTextBGState
-        {
-            u16 BGCnt = 0;
-            u16 BGXPos = 0;
-            u16 BGYPos = 0;
-            u16 PaletteBaseOffset = 0;
-            u8 ExtPalSlot = 0;
-            u8 Color256 = 0;
-            u8 ExtPalEnabled = 0;
-            u32 TileDispKey = 0;
-            u32 TileSetAddr = 0;
-            u32 TileMapBase = 0;
-            u32 WideXMask = 0;
-            u32 BGWindowBit = 0;
-            u32 BGFlag = 0;
-        };
-
         u32 Epoch = 0;
         u32 TextBGVersion[4] {};
         u32 AffineBGVersion[2] {};
@@ -277,7 +271,7 @@ private:
 
     typedef void (*DrawPixel)(u32* dst, u16 color, u32 flag);
     template<DrawPixel drawPixel> static void ApplyCachedBGPixel(u32* dst, u32 pixel);
-    bool PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, TextBGFrameCache*& cache, u32*& cacheLine);
+    bool PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, TextBGFrameCache*& cache, u32*& cacheLine);
     bool PrepareTextBGTileRowCache(u32 bgnum, TextBGTileRowCache*& cache);
     static u32 TextBGTileRowCacheSlot(u64 key);
     void DecodeTextBGTileRow(TextBGTileRowCache& cache, u32 slot, u64 key, u8* bgvram, u32 bgvrammask, u32 pixelsaddr, bool hflip, bool color256, const u16* pal, u32 bgFlag);
