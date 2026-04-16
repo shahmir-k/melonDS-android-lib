@@ -35,6 +35,7 @@
 #include "Platform.h"
 #include "FreeBIOS.h"
 #include "Args.h"
+#include "LiteProfile.h"
 #include "version.h"
 
 #include "DSi.h"
@@ -581,6 +582,7 @@ void NDS::Reset()
         evt.Param = 0;
     }
     SchedListMask = 0;
+    NextSchedEventTimestamp = UINT64_MAX;
 
     KeyInput = 0x007F03FF;
     KeyCnt[0] = 0;
@@ -814,6 +816,7 @@ bool NDS::DoSavestate(Savestate* file)
 
         UpdateTimerNextOverflow(0);
         UpdateTimerNextOverflow(1);
+        RecomputeNextSchedEventTimestamp();
 
 #ifdef JIT_ENABLED
         JIT.Reset();
@@ -867,18 +870,8 @@ void NDS::SetARM9BIOS(const std::array<u8, ARM9BIOSSize>& bios) noexcept
 
 u64 NDS::NextTarget()
 {
-    u64 minEvent = UINT64_MAX;
-
-    u32 mask = SchedListMask;
-    while (mask)
-    {
-        int i = __builtin_ctz(mask);
-        if (SchedList[i].Timestamp < minEvent)
-            minEvent = SchedList[i].Timestamp;
-        mask &= mask - 1;
-    }
-
     u64 max = SysTimestamp + kMaxIterationCycles;
+    u64 minEvent = NextSchedEventTimestamp;
 
     if (minEvent < max + kIterationCycleMargin)
         return minEvent;
@@ -889,6 +882,12 @@ u64 NDS::NextTarget()
 void NDS::RunSystem(u64 timestamp)
 {
     SysTimestamp = timestamp;
+
+    if (timestamp < NextSchedEventTimestamp)
+    {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.RunSystemFastSkips);
+        return;
+    }
 
     u32 mask = SchedListMask;
     for (int i = 0; i < Event_MAX; i++)
@@ -908,6 +907,8 @@ void NDS::RunSystem(u64 timestamp)
 
         mask >>= 1;
     }
+
+    RecomputeNextSchedEventTimestamp();
 }
 
 u64 NDS::NextTargetSleep()
@@ -967,6 +968,8 @@ void NDS::RunSystemSleep(u64 timestamp)
 
         mask >>= 1;
     }
+
+    RecomputeNextSchedEventTimestamp();
 }
 
 #ifdef LITEV_ARM7_THREAD
@@ -996,6 +999,7 @@ void NDS::ARM7ThreadFunc()
 
             if (CPUStop & CPUStop_DMA7)
             {
+                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
                 DMAs[4].Run();
                 DMAs[5].Run();
                 DMAs[6].Run();
@@ -1008,6 +1012,7 @@ void NDS::ARM7ThreadFunc()
             }
             else
             {
+                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
                 switch (arm7CPUMode)
                 {
 #ifdef JIT_ENABLED
@@ -1045,6 +1050,7 @@ u32 NDS::RunFrame()
 #endif
 
     FrameStartTimestamp = SysTimestamp;
+    LiteProfile::ResetFrame();
 
     GPU.TotalScanlines = 0;
 
@@ -1097,6 +1103,11 @@ u32 NDS::RunFrame()
             while (Running && GPU.TotalScanlines==0)
             {
                 u64 target = NextTarget();
+                LiteProfile::AddAtomic(LiteProfile::gFrame.SchedulerIterations);
+                if (target == SysTimestamp + kMaxIterationCycles)
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.SchedulerCappedIterations);
+                else
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.SchedulerEventIterations);
                 ARM9Target = target << ARM9ClockShift;
                 CurCPU = 0;
 #ifdef LITEV_ARM7_THREAD
@@ -1106,12 +1117,14 @@ u32 NDS::RunFrame()
                 if (CPUStop & CPUStop_GXStall)
                 {
                     // GXFIFO stall
+                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9ExecNs);
                     s32 cycles = GPU.GPU3D.CyclesToRunFor();
 
                     ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
                 }
                 else if (CPUStop & CPUStop_DMA9)
                 {
+                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9ExecNs);
                     DMAs[0].Run();
                     if (!(CPUStop & CPUStop_GXStall)) DMAs[1].Run();
                     if (!(CPUStop & CPUStop_GXStall)) DMAs[2].Run();
@@ -1124,10 +1137,14 @@ u32 NDS::RunFrame()
                 }
                 else
                 {
+                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9ExecNs);
                     ARM9.Execute<cpuMode>();
                 }
 
-                GPU.GPU3D.Run();
+                {
+                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRunNs);
+                    GPU.GPU3D.Run();
+                }
 
                 target = ARM9Timestamp >> ARM9ClockShift;
 #ifdef LITEV_ARM7_THREAD
@@ -1141,10 +1158,12 @@ u32 NDS::RunFrame()
 
                 // Wait for ARM7 to finish before processing scheduled events.
                 {
+                    const uint64_t waitStart = LiteProfile::NowNs();
                     std::unique_lock<std::mutex> lock(arm7Mutex);
                     arm7Done.wait(lock, [this] {
                         return arm7WorkDone.load(std::memory_order_relaxed);
                     });
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM7WaitNs, LiteProfile::NowNs() - waitStart);
                 }
 #else
                 CurCPU = 1;
@@ -1155,6 +1174,7 @@ u32 NDS::RunFrame()
 
                     if (CPUStop & CPUStop_DMA7)
                     {
+                        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
                         DMAs[4].Run();
                         DMAs[5].Run();
                         DMAs[6].Run();
@@ -1167,13 +1187,17 @@ u32 NDS::RunFrame()
                     }
                     else
                     {
+                        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
                         ARM7.Execute<cpuMode>();
                     }
 
                 }
 #endif
 
-                RunSystem(target);
+                {
+                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.RunSystemNs);
+                    RunSystem(target);
+                }
 
                 if (CPUStop & CPUStop_Sleep)
                 {
@@ -1203,6 +1227,8 @@ u32 NDS::RunFrame()
     NumFrames++;
     if (LagFrameFlag)
         NumLagFrames++;
+
+    LiteProfile::EndFrame();
 
     if (Running)
         return GPU.TotalScanlines;
@@ -1240,6 +1266,22 @@ void NDS::Reschedule(u64 target)
         if (target < ARM7Target)
             ARM7Target = target;
     }
+}
+
+void NDS::RecomputeNextSchedEventTimestamp()
+{
+    u64 minEvent = UINT64_MAX;
+
+    u32 mask = SchedListMask;
+    while (mask)
+    {
+        int i = __builtin_ctz(mask);
+        if (SchedList[i].Timestamp < minEvent)
+            minEvent = SchedList[i].Timestamp;
+        mask &= mask - 1;
+    }
+
+    NextSchedEventTimestamp = minEvent;
 }
 
 void NDS::RegisterEventFuncs(u32 id, void* that, const std::initializer_list<EventFunc>& funcs)
@@ -1288,6 +1330,7 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
     evt.Param = param;
 
     __atomic_fetch_or(&SchedListMask, 1u<<id, __ATOMIC_ACQ_REL);
+    RecomputeNextSchedEventTimestamp();
 
     Reschedule(evt.Timestamp);
 }
@@ -1295,6 +1338,7 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
 void NDS::CancelEvent(u32 id)
 {
     SchedListMask &= ~(1<<id);
+    RecomputeNextSchedEventTimestamp();
 }
 
 
@@ -1841,6 +1885,7 @@ void NDS::SyncTimerOverflowEvent(u32 cpu)
     {
         evt.Timestamp = 0;
         __atomic_fetch_and(&SchedListMask, ~(1u << eventId), __ATOMIC_ACQ_REL);
+        RecomputeNextSchedEventTimestamp();
         return;
     }
 
@@ -1849,6 +1894,7 @@ void NDS::SyncTimerOverflowEvent(u32 cpu)
     evt.Param = cpu;
 
     __atomic_fetch_or(&SchedListMask, 1u << eventId, __ATOMIC_ACQ_REL);
+    RecomputeNextSchedEventTimestamp();
     Reschedule(evt.Timestamp);
 }
 
@@ -1956,6 +2002,7 @@ void NDS::DivDone(u32 param)
     DivCnt &= ~0xC000;
     SchedList[Event_Div].Timestamp = 0;
     __atomic_fetch_and(&SchedListMask, ~(1u << Event_Div), __ATOMIC_ACQ_REL);
+    RecomputeNextSchedEventTimestamp();
 
     switch (DivCnt & 0x0003)
     {
@@ -2052,6 +2099,7 @@ void NDS::StartDiv()
     evt.FuncID = 0;
     evt.Param = 0;
     __atomic_fetch_and(&SchedListMask, ~(1u << Event_Div), __ATOMIC_ACQ_REL);
+    RecomputeNextSchedEventTimestamp();
 }
 
 // http://stackoverflow.com/questions/1100090/looking-for-an-efficient-integer-square-root-algorithm-for-arm-thumb2
@@ -2066,6 +2114,7 @@ void NDS::SqrtDone(u32 param)
     SqrtCnt &= ~0x8000;
     SchedList[Event_Sqrt].Timestamp = 0;
     __atomic_fetch_and(&SchedListMask, ~(1u << Event_Sqrt), __ATOMIC_ACQ_REL);
+    RecomputeNextSchedEventTimestamp();
 
     if (SqrtCnt & 0x0001)
     {
@@ -2118,6 +2167,7 @@ void NDS::StartSqrt()
     evt.FuncID = 0;
     evt.Param = 0;
     __atomic_fetch_and(&SchedListMask, ~(1u << Event_Sqrt), __ATOMIC_ACQ_REL);
+    RecomputeNextSchedEventTimestamp();
 }
 
 

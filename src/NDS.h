@@ -540,6 +540,7 @@ public: // TODO: Encapsulate the rest of these members
 protected:
     void InitTimings();
     u32 SchedListMask;
+    u64 NextSchedEventTimestamp;
     u64 SysTimestamp;
     u8 WRAMCnt;
     u8 PostFlag9;
@@ -572,6 +573,7 @@ protected:
     u64 NextTargetSleep();
     void CheckKeyIRQ(u32 cpu, u32 oldkey, u32 newkey);
     void Reschedule(u64 target);
+    void RecomputeNextSchedEventTimestamp();
     void RunSystemSleep(u64 timestamp);
     void RunSystem(u64 timestamp);
     void HandleTimerOverflow(u32 tid);
