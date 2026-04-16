@@ -43,7 +43,7 @@ public:
 
     void DoSavestate(Savestate* file);
 
-    void SetEnabled(bool enable);
+    void SetEnabled(bool enable) { Enabled = enable; }
 
     u8 Read8(u32 addr);
     u16 Read16(u32 addr);
@@ -87,19 +87,9 @@ public:
 
     u16 DispFIFOBuffer[256];
 
-    struct RendererVisibleState
-    {
-        u32 TextBG[4] {};
-        u32 AffineBG[2] {};
-        u32 Display = 0;
-        u32 WindowBlend = 0;
-        u32 Mosaic = 0;
-    };
-
     u32 DispCnt;
     u16 BGCnt[4];
     u32 StateGeneration = 1;
-    RendererVisibleState VisibleState {};
 
     u16 BGXPos[4];
     u16 BGYPos[4];
@@ -134,12 +124,6 @@ public:
 
     u16 MasterBrightness;
 private:
-    void BumpTextBGState(u32 bgnum);
-    void BumpAffineBGState(u32 bgnum);
-    void BumpBGState(u32 bgnum);
-    void BumpDisplayState();
-    void BumpWindowBlendState();
-    void BumpMosaicState();
     melonDS::GPU& GPU;
 };
 
