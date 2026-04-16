@@ -478,15 +478,6 @@ const SoftRenderer::PreparedFrameState& SoftRenderer::GetPreparedFrameState()
         textBG.BGFlag = 0x01000000u << bgnum;
         textBG.Color256 = (bgcnt & 0x0080) != 0;
     }
-    for (u32 bgnum = 2; bgnum < 4; bgnum++)
-    {
-        auto& affineBG = prepared.AffineBG[bgnum - 2];
-        affineBG.BGCnt = CurUnit->BGCnt[bgnum];
-        affineBG.BGRotA = CurUnit->BGRotA[bgnum - 2];
-        affineBG.BGRotB = CurUnit->BGRotB[bgnum - 2];
-        affineBG.BGRotC = CurUnit->BGRotC[bgnum - 2];
-        affineBG.BGRotD = CurUnit->BGRotD[bgnum - 2];
-    }
     prepared.Valid = 1;
     return prepared;
 }
@@ -998,8 +989,11 @@ bool SoftRenderer::ComposedLineCacheMatches(u32 line, bool compareNumSprites)
         return false;
 
     if (cache.Epoch != prepared.Epoch ||
-        std::memcmp(cache.TextBG, prepared.TextBG, sizeof(cache.TextBG)) != 0 ||
-        std::memcmp(cache.AffineBG, prepared.AffineBG, sizeof(cache.AffineBG)) != 0 ||
+        std::memcmp(cache.TextBGVersion, prepared.TextBGVersion, sizeof(cache.TextBGVersion)) != 0 ||
+        std::memcmp(cache.AffineBGVersion, prepared.AffineBGVersion, sizeof(cache.AffineBGVersion)) != 0 ||
+        cache.DisplayVersion != prepared.DisplayVersion ||
+        cache.WindowBlendVersion != prepared.WindowBlendVersion ||
+        cache.MosaicVersion != prepared.MosaicVersion ||
         cache.BGStamp != prepared.BGStamp ||
         cache.BGExtPalStamp != prepared.BGExtPalStamp ||
         cache.OBJStamp != prepared.OBJStamp ||
@@ -1014,7 +1008,10 @@ bool SoftRenderer::ComposedLineCacheMatches(u32 line, bool compareNumSprites)
     if (compareNumSprites && cache.NumSprites != NumSprites[CurUnit->Num])
         return false;
 
-    if (std::memcmp(cache.BGXRefInternal, CurUnit->BGXRefInternal, sizeof(cache.BGXRefInternal)) != 0 ||
+    if (std::memcmp(cache.BGCnt, CurUnit->BGCnt, sizeof(cache.BGCnt)) != 0 ||
+        std::memcmp(cache.BGXPos, CurUnit->BGXPos, sizeof(cache.BGXPos)) != 0 ||
+        std::memcmp(cache.BGYPos, CurUnit->BGYPos, sizeof(cache.BGYPos)) != 0 ||
+        std::memcmp(cache.BGXRefInternal, CurUnit->BGXRefInternal, sizeof(cache.BGXRefInternal)) != 0 ||
         std::memcmp(cache.BGYRefInternal, CurUnit->BGYRefInternal, sizeof(cache.BGYRefInternal)) != 0)
         return false;
 
@@ -1043,8 +1040,11 @@ void SoftRenderer::StoreComposedLineCache(u32 line, const s32 bgXRefInternal[2],
     const bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
     ComposedLineCache& cache = LineCache[CurUnit->Num][line];
     cache.Epoch = prepared.Epoch;
-    std::memcpy(cache.TextBG, prepared.TextBG, sizeof(cache.TextBG));
-    std::memcpy(cache.AffineBG, prepared.AffineBG, sizeof(cache.AffineBG));
+    std::memcpy(cache.TextBGVersion, prepared.TextBGVersion, sizeof(cache.TextBGVersion));
+    std::memcpy(cache.AffineBGVersion, prepared.AffineBGVersion, sizeof(cache.AffineBGVersion));
+    cache.DisplayVersion = prepared.DisplayVersion;
+    cache.WindowBlendVersion = prepared.WindowBlendVersion;
+    cache.MosaicVersion = prepared.MosaicVersion;
     cache.BGStamp = prepared.BGStamp;
     cache.BGExtPalStamp = prepared.BGExtPalStamp;
     cache.OBJStamp = prepared.OBJStamp;
@@ -1055,6 +1055,9 @@ void SoftRenderer::StoreComposedLineCache(u32 line, const s32 bgXRefInternal[2],
     cache.BlendKey = prepared.BlendKey;
     cache.RendererFlags = prepared.RendererFlags;
     cache.NumSprites = NumSprites[CurUnit->Num];
+    std::memcpy(cache.BGCnt, CurUnit->BGCnt, sizeof(cache.BGCnt));
+    std::memcpy(cache.BGXPos, CurUnit->BGXPos, sizeof(cache.BGXPos));
+    std::memcpy(cache.BGYPos, CurUnit->BGYPos, sizeof(cache.BGYPos));
     std::memcpy(cache.BGXRefInternal, bgXRefInternal, sizeof(cache.BGXRefInternal));
     std::memcpy(cache.BGYRefInternal, bgYRefInternal, sizeof(cache.BGYRefInternal));
 
@@ -1117,6 +1120,7 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
     const bool lineCacheEligible = CanUseComposedLineCache(line);
     s32 lineCacheBGXRefInternal[2] = {CurUnit->BGXRefInternal[0], CurUnit->BGXRefInternal[1]};
     s32 lineCacheBGYRefInternal[2] = {CurUnit->BGYRefInternal[0], CurUnit->BGYRefInternal[1]};
+
     if (lineCacheEligible && TryReplayComposedLineCache(line))
         return;
 

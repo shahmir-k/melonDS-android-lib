@@ -63,15 +63,6 @@ private:
         u32 BGFlag = 0;
     };
 
-    struct PreparedAffineBGState
-    {
-        u16 BGCnt = 0;
-        s16 BGRotA = 0;
-        s16 BGRotB = 0;
-        s16 BGRotC = 0;
-        s16 BGRotD = 0;
-    };
-
     struct TextBGFrameCache
     {
         u32 BGStamp = 0;
@@ -97,6 +88,11 @@ private:
     struct ComposedLineCache
     {
         u32 Epoch = 0;
+        u32 TextBGVersion[4] {};
+        u32 AffineBGVersion[2] {};
+        u32 DisplayVersion = 0;
+        u32 WindowBlendVersion = 0;
+        u32 MosaicVersion = 0;
         u32 BGStamp = 0;
         u32 BGExtPalStamp = 0;
         u32 OBJStamp = 0;
@@ -107,8 +103,9 @@ private:
         u32 BlendKey = 0;
         u32 RendererFlags = 0;
         u32 NumSprites = 0;
-        PreparedTextBGState TextBG[4] {};
-        PreparedAffineBGState AffineBG[2] {};
+        u16 BGCnt[4] {};
+        u16 BGXPos[4] {};
+        u16 BGYPos[4] {};
         s32 BGXRefInternal[2] {};
         s32 BGYRefInternal[2] {};
         u8 Valid = 0;
@@ -170,7 +167,6 @@ private:
         u8 TextBGLineCacheEligible = 0;
         u8 Valid = 0;
         PreparedTextBGState TextBG[4] {};
-        PreparedAffineBGState AffineBG[2] {};
     };
 
     u32 NumSprites[2] {};
