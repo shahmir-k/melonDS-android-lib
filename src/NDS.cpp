@@ -1141,6 +1141,7 @@ u32 NDS::RunFrame()
                     ARM9.Execute<cpuMode>();
                 }
 
+                if (GPU.GPU3D.HasPendingWork())
                 {
                     LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRunNs);
                     GPU.GPU3D.Run();

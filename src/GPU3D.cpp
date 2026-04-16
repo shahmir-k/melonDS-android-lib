@@ -1682,6 +1682,8 @@ void GPU3D::VecTest(u32 param) noexcept
 
 void GPU3D::CmdFIFOWrite(const CmdFIFOEntry& entry) noexcept
 {
+    bool wasIdle = !HasPendingWork();
+
     if (CmdFIFO.IsEmpty() && !CmdPIPE.IsFull())
     {
         CmdPIPE.Write(entry);
@@ -1703,6 +1705,8 @@ void GPU3D::CmdFIFOWrite(const CmdFIFOEntry& entry) noexcept
     }
 
     GXStat |= (1<<27);
+    if (wasIdle)
+        Timestamp = NDS.ARM9Timestamp >> NDS.ARM9ClockShift;
 
     if (entry.Command == 0x11 || entry.Command == 0x12)
     {
@@ -2375,8 +2379,7 @@ void GPU3D::FinishWork(s32 cycles) noexcept
 
 void GPU3D::Run() noexcept
 {
-    if (!GeometryEnabled || FlushRequest ||
-        (CmdPIPE.IsEmpty() && !(GXStat & (1<<27))))
+    if (!HasPendingWork())
     {
         Timestamp = NDS.ARM9Timestamp >> NDS.ARM9ClockShift;
         return;

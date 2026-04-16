@@ -99,6 +99,11 @@ public:
     void ExecuteCommand() noexcept;
 
     s32 CyclesToRunFor() const noexcept;
+    [[nodiscard]] bool HasPendingWork() const noexcept
+    {
+        return GeometryEnabled && !FlushRequest &&
+               (!CmdPIPE.IsEmpty() || (GXStat & (1 << 27)));
+    }
     void Run() noexcept;
     void CheckFIFOIRQ() noexcept;
     void CheckFIFODMA() noexcept;
