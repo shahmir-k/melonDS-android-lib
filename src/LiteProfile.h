@@ -27,6 +27,32 @@ struct FrameCounters
     std::atomic<uint64_t> ARM7WaitNs{0};
     std::atomic<uint64_t> GPU3DRunNs{0};
     std::atomic<uint64_t> RunSystemNs{0};
+    std::atomic<uint64_t> EventLCDNs{0};
+    std::atomic<uint64_t> EventLCDCount{0};
+    std::atomic<uint64_t> EventSPUNs{0};
+    std::atomic<uint64_t> EventSPUCount{0};
+    std::atomic<uint64_t> EventDisplayFIFONs{0};
+    std::atomic<uint64_t> EventDisplayFIFOCount{0};
+    std::atomic<uint64_t> EventWifiNs{0};
+    std::atomic<uint64_t> EventWifiCount{0};
+    std::atomic<uint64_t> EventRTCNs{0};
+    std::atomic<uint64_t> EventRTCCount{0};
+    std::atomic<uint64_t> EventCartNs{0};
+    std::atomic<uint64_t> EventCartCount{0};
+    std::atomic<uint64_t> EventSPINs{0};
+    std::atomic<uint64_t> EventSPICount{0};
+    std::atomic<uint64_t> EventMathNs{0};
+    std::atomic<uint64_t> EventMathCount{0};
+    std::atomic<uint64_t> EventTimerNs{0};
+    std::atomic<uint64_t> EventTimerCount{0};
+    std::atomic<uint64_t> EventOtherNs{0};
+    std::atomic<uint64_t> EventOtherCount{0};
+    std::atomic<uint64_t> LCDStartHBlankNs{0};
+    std::atomic<uint64_t> LCDStartHBlankCount{0};
+    std::atomic<uint64_t> LCDStartScanlineNs{0};
+    std::atomic<uint64_t> LCDStartScanlineCount{0};
+    std::atomic<uint64_t> LCDFinishFrameNs{0};
+    std::atomic<uint64_t> LCDFinishFrameCount{0};
 
     std::atomic<uint64_t> DrawScanlineNs{0};
     std::atomic<uint64_t> DrawSpritesNs{0};
@@ -49,7 +75,7 @@ inline FrameCounters gFrame;
 inline FrameCounters gWindow;
 inline uint64_t gWindowFrames = 0;
 inline constexpr uint64_t kLogEveryFrames = 30;
-inline constexpr bool kEnabled = false;
+inline constexpr bool kEnabled = true;
 
 inline uint64_t NowNs()
 {
@@ -72,6 +98,32 @@ inline void ResetFrame()
     gFrame.ARM7WaitNs.store(0, std::memory_order_relaxed);
     gFrame.GPU3DRunNs.store(0, std::memory_order_relaxed);
     gFrame.RunSystemNs.store(0, std::memory_order_relaxed);
+    gFrame.EventLCDNs.store(0, std::memory_order_relaxed);
+    gFrame.EventLCDCount.store(0, std::memory_order_relaxed);
+    gFrame.EventSPUNs.store(0, std::memory_order_relaxed);
+    gFrame.EventSPUCount.store(0, std::memory_order_relaxed);
+    gFrame.EventDisplayFIFONs.store(0, std::memory_order_relaxed);
+    gFrame.EventDisplayFIFOCount.store(0, std::memory_order_relaxed);
+    gFrame.EventWifiNs.store(0, std::memory_order_relaxed);
+    gFrame.EventWifiCount.store(0, std::memory_order_relaxed);
+    gFrame.EventRTCNs.store(0, std::memory_order_relaxed);
+    gFrame.EventRTCCount.store(0, std::memory_order_relaxed);
+    gFrame.EventCartNs.store(0, std::memory_order_relaxed);
+    gFrame.EventCartCount.store(0, std::memory_order_relaxed);
+    gFrame.EventSPINs.store(0, std::memory_order_relaxed);
+    gFrame.EventSPICount.store(0, std::memory_order_relaxed);
+    gFrame.EventMathNs.store(0, std::memory_order_relaxed);
+    gFrame.EventMathCount.store(0, std::memory_order_relaxed);
+    gFrame.EventTimerNs.store(0, std::memory_order_relaxed);
+    gFrame.EventTimerCount.store(0, std::memory_order_relaxed);
+    gFrame.EventOtherNs.store(0, std::memory_order_relaxed);
+    gFrame.EventOtherCount.store(0, std::memory_order_relaxed);
+    gFrame.LCDStartHBlankNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDStartHBlankCount.store(0, std::memory_order_relaxed);
+    gFrame.LCDStartScanlineNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDStartScanlineCount.store(0, std::memory_order_relaxed);
+    gFrame.LCDFinishFrameNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDFinishFrameCount.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gFrame.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -100,6 +152,32 @@ inline void ResetWindow()
     gWindow.ARM7WaitNs.store(0, std::memory_order_relaxed);
     gWindow.GPU3DRunNs.store(0, std::memory_order_relaxed);
     gWindow.RunSystemNs.store(0, std::memory_order_relaxed);
+    gWindow.EventLCDNs.store(0, std::memory_order_relaxed);
+    gWindow.EventLCDCount.store(0, std::memory_order_relaxed);
+    gWindow.EventSPUNs.store(0, std::memory_order_relaxed);
+    gWindow.EventSPUCount.store(0, std::memory_order_relaxed);
+    gWindow.EventDisplayFIFONs.store(0, std::memory_order_relaxed);
+    gWindow.EventDisplayFIFOCount.store(0, std::memory_order_relaxed);
+    gWindow.EventWifiNs.store(0, std::memory_order_relaxed);
+    gWindow.EventWifiCount.store(0, std::memory_order_relaxed);
+    gWindow.EventRTCNs.store(0, std::memory_order_relaxed);
+    gWindow.EventRTCCount.store(0, std::memory_order_relaxed);
+    gWindow.EventCartNs.store(0, std::memory_order_relaxed);
+    gWindow.EventCartCount.store(0, std::memory_order_relaxed);
+    gWindow.EventSPINs.store(0, std::memory_order_relaxed);
+    gWindow.EventSPICount.store(0, std::memory_order_relaxed);
+    gWindow.EventMathNs.store(0, std::memory_order_relaxed);
+    gWindow.EventMathCount.store(0, std::memory_order_relaxed);
+    gWindow.EventTimerNs.store(0, std::memory_order_relaxed);
+    gWindow.EventTimerCount.store(0, std::memory_order_relaxed);
+    gWindow.EventOtherNs.store(0, std::memory_order_relaxed);
+    gWindow.EventOtherCount.store(0, std::memory_order_relaxed);
+    gWindow.LCDStartHBlankNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDStartHBlankCount.store(0, std::memory_order_relaxed);
+    gWindow.LCDStartScanlineNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDStartScanlineCount.store(0, std::memory_order_relaxed);
+    gWindow.LCDFinishFrameNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDFinishFrameCount.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gWindow.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -161,6 +239,32 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM7WaitNs, gFrame.ARM7WaitNs);
     MergeCounter(gWindow.GPU3DRunNs, gFrame.GPU3DRunNs);
     MergeCounter(gWindow.RunSystemNs, gFrame.RunSystemNs);
+    MergeCounter(gWindow.EventLCDNs, gFrame.EventLCDNs);
+    MergeCounter(gWindow.EventLCDCount, gFrame.EventLCDCount);
+    MergeCounter(gWindow.EventSPUNs, gFrame.EventSPUNs);
+    MergeCounter(gWindow.EventSPUCount, gFrame.EventSPUCount);
+    MergeCounter(gWindow.EventDisplayFIFONs, gFrame.EventDisplayFIFONs);
+    MergeCounter(gWindow.EventDisplayFIFOCount, gFrame.EventDisplayFIFOCount);
+    MergeCounter(gWindow.EventWifiNs, gFrame.EventWifiNs);
+    MergeCounter(gWindow.EventWifiCount, gFrame.EventWifiCount);
+    MergeCounter(gWindow.EventRTCNs, gFrame.EventRTCNs);
+    MergeCounter(gWindow.EventRTCCount, gFrame.EventRTCCount);
+    MergeCounter(gWindow.EventCartNs, gFrame.EventCartNs);
+    MergeCounter(gWindow.EventCartCount, gFrame.EventCartCount);
+    MergeCounter(gWindow.EventSPINs, gFrame.EventSPINs);
+    MergeCounter(gWindow.EventSPICount, gFrame.EventSPICount);
+    MergeCounter(gWindow.EventMathNs, gFrame.EventMathNs);
+    MergeCounter(gWindow.EventMathCount, gFrame.EventMathCount);
+    MergeCounter(gWindow.EventTimerNs, gFrame.EventTimerNs);
+    MergeCounter(gWindow.EventTimerCount, gFrame.EventTimerCount);
+    MergeCounter(gWindow.EventOtherNs, gFrame.EventOtherNs);
+    MergeCounter(gWindow.EventOtherCount, gFrame.EventOtherCount);
+    MergeCounter(gWindow.LCDStartHBlankNs, gFrame.LCDStartHBlankNs);
+    MergeCounter(gWindow.LCDStartHBlankCount, gFrame.LCDStartHBlankCount);
+    MergeCounter(gWindow.LCDStartScanlineNs, gFrame.LCDStartScanlineNs);
+    MergeCounter(gWindow.LCDStartScanlineCount, gFrame.LCDStartScanlineCount);
+    MergeCounter(gWindow.LCDFinishFrameNs, gFrame.LCDFinishFrameNs);
+    MergeCounter(gWindow.LCDFinishFrameCount, gFrame.LCDFinishFrameCount);
     MergeCounter(gWindow.DrawScanlineNs, gFrame.DrawScanlineNs);
     MergeCounter(gWindow.DrawSpritesNs, gFrame.DrawSpritesNs);
     MergeCounter(gWindow.DrawScanlineCalls, gFrame.DrawScanlineCalls);
@@ -216,6 +320,25 @@ inline void EndFrame()
         CountPerFrame(gWindow.SpriteLineSkips),
         CountPerFrame(gWindow.DrawScanlineCalls),
         CountPerFrame(gWindow.DrawSpritesCalls));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] events lcd=%.3fms/%.1f spu=%.3fms/%.1f fifo=%.3fms/%.1f wifi=%.3fms/%.1f rtc=%.3fms/%.1f cart=%.3fms/%.1f spi=%.3fms/%.1f math=%.3fms/%.1f timer=%.3fms/%.1f other=%.3fms/%.1f",
+        NsPerFrame(gWindow.EventLCDNs), CountPerFrame(gWindow.EventLCDCount),
+        NsPerFrame(gWindow.EventSPUNs), CountPerFrame(gWindow.EventSPUCount),
+        NsPerFrame(gWindow.EventDisplayFIFONs), CountPerFrame(gWindow.EventDisplayFIFOCount),
+        NsPerFrame(gWindow.EventWifiNs), CountPerFrame(gWindow.EventWifiCount),
+        NsPerFrame(gWindow.EventRTCNs), CountPerFrame(gWindow.EventRTCCount),
+        NsPerFrame(gWindow.EventCartNs), CountPerFrame(gWindow.EventCartCount),
+        NsPerFrame(gWindow.EventSPINs), CountPerFrame(gWindow.EventSPICount),
+        NsPerFrame(gWindow.EventMathNs), CountPerFrame(gWindow.EventMathCount),
+        NsPerFrame(gWindow.EventTimerNs), CountPerFrame(gWindow.EventTimerCount),
+        NsPerFrame(gWindow.EventOtherNs), CountPerFrame(gWindow.EventOtherCount));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] lcd hblank=%.3fms/%.1f scanline=%.3fms/%.1f finish=%.3fms/%.1f",
+        NsPerFrame(gWindow.LCDStartHBlankNs), CountPerFrame(gWindow.LCDStartHBlankCount),
+        NsPerFrame(gWindow.LCDStartScanlineNs), CountPerFrame(gWindow.LCDStartScanlineCount),
+        NsPerFrame(gWindow.LCDFinishFrameNs), CountPerFrame(gWindow.LCDFinishFrameCount));
 
     gWindowFrames = 0;
     ResetWindow();

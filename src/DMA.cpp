@@ -117,6 +117,10 @@ void DMA::WriteCnt(u32 val)
     u32 oldcnt = Cnt;
     Cnt = val;
 
+    const u32 startModeMask = CPU == 0 ? 0x38000000 : 0x70000000;
+    if ((oldcnt ^ Cnt) & (0x80000000 | startModeMask))
+        NDS.InvalidateDMAModeMask(CPU);
+
     if ((!(oldcnt & 0x80000000)) && (val & 0x80000000))
     {
         CurSrcAddr = SrcAddr;

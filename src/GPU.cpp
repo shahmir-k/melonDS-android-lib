@@ -24,6 +24,7 @@
 
 #include "GPU2D_Soft.h"
 #include "GPU3D.h"
+#include "LiteProfile.h"
 
 namespace melonDS
 {
@@ -998,6 +999,9 @@ void GPU::StartFrame() noexcept
 
 void GPU::StartHBlank(u32 line) noexcept
 {
+    LiteProfile::AddAtomic(LiteProfile::gFrame.LCDStartHBlankCount);
+    LiteProfile::ScopeTimer hblankTimer(LiteProfile::gFrame.LCDStartHBlankNs);
+
     DispStat[0] |= (1<<1);
     DispStat[1] |= (1<<1);
 
@@ -1061,6 +1065,9 @@ void GPU::StartHBlank(u32 line) noexcept
 
 void GPU::FinishFrame(u32 lines) noexcept
 {
+    LiteProfile::AddAtomic(LiteProfile::gFrame.LCDFinishFrameCount);
+    LiteProfile::ScopeTimer finishTimer(LiteProfile::gFrame.LCDFinishFrameNs);
+
     FrontBuffer = FrontBuffer ? 0 : 1;
     AssignFramebuffers();
 
@@ -1093,6 +1100,9 @@ void GPU::BlankFrame() noexcept
 
 void GPU::StartScanline(u32 line) noexcept
 {
+    LiteProfile::AddAtomic(LiteProfile::gFrame.LCDStartScanlineCount);
+    LiteProfile::ScopeTimer scanlineTimer(LiteProfile::gFrame.LCDStartScanlineNs);
+
     if (line == 0)
         VCount = 0;
     else if (NextVCount != 0xFFFFFFFF)

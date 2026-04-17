@@ -250,6 +250,8 @@ class ARMJIT;
 class NDS
 {
 private:
+    friend class DMA;
+
 #ifdef JIT_ENABLED
     bool EnableJIT;
 #endif
@@ -542,6 +544,8 @@ protected:
     u32 SchedListMask;
     u64 NextSchedEventTimestamp;
     u64 SysTimestamp;
+    mutable u32 ActiveDMAModeMask[2];
+    mutable bool ActiveDMAModeMaskDirty[2];
     u8 WRAMCnt;
     u8 PostFlag9;
     u8 PostFlag7;
@@ -574,6 +578,8 @@ protected:
     void CheckKeyIRQ(u32 cpu, u32 oldkey, u32 newkey);
     void Reschedule(u64 target);
     void RecomputeNextSchedEventTimestamp();
+    void InvalidateDMAModeMask(u32 cpu) noexcept;
+    void RefreshActiveDMAModeMask(u32 cpu) const;
     void RunSystemSleep(u64 timestamp);
     void RunSystem(u64 timestamp);
     void HandleTimerOverflow(u32 tid);

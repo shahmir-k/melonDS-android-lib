@@ -57,6 +57,82 @@ const s32 kMaxIterationCycles = 64;
 #endif
 const s32 kIterationCycleMargin = 8;
 
+static bool ScanDMAsInMode(const DMA* dmas, u32 cpu, u32 mode) noexcept
+{
+    cpu <<= 2;
+    if (dmas[cpu+0].IsInMode(mode)) return true;
+    if (dmas[cpu+1].IsInMode(mode)) return true;
+    if (dmas[cpu+2].IsInMode(mode)) return true;
+    if (dmas[cpu+3].IsInMode(mode)) return true;
+    return false;
+}
+
+static void LogDMAModeMaskMiss(u32 cpu, u32 mode)
+{
+    static std::atomic<u32> logged[2];
+    const u32 bit = 1u << mode;
+    u32 prev = logged[cpu].fetch_or(bit, std::memory_order_relaxed);
+    if (!(prev & bit))
+        Log(LogLevel::Warn, "DMA mode mask miss on ARM%u mode %02X; falling back to full scan\n", cpu ? 7u : 9u, mode);
+}
+
+static void ProfileRunSystemEvent(u32 eventID, uint64_t elapsedNs)
+{
+    using namespace LiteProfile;
+
+    switch (eventID)
+    {
+    case Event_LCD:
+        AddAtomic(gFrame.EventLCDNs, elapsedNs);
+        AddAtomic(gFrame.EventLCDCount);
+        break;
+    case Event_SPU:
+        AddAtomic(gFrame.EventSPUNs, elapsedNs);
+        AddAtomic(gFrame.EventSPUCount);
+        break;
+    case Event_DisplayFIFO:
+        AddAtomic(gFrame.EventDisplayFIFONs, elapsedNs);
+        AddAtomic(gFrame.EventDisplayFIFOCount);
+        break;
+    case Event_Wifi:
+    case Event_DSi_NWifi:
+        AddAtomic(gFrame.EventWifiNs, elapsedNs);
+        AddAtomic(gFrame.EventWifiCount);
+        break;
+    case Event_RTC:
+        AddAtomic(gFrame.EventRTCNs, elapsedNs);
+        AddAtomic(gFrame.EventRTCCount);
+        break;
+    case Event_ROMTransfer:
+    case Event_ROMSPITransfer:
+    case Event_DSi_SDMMCTransfer:
+    case Event_DSi_SDIOTransfer:
+        AddAtomic(gFrame.EventCartNs, elapsedNs);
+        AddAtomic(gFrame.EventCartCount);
+        break;
+    case Event_SPITransfer:
+        AddAtomic(gFrame.EventSPINs, elapsedNs);
+        AddAtomic(gFrame.EventSPICount);
+        break;
+    case Event_Div:
+    case Event_Sqrt:
+    case Event_DSi_DSP:
+    case Event_DSi_DSPHLE:
+        AddAtomic(gFrame.EventMathNs, elapsedNs);
+        AddAtomic(gFrame.EventMathCount);
+        break;
+    case Event_Timer9:
+    case Event_Timer7:
+        AddAtomic(gFrame.EventTimerNs, elapsedNs);
+        AddAtomic(gFrame.EventTimerCount);
+        break;
+    default:
+        AddAtomic(gFrame.EventOtherNs, elapsedNs);
+        AddAtomic(gFrame.EventOtherCount);
+        break;
+    }
+}
+
 #ifdef LITEV_ARM7_THREAD
 // Per-thread current CPU index (0=ARM9, 1=ARM7).
 thread_local int t_CurCPU = 0;
@@ -510,6 +586,10 @@ void NDS::Reset()
     ARM7Timestamp = 0; ARM7Target = 0;
     ARM9LibHLE.Reset();
     SysTimestamp = 0;
+    ActiveDMAModeMask[0] = 0;
+    ActiveDMAModeMask[1] = 0;
+    ActiveDMAModeMaskDirty[0] = false;
+    ActiveDMAModeMaskDirty[1] = false;
 
     InitTimings();
 
@@ -814,6 +894,10 @@ bool NDS::DoSavestate(Savestate* file)
         SPU.SetPowerCnt(PowerControl7 & 0x0001);
         Wifi.SetPowerCnt(PowerControl7 & 0x0002);
 
+        ActiveDMAModeMask[0] = 0;
+        ActiveDMAModeMask[1] = 0;
+        ActiveDMAModeMaskDirty[0] = true;
+        ActiveDMAModeMaskDirty[1] = true;
         UpdateTimerNextOverflow(0);
         UpdateTimerNextOverflow(1);
         RecomputeNextSchedEventTimestamp();
@@ -901,7 +985,9 @@ void NDS::RunSystem(u64 timestamp)
                 __atomic_fetch_and(&SchedListMask, ~(1u<<i), __ATOMIC_ACQ_REL);
 
                 EventFunc func = evt.Funcs[evt.FuncID];
+                const uint64_t eventStart = LiteProfile::NowNs();
                 func(evt.That, evt.Param);
+                ProfileRunSystemEvent(i, LiteProfile::NowNs() - eventStart);
             }
         }
 
@@ -909,6 +995,29 @@ void NDS::RunSystem(u64 timestamp)
     }
 
     RecomputeNextSchedEventTimestamp();
+}
+
+void NDS::InvalidateDMAModeMask(u32 cpu) noexcept
+{
+    ActiveDMAModeMaskDirty[cpu] = true;
+}
+
+void NDS::RefreshActiveDMAModeMask(u32 cpu) const
+{
+    if (!ActiveDMAModeMaskDirty[cpu])
+        return;
+
+    const u32 base = cpu << 2;
+    u32 mask = 0;
+    for (u32 i = 0; i < 4; i++)
+    {
+        u32 mode = DMAs[base + i].GetTrackedMode();
+        if (mode != DMA::kNoTrackedMode)
+            mask |= 1u << mode;
+    }
+
+    ActiveDMAModeMask[cpu] = mask;
+    ActiveDMAModeMaskDirty[cpu] = false;
 }
 
 u64 NDS::NextTargetSleep()
@@ -1958,12 +2067,21 @@ void NDS::TimerStart(u32 id, u16 cnt)
 
 bool NDS::DMAsInMode(u32 cpu, u32 mode) const
 {
+    RefreshActiveDMAModeMask(cpu);
+    if (!(ActiveDMAModeMask[cpu] & (1u << mode)))
+    {
+        if (!ScanDMAsInMode(DMAs, cpu, mode))
+            return false;
+
+        LogDMAModeMaskMiss(cpu, mode);
+        ActiveDMAModeMask[cpu] |= 1u << mode;
+    }
+
     cpu <<= 2;
     if (DMAs[cpu+0].IsInMode(mode)) return true;
     if (DMAs[cpu+1].IsInMode(mode)) return true;
     if (DMAs[cpu+2].IsInMode(mode)) return true;
     if (DMAs[cpu+3].IsInMode(mode)) return true;
-
     return false;
 }
 
@@ -1980,6 +2098,16 @@ bool NDS::DMAsRunning(u32 cpu) const
 
 void NDS::CheckDMAs(u32 cpu, u32 mode)
 {
+    RefreshActiveDMAModeMask(cpu);
+    if (!(ActiveDMAModeMask[cpu] & (1u << mode)))
+    {
+        if (!ScanDMAsInMode(DMAs, cpu, mode))
+            return;
+
+        LogDMAModeMaskMiss(cpu, mode);
+        ActiveDMAModeMask[cpu] |= 1u << mode;
+    }
+
     cpu <<= 2;
     DMAs[cpu+0].StartIfNeeded(mode);
     DMAs[cpu+1].StartIfNeeded(mode);
@@ -1989,6 +2117,16 @@ void NDS::CheckDMAs(u32 cpu, u32 mode)
 
 void NDS::StopDMAs(u32 cpu, u32 mode)
 {
+    RefreshActiveDMAModeMask(cpu);
+    if (!(ActiveDMAModeMask[cpu] & (1u << mode)))
+    {
+        if (!ScanDMAsInMode(DMAs, cpu, mode))
+            return;
+
+        LogDMAModeMaskMiss(cpu, mode);
+        ActiveDMAModeMask[cpu] |= 1u << mode;
+    }
+
     cpu <<= 2;
     DMAs[cpu+0].StopIfNeeded(mode);
     DMAs[cpu+1].StopIfNeeded(mode);

@@ -30,6 +30,8 @@ class Savestate;
 class DMA
 {
 public:
+    static constexpr u32 kNoTrackedMode = 0xFFFFFFFFu;
+
     DMA(u32 cpu, u32 num, NDS& nds);
     ~DMA() = default;
 
@@ -52,6 +54,13 @@ public:
     bool IsInMode(u32 mode) const noexcept
     {
         return ((mode == StartMode) && (Cnt & 0x80000000));
+    }
+
+    u32 GetTrackedMode() const noexcept
+    {
+        if (!(Cnt & 0x80000000))
+            return kNoTrackedMode;
+        return StartMode;
     }
 
     bool IsRunning() const noexcept { return Running!=0; }
