@@ -21,6 +21,7 @@
 #include "OpenGLSupport.h"
 
 #include <array>
+#include <memory>
 #include <optional>
 
 namespace melonDS
@@ -67,6 +68,8 @@ private:
     GLuint CompScreenInputTex = 0;
     std::array<GLuint, 2> CompScreenOutputTex {};
     std::array<GLuint, 2> CompScreenOutputFB {};
+    std::array<std::unique_ptr<u32[]>, 2> CompScreenInputShadow {};
+    std::array<bool, 2> CompScreenInputShadowValid {false, false};
 };
 
 }

@@ -33,6 +33,11 @@ namespace melonDS
 
 using namespace OpenGL;
 
+static constexpr int kCompInputWidth = 256 * 3 + 1;
+static constexpr int kCompInputHeight = 192;
+static constexpr size_t kCompInputPixels = size_t(kCompInputWidth) * size_t(kCompInputHeight);
+static constexpr size_t kCompInputBytes = kCompInputPixels * sizeof(u32);
+
 std::optional<GLCompositor> GLCompositor::New() noexcept
 {
     assert(glBindAttribLocation != nullptr);
@@ -145,11 +150,14 @@ GLCompositor::GLCompositor(GLCompositor&& other) noexcept :
     CompVertexArrayID(other.CompVertexArrayID),
     CompScreenInputTex(other.CompScreenInputTex),
     CompScreenOutputTex(other.CompScreenOutputTex),
-    CompScreenOutputFB(other.CompScreenOutputFB)
+    CompScreenOutputFB(other.CompScreenOutputFB),
+    CompScreenInputShadow(std::move(other.CompScreenInputShadow)),
+    CompScreenInputShadowValid(other.CompScreenInputShadowValid)
 {
     other.CompScreenOutputFB = {};
     other.CompScreenInputTex = {};
     other.CompScreenOutputTex = {};
+    other.CompScreenInputShadowValid = {false, false};
     other.CompVertexArrayID = {};
     other.CompVertexBufferID = {};
     other.CompShader = {};
@@ -183,10 +191,13 @@ GLCompositor& GLCompositor::operator=(GLCompositor&& other) noexcept
 
         glDeleteFramebuffers(CompScreenOutputFB.size(), &CompScreenOutputFB[0]);
         CompScreenOutputFB = other.CompScreenOutputFB;
+        CompScreenInputShadow = std::move(other.CompScreenInputShadow);
+        CompScreenInputShadowValid = other.CompScreenInputShadowValid;
 
         other.CompScreenOutputFB = {};
         other.CompScreenInputTex = {};
         other.CompScreenOutputTex = {};
+        other.CompScreenInputShadowValid = {false, false};
         other.CompVertexArrayID = {};
         other.CompVertexBufferID = {};
         other.CompShader = {};
@@ -225,6 +236,8 @@ void GLCompositor::SetScaleFactor(int scale) noexcept
 
 void GLCompositor::Stop(const GPU& gpu) noexcept
 {
+    CompScreenInputShadowValid = {false, false};
+
     for (int i = 0; i < 2; i++)
     {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
@@ -258,10 +271,21 @@ void GLCompositor::RenderFrame(const GPU& gpu, Renderer3D& renderer) noexcept
 
     if (gpu.Framebuffer[backbuf][0] && gpu.Framebuffer[backbuf][1])
     {
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256*3 + 1, 192, GL_RGBA_INTEGER,
-                        GL_UNSIGNED_BYTE, gpu.Framebuffer[backbuf][0].get());
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 192, 256*3 + 1, 192, GL_RGBA_INTEGER,
-                        GL_UNSIGNED_BYTE, gpu.Framebuffer[backbuf][1].get());
+        for (int screen = 0; screen < 2; screen++)
+        {
+            const u32* source = gpu.Framebuffer[backbuf][screen].get();
+            std::unique_ptr<u32[]>& shadow = CompScreenInputShadow[screen];
+            if (!shadow)
+                shadow = std::make_unique<u32[]>(kCompInputPixels);
+
+            if (!CompScreenInputShadowValid[screen] || std::memcmp(shadow.get(), source, kCompInputBytes) != 0)
+            {
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, screen * kCompInputHeight, kCompInputWidth, kCompInputHeight,
+                                GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, source);
+                std::memcpy(shadow.get(), source, kCompInputBytes);
+                CompScreenInputShadowValid[screen] = true;
+            }
+        }
     }
 
     glActiveTexture(GL_TEXTURE1);
