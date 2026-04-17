@@ -27,6 +27,53 @@
 
 namespace melonDS
 {
+namespace
+{
+template <u32 Size, typename Fn>
+void ForEachDirtyByteRange(NonStupidBitField<Size>& dirty, u32 granularityBytes, Fn&& fn)
+{
+    auto it = dirty.Begin();
+    const auto end = dirty.End();
+    while (it != end)
+    {
+        u32 startBit = *it;
+        u32 lastBit = startBit;
+        ++it;
+        while (it != end)
+        {
+            u32 bit = *it;
+            if (bit != lastBit + 1)
+                break;
+            lastBit = bit;
+            ++it;
+        }
+
+        fn(startBit * granularityBytes, (lastBit + 1) * granularityBytes);
+    }
+}
+
+void UploadLinearTextureBytes(u32 texWidth, GLenum format, GLenum type, const void* base, u32 byteStart, u32 byteEnd, u32 bytesPerPixel)
+{
+    if (byteEnd <= byteStart)
+        return;
+
+    const u8* src = reinterpret_cast<const u8*>(base);
+    const u32 rowBytes = texWidth * bytesPerPixel;
+    u32 offset = byteStart;
+
+    while (offset < byteEnd)
+    {
+        const u32 xBytes = offset % rowBytes;
+        const u32 row = offset / rowBytes;
+        const u32 chunkBytes = std::min(byteEnd - offset, rowBytes - xBytes);
+        const u32 width = chunkBytes / bytesPerPixel;
+        const u32 x = xBytes / bytesPerPixel;
+
+        glTexSubImage2D(GL_TEXTURE_2D, 0, x, row, width, 1, format, type, src + offset);
+        offset += chunkBytes;
+    }
+}
+}
 
 bool GLRenderer::BuildRenderShader(u32 flags, const std::string& vs, const std::string& fs)
 {
@@ -1304,28 +1351,51 @@ void GLRenderer::RenderFrame(GPU& gpu)
     if (textureDirty.Any())
     {
         gpu.MakeVRAMFlat_TextureCoherent(textureDirty);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 512, GL_RED_INTEGER,
-                        GL_UNSIGNED_BYTE, gpu.VRAMFlat_Texture);
+        ForEachDirtyByteRange(textureDirty, VRAMDirtyGranularity,
+            [&gpu](u32 byteStart, u32 byteEnd)
+            {
+                UploadLinearTextureBytes(1024, GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                    gpu.VRAMFlat_Texture, byteStart, byteEnd, 1);
+            });
     }
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TexPalMemID);
     if (texPalDirty.Any())
     {
+        constexpr u32 texPalEntries = 1024 * 48;
+        constexpr u32 texPalBytes = texPalEntries * sizeof(u16);
+
         gpu.MakeVRAMFlat_TexPalCoherent(texPalDirty);
-        for (int i = 0; i < 1024 * 48; i++)
-        {
-            u16 value = reinterpret_cast<const u16*>(gpu.VRAMFlat_TexPal)[i];
+        const u16* src = reinterpret_cast<const u16*>(gpu.VRAMFlat_TexPal);
+        ForEachDirtyByteRange(texPalDirty, VRAMDirtyGranularity,
+            [src, this](u32 byteStart, u32 byteEnd)
+            {
+                constexpr u32 texPalEntries = 1024 * 48;
+                constexpr u32 texPalBytes = texPalEntries * sizeof(u16);
+                if (byteStart >= texPalBytes)
+                    return;
 
-            u8 a = (value >> 15) & 0x1;
-            u8 b = (value >> 10) & 0x1F;
-            u8 g = (value >> 5) & 0x1F;
-            u8 r = (value >> 0) & 0x1F;
+                byteEnd = std::min(byteEnd, texPalBytes);
 
-            TexPalUploadBuffer[i] = (r << 11) | (g << 6) | (b << 1) | a;
-        }
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1024, 48, GL_RGBA,
-                        GL_UNSIGNED_SHORT_5_5_5_1, TexPalUploadBuffer);
+                u32 entryStart = byteStart / sizeof(u16);
+                u32 entryEnd = (byteEnd + sizeof(u16) - 1) / sizeof(u16);
+
+                for (u32 i = entryStart; i < entryEnd; i++)
+                {
+                    u16 value = src[i];
+
+                    u8 a = (value >> 15) & 0x1;
+                    u8 b = (value >> 10) & 0x1F;
+                    u8 g = (value >> 5) & 0x1F;
+                    u8 r = (value >> 0) & 0x1F;
+
+                    TexPalUploadBuffer[i] = (r << 11) | (g << 6) | (b << 1) | a;
+                }
+
+                UploadLinearTextureBytes(1024, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1,
+                    TexPalUploadBuffer, entryStart * sizeof(u16), entryEnd * sizeof(u16), sizeof(u16));
+            });
     }
 
     glDisable(GL_SCISSOR_TEST);
