@@ -543,6 +543,9 @@ protected:
     void InitTimings();
     u32 SchedListMask;
     u64 NextSchedEventTimestamp;
+    u64 LCDTimestamp;
+    u32 LCDFuncID;
+    u32 LCDParam;
     u64 SysTimestamp;
     mutable u32 ActiveDMAModeMask[2];
     mutable bool ActiveDMAModeMaskDirty[2];
@@ -569,6 +572,7 @@ protected:
     alignas(u64) u32 SqrtVal[2];
     u32 SqrtRes;
     u16 KeyCnt[2];
+    bool LCDScheduled;
     bool Running;
     bool RunningGame;
     u64 LastSysClockCycles;

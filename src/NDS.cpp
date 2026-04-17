@@ -663,11 +663,15 @@ void NDS::Reset()
     }
     SchedListMask = 0;
     NextSchedEventTimestamp = UINT64_MAX;
+    LCDTimestamp = UINT64_MAX;
+    LCDFuncID = 0;
+    LCDParam = 0;
 
     KeyInput = 0x007F03FF;
     KeyCnt[0] = 0;
     KeyCnt[1] = 0;
     RCnt = 0;
+    LCDScheduled = false;
 
     GPU.Reset();
     NDSCartSlot.Reset();
@@ -842,6 +846,9 @@ bool NDS::DoSavestate(Savestate* file)
     file->Var64(&ARM9Target);
     file->Var64(&ARM7Timestamp);
     file->Var64(&ARM7Target);
+    file->Var64(&LCDTimestamp);
+    file->Var32(&LCDFuncID);
+    file->Var32(&LCDParam);
     file->Var64(&SysTimestamp);
     file->Var64(&LastSysClockCycles);
     file->Var64(&FrameStartTimestamp);
@@ -852,6 +859,7 @@ bool NDS::DoSavestate(Savestate* file)
     // TODO: save KeyInput????
     file->VarArray(KeyCnt, 2*sizeof(u16));
     file->Var16(&RCnt);
+    file->Bool32(&LCDScheduled);
 
     file->Var8(&WRAMCnt);
 
@@ -956,6 +964,8 @@ u64 NDS::NextTarget()
 {
     u64 max = SysTimestamp + kMaxIterationCycles;
     u64 minEvent = NextSchedEventTimestamp;
+    if (LCDScheduled && LCDTimestamp < minEvent)
+        minEvent = LCDTimestamp;
 
     if (minEvent < max + kIterationCycleMargin)
         return minEvent;
@@ -967,10 +977,23 @@ void NDS::RunSystem(u64 timestamp)
 {
     SysTimestamp = timestamp;
 
-    if (timestamp < NextSchedEventTimestamp)
+    u64 minEvent = NextSchedEventTimestamp;
+    if (LCDScheduled && LCDTimestamp < minEvent)
+        minEvent = LCDTimestamp;
+
+    if (timestamp < minEvent)
     {
         LiteProfile::AddAtomic(LiteProfile::gFrame.RunSystemFastSkips);
         return;
+    }
+
+    if (LCDScheduled && LCDTimestamp <= SysTimestamp)
+    {
+        LCDScheduled = false;
+        const uint64_t eventStart = LiteProfile::NowNs();
+        EventFunc func = SchedList[Event_LCD].Funcs[LCDFuncID];
+        func(SchedList[Event_LCD].That, LCDParam);
+        ProfileRunSystemEvent(Event_LCD, LiteProfile::NowNs() - eventStart);
     }
 
     u32 mask = SchedListMask;
@@ -1418,6 +1441,31 @@ void NDS::UnregisterEventFuncs(u32 id)
 
 void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
 {
+    if (id == Event_LCD)
+    {
+        if (LCDScheduled)
+        {
+            Log(LogLevel::Debug, "!! EVENT %d ALREADY SCHEDULED\n", id);
+            return;
+        }
+
+        if (periodic)
+            LCDTimestamp += delay;
+        else
+        {
+            if (GetCurrentCPU(*this) == 0)
+                LCDTimestamp = (ARM9Timestamp >> ARM9ClockShift) + delay;
+            else
+                LCDTimestamp = ARM7Timestamp + delay;
+        }
+
+        LCDFuncID = funcid;
+        LCDParam = param;
+        LCDScheduled = true;
+        Reschedule(LCDTimestamp);
+        return;
+    }
+
     if (SchedListMask & (1<<id))
     {
         Log(LogLevel::Debug, "!! EVENT %d ALREADY SCHEDULED\n", id);
@@ -1447,6 +1495,13 @@ void NDS::ScheduleEvent(u32 id, bool periodic, s32 delay, u32 funcid, u32 param)
 
 void NDS::CancelEvent(u32 id)
 {
+    if (id == Event_LCD)
+    {
+        LCDScheduled = false;
+        LCDTimestamp = UINT64_MAX;
+        return;
+    }
+
     SchedListMask &= ~(1<<id);
     RecomputeNextSchedEventTimestamp();
 }
