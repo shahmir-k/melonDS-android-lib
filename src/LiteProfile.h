@@ -64,6 +64,12 @@ struct FrameCounters
     std::atomic<uint64_t> LCDScanlineDMANs{0};
     std::atomic<uint64_t> LCDScanlineVBlankNs{0};
     std::atomic<uint64_t> LCDScanlineScheduleNs{0};
+    std::atomic<uint64_t> GPU3DRenderStateNs{0};
+    std::atomic<uint64_t> GPU3DRenderTextureNs{0};
+    std::atomic<uint64_t> GPU3DRenderTexPalNs{0};
+    std::atomic<uint64_t> GPU3DRenderClearNs{0};
+    std::atomic<uint64_t> GPU3DRenderGeometryNs{0};
+    std::atomic<uint64_t> GPU3DRenderSceneNs{0};
 
     std::atomic<uint64_t> DrawScanlineNs{0};
     std::atomic<uint64_t> DrawSpritesNs{0};
@@ -146,6 +152,12 @@ inline void ResetFrame()
     gFrame.LCDScanlineDMANs.store(0, std::memory_order_relaxed);
     gFrame.LCDScanlineVBlankNs.store(0, std::memory_order_relaxed);
     gFrame.LCDScanlineScheduleNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DRenderStateNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DRenderTextureNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DRenderTexPalNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DRenderClearNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DRenderGeometryNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DRenderSceneNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gFrame.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -211,6 +223,12 @@ inline void ResetWindow()
     gWindow.LCDScanlineDMANs.store(0, std::memory_order_relaxed);
     gWindow.LCDScanlineVBlankNs.store(0, std::memory_order_relaxed);
     gWindow.LCDScanlineScheduleNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DRenderStateNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DRenderTextureNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DRenderTexPalNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DRenderClearNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DRenderGeometryNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DRenderSceneNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gWindow.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -309,6 +327,12 @@ inline void EndFrame()
     MergeCounter(gWindow.LCDScanlineDMANs, gFrame.LCDScanlineDMANs);
     MergeCounter(gWindow.LCDScanlineVBlankNs, gFrame.LCDScanlineVBlankNs);
     MergeCounter(gWindow.LCDScanlineScheduleNs, gFrame.LCDScanlineScheduleNs);
+    MergeCounter(gWindow.GPU3DRenderStateNs, gFrame.GPU3DRenderStateNs);
+    MergeCounter(gWindow.GPU3DRenderTextureNs, gFrame.GPU3DRenderTextureNs);
+    MergeCounter(gWindow.GPU3DRenderTexPalNs, gFrame.GPU3DRenderTexPalNs);
+    MergeCounter(gWindow.GPU3DRenderClearNs, gFrame.GPU3DRenderClearNs);
+    MergeCounter(gWindow.GPU3DRenderGeometryNs, gFrame.GPU3DRenderGeometryNs);
+    MergeCounter(gWindow.GPU3DRenderSceneNs, gFrame.GPU3DRenderSceneNs);
     MergeCounter(gWindow.DrawScanlineNs, gFrame.DrawScanlineNs);
     MergeCounter(gWindow.DrawSpritesNs, gFrame.DrawSpritesNs);
     MergeCounter(gWindow.DrawScanlineCalls, gFrame.DrawScanlineCalls);
@@ -400,6 +424,15 @@ inline void EndFrame()
         NsPerFrame(gWindow.LCDScanlineDMANs),
         NsPerFrame(gWindow.LCDScanlineVBlankNs),
         NsPerFrame(gWindow.LCDScanlineScheduleNs));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] gpu3d_render state=%.3fms tex=%.3fms texpal=%.3fms clear=%.3fms geom=%.3fms scene=%.3fms",
+        NsPerFrame(gWindow.GPU3DRenderStateNs),
+        NsPerFrame(gWindow.GPU3DRenderTextureNs),
+        NsPerFrame(gWindow.GPU3DRenderTexPalNs),
+        NsPerFrame(gWindow.GPU3DRenderClearNs),
+        NsPerFrame(gWindow.GPU3DRenderGeometryNs),
+        NsPerFrame(gWindow.GPU3DRenderSceneNs));
 
     gWindowFrames = 0;
     ResetWindow();

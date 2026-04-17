@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include "LiteProfile.h"
 #include "NDS.h"
 #include "GPU.h"
 #include "GPU3D_OpenGL_shaders.h"
@@ -1291,65 +1292,69 @@ void GLRenderer::RenderFrame(GPU& gpu)
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, MainFramebuffer);
 
-    ShaderConfig.uScreenSize[0] = ScreenW;
-    ShaderConfig.uScreenSize[1] = ScreenH;
-    ShaderConfig.uDispCnt = gpu.GPU3D.RenderDispCnt;
-
-    for (int i = 0; i < 32; i++)
     {
-        u16 c = gpu.GPU3D.RenderToonTable[i];
-        u32 r = c & 0x1F;
-        u32 g = (c >> 5) & 0x1F;
-        u32 b = (c >> 10) & 0x1F;
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderStateNs);
+        ShaderConfig.uScreenSize[0] = ScreenW;
+        ShaderConfig.uScreenSize[1] = ScreenH;
+        ShaderConfig.uDispCnt = gpu.GPU3D.RenderDispCnt;
 
-        ShaderConfig.uToonColors[i][0] = (float)r / 31.0;
-        ShaderConfig.uToonColors[i][1] = (float)g / 31.0;
-        ShaderConfig.uToonColors[i][2] = (float)b / 31.0;
+        for (int i = 0; i < 32; i++)
+        {
+            u16 c = gpu.GPU3D.RenderToonTable[i];
+            u32 r = c & 0x1F;
+            u32 g = (c >> 5) & 0x1F;
+            u32 b = (c >> 10) & 0x1F;
+
+            ShaderConfig.uToonColors[i][0] = (float)r / 31.0;
+            ShaderConfig.uToonColors[i][1] = (float)g / 31.0;
+            ShaderConfig.uToonColors[i][2] = (float)b / 31.0;
+        }
+
+        for (int i = 0; i < 8; i++)
+        {
+            u16 c = gpu.GPU3D.RenderEdgeTable[i];
+            u32 r = c & 0x1F;
+            u32 g = (c >> 5) & 0x1F;
+            u32 b = (c >> 10) & 0x1F;
+
+            ShaderConfig.uEdgeColors[i][0] = (float)r / 31.0;
+            ShaderConfig.uEdgeColors[i][1] = (float)g / 31.0;
+            ShaderConfig.uEdgeColors[i][2] = (float)b / 31.0;
+        }
+
+        {
+            u32 c = gpu.GPU3D.RenderFogColor;
+            u32 r = c & 0x1F;
+            u32 g = (c >> 5) & 0x1F;
+            u32 b = (c >> 10) & 0x1F;
+            u32 a = (c >> 16) & 0x1F;
+
+            ShaderConfig.uFogColor[0] = (float)r / 31.0;
+            ShaderConfig.uFogColor[1] = (float)g / 31.0;
+            ShaderConfig.uFogColor[2] = (float)b / 31.0;
+            ShaderConfig.uFogColor[3] = (float)a / 31.0;
+        }
+
+        for (int i = 0; i < 34; i++)
+        {
+            u8 d = gpu.GPU3D.RenderFogDensityTable[i];
+            ShaderConfig.uFogDensity[i][0] = (float)d / 127.0;
+        }
+
+        ShaderConfig.uFogOffset = gpu.GPU3D.RenderFogOffset;
+        ShaderConfig.uFogShift = gpu.GPU3D.RenderFogShift;
+
+        glBindBuffer(GL_UNIFORM_BUFFER, ShaderConfigUBO);
+        void* unibuf = glMapBufferRange(GL_UNIFORM_BUFFER, 0, sizeof(ShaderConfig), GL_MAP_WRITE_BIT);
+        if (unibuf) memcpy(unibuf, &ShaderConfig, sizeof(ShaderConfig));
+        glUnmapBuffer(GL_UNIFORM_BUFFER);
     }
-
-    for (int i = 0; i < 8; i++)
-    {
-        u16 c = gpu.GPU3D.RenderEdgeTable[i];
-        u32 r = c & 0x1F;
-        u32 g = (c >> 5) & 0x1F;
-        u32 b = (c >> 10) & 0x1F;
-
-        ShaderConfig.uEdgeColors[i][0] = (float)r / 31.0;
-        ShaderConfig.uEdgeColors[i][1] = (float)g / 31.0;
-        ShaderConfig.uEdgeColors[i][2] = (float)b / 31.0;
-    }
-
-    {
-        u32 c = gpu.GPU3D.RenderFogColor;
-        u32 r = c & 0x1F;
-        u32 g = (c >> 5) & 0x1F;
-        u32 b = (c >> 10) & 0x1F;
-        u32 a = (c >> 16) & 0x1F;
-
-        ShaderConfig.uFogColor[0] = (float)r / 31.0;
-        ShaderConfig.uFogColor[1] = (float)g / 31.0;
-        ShaderConfig.uFogColor[2] = (float)b / 31.0;
-        ShaderConfig.uFogColor[3] = (float)a / 31.0;
-    }
-
-    for (int i = 0; i < 34; i++)
-    {
-        u8 d = gpu.GPU3D.RenderFogDensityTable[i];
-        ShaderConfig.uFogDensity[i][0] = (float)d / 127.0;
-    }
-
-    ShaderConfig.uFogOffset = gpu.GPU3D.RenderFogOffset;
-    ShaderConfig.uFogShift = gpu.GPU3D.RenderFogShift;
-
-    glBindBuffer(GL_UNIFORM_BUFFER, ShaderConfigUBO);
-    void* unibuf = glMapBufferRange(GL_UNIFORM_BUFFER, 0, sizeof(ShaderConfig), GL_MAP_WRITE_BIT);
-    if (unibuf) memcpy(unibuf, &ShaderConfig, sizeof(ShaderConfig));
-    glUnmapBuffer(GL_UNIFORM_BUFFER);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, TexMemID);
     if (textureDirty.Any())
     {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderTextureNs);
         gpu.MakeVRAMFlat_TextureCoherent(textureDirty);
         ForEachDirtyByteRange(textureDirty, VRAMDirtyGranularity,
             [&gpu](u32 byteStart, u32 byteEnd)
@@ -1363,6 +1368,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     glBindTexture(GL_TEXTURE_2D, TexPalMemID);
     if (texPalDirty.Any())
     {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderTexPalNs);
         constexpr u32 texPalEntries = 1024 * 48;
         constexpr u32 texPalBytes = texPalEntries * sizeof(u16);
 
@@ -1415,6 +1421,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     // TODO: check whether 'clear polygon ID' affects translucent polyID
     // (for example when alpha is 1..30)
     {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderClearNs);
         glUseProgram(ClearShaderPlain);
         glDepthFunc(GL_ALWAYS);
 
@@ -1445,38 +1452,44 @@ void GLRenderer::RenderFrame(GPU& gpu)
 
     if (gpu.GPU3D.RenderNumPolygons)
     {
-        const PreparedFrameData* prepared = ResolvePreparedFrame(gpu.GPU3D.RenderFrameToken);
-        if (!prepared)
         {
-            PreparedFrameData syncFrame {};
-            BuildPreparedFrame(syncFrame, gpu.GPU3D, ScaleFactor, BetterPolygons);
+            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderGeometryNs);
+            const PreparedFrameData* prepared = ResolvePreparedFrame(gpu.GPU3D.RenderFrameToken);
+            if (!prepared)
+            {
+                PreparedFrameData syncFrame {};
+                BuildPreparedFrame(syncFrame, gpu.GPU3D, ScaleFactor, BetterPolygons);
 
-            NumFinalPolys = syncFrame.NumFinalPolys;
-            NumOpaqueFinalPolys = syncFrame.NumOpaqueFinalPolys;
-            NumVertices = syncFrame.NumVertices;
-            NumIndices = syncFrame.NumIndices;
-            NumEdgeIndices = syncFrame.NumEdgeIndices;
-            memcpy(PolygonList, syncFrame.PolygonList.data(), sizeof(PolygonList));
-            memcpy(VertexBuffer, syncFrame.VertexBuffer.data(), syncFrame.NumVertices * 7 * sizeof(u32));
-            memcpy(IndexBuffer, syncFrame.IndexBuffer.data(),
-                   (AsyncEdgeIndicesOffset + syncFrame.NumEdgeIndices) * sizeof(u16));
+                NumFinalPolys = syncFrame.NumFinalPolys;
+                NumOpaqueFinalPolys = syncFrame.NumOpaqueFinalPolys;
+                NumVertices = syncFrame.NumVertices;
+                NumIndices = syncFrame.NumIndices;
+                NumEdgeIndices = syncFrame.NumEdgeIndices;
+                memcpy(PolygonList, syncFrame.PolygonList.data(), sizeof(PolygonList));
+                memcpy(VertexBuffer, syncFrame.VertexBuffer.data(), syncFrame.NumVertices * 7 * sizeof(u32));
+                memcpy(IndexBuffer, syncFrame.IndexBuffer.data(),
+                       (AsyncEdgeIndicesOffset + syncFrame.NumEdgeIndices) * sizeof(u16));
+            }
+
+            const u32* vertexBuffer = prepared ? prepared->VertexBuffer.data() : VertexBuffer;
+            const u16* indexBuffer = prepared ? prepared->IndexBuffer.data() : IndexBuffer;
+            const u32 numVertices = prepared ? prepared->NumVertices : NumVertices;
+            const u32 numIndices = prepared ? prepared->NumIndices : NumIndices;
+            const u32 numEdgeIndices = prepared ? prepared->NumEdgeIndices : NumEdgeIndices;
+
+            glBindBuffer(GL_ARRAY_BUFFER, VertexBufferID);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, numVertices * 7 * 4, vertexBuffer);
+
+            // bind to access the index buffer
+            glBindVertexArray(VertexArrayID);
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, numIndices * 2, indexBuffer);
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, numEdgeIndices * 2, indexBuffer + AsyncEdgeIndicesOffset);
         }
 
-        const u32* vertexBuffer = prepared ? prepared->VertexBuffer.data() : VertexBuffer;
-        const u16* indexBuffer = prepared ? prepared->IndexBuffer.data() : IndexBuffer;
-        const u32 numVertices = prepared ? prepared->NumVertices : NumVertices;
-        const u32 numIndices = prepared ? prepared->NumIndices : NumIndices;
-        const u32 numEdgeIndices = prepared ? prepared->NumEdgeIndices : NumEdgeIndices;
-
-        glBindBuffer(GL_ARRAY_BUFFER, VertexBufferID);
-        glBufferSubData(GL_ARRAY_BUFFER, 0, numVertices * 7 * 4, vertexBuffer);
-
-        // bind to access the index buffer
-        glBindVertexArray(VertexArrayID);
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, numIndices * 2, indexBuffer);
-        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, numEdgeIndices * 2, indexBuffer + AsyncEdgeIndicesOffset);
-
-        RenderSceneChunk(gpu.GPU3D, 0, 192);
+        {
+            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderSceneNs);
+            RenderSceneChunk(gpu.GPU3D, 0, 192);
+        }
     }
 
     ActivePreparedFrame = nullptr;
