@@ -53,6 +53,17 @@ struct FrameCounters
     std::atomic<uint64_t> LCDStartScanlineCount{0};
     std::atomic<uint64_t> LCDFinishFrameNs{0};
     std::atomic<uint64_t> LCDFinishFrameCount{0};
+    std::atomic<uint64_t> LCDHBlankDrawNs{0};
+    std::atomic<uint64_t> LCDHBlankSpritePrepNs{0};
+    std::atomic<uint64_t> LCDHBlankDMANs{0};
+    std::atomic<uint64_t> LCDHBlank3DNs{0};
+    std::atomic<uint64_t> LCDHBlankIRQNs{0};
+    std::atomic<uint64_t> LCDHBlankScheduleNs{0};
+    std::atomic<uint64_t> LCDScanlineStateNs{0};
+    std::atomic<uint64_t> LCDScanlineWindowNs{0};
+    std::atomic<uint64_t> LCDScanlineDMANs{0};
+    std::atomic<uint64_t> LCDScanlineVBlankNs{0};
+    std::atomic<uint64_t> LCDScanlineScheduleNs{0};
 
     std::atomic<uint64_t> DrawScanlineNs{0};
     std::atomic<uint64_t> DrawSpritesNs{0};
@@ -124,6 +135,17 @@ inline void ResetFrame()
     gFrame.LCDStartScanlineCount.store(0, std::memory_order_relaxed);
     gFrame.LCDFinishFrameNs.store(0, std::memory_order_relaxed);
     gFrame.LCDFinishFrameCount.store(0, std::memory_order_relaxed);
+    gFrame.LCDHBlankDrawNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDHBlankSpritePrepNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDHBlankDMANs.store(0, std::memory_order_relaxed);
+    gFrame.LCDHBlank3DNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDHBlankIRQNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDHBlankScheduleNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDScanlineStateNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDScanlineWindowNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDScanlineDMANs.store(0, std::memory_order_relaxed);
+    gFrame.LCDScanlineVBlankNs.store(0, std::memory_order_relaxed);
+    gFrame.LCDScanlineScheduleNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gFrame.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -178,6 +200,17 @@ inline void ResetWindow()
     gWindow.LCDStartScanlineCount.store(0, std::memory_order_relaxed);
     gWindow.LCDFinishFrameNs.store(0, std::memory_order_relaxed);
     gWindow.LCDFinishFrameCount.store(0, std::memory_order_relaxed);
+    gWindow.LCDHBlankDrawNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDHBlankSpritePrepNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDHBlankDMANs.store(0, std::memory_order_relaxed);
+    gWindow.LCDHBlank3DNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDHBlankIRQNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDHBlankScheduleNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDScanlineStateNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDScanlineWindowNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDScanlineDMANs.store(0, std::memory_order_relaxed);
+    gWindow.LCDScanlineVBlankNs.store(0, std::memory_order_relaxed);
+    gWindow.LCDScanlineScheduleNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gWindow.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -265,6 +298,17 @@ inline void EndFrame()
     MergeCounter(gWindow.LCDStartScanlineCount, gFrame.LCDStartScanlineCount);
     MergeCounter(gWindow.LCDFinishFrameNs, gFrame.LCDFinishFrameNs);
     MergeCounter(gWindow.LCDFinishFrameCount, gFrame.LCDFinishFrameCount);
+    MergeCounter(gWindow.LCDHBlankDrawNs, gFrame.LCDHBlankDrawNs);
+    MergeCounter(gWindow.LCDHBlankSpritePrepNs, gFrame.LCDHBlankSpritePrepNs);
+    MergeCounter(gWindow.LCDHBlankDMANs, gFrame.LCDHBlankDMANs);
+    MergeCounter(gWindow.LCDHBlank3DNs, gFrame.LCDHBlank3DNs);
+    MergeCounter(gWindow.LCDHBlankIRQNs, gFrame.LCDHBlankIRQNs);
+    MergeCounter(gWindow.LCDHBlankScheduleNs, gFrame.LCDHBlankScheduleNs);
+    MergeCounter(gWindow.LCDScanlineStateNs, gFrame.LCDScanlineStateNs);
+    MergeCounter(gWindow.LCDScanlineWindowNs, gFrame.LCDScanlineWindowNs);
+    MergeCounter(gWindow.LCDScanlineDMANs, gFrame.LCDScanlineDMANs);
+    MergeCounter(gWindow.LCDScanlineVBlankNs, gFrame.LCDScanlineVBlankNs);
+    MergeCounter(gWindow.LCDScanlineScheduleNs, gFrame.LCDScanlineScheduleNs);
     MergeCounter(gWindow.DrawScanlineNs, gFrame.DrawScanlineNs);
     MergeCounter(gWindow.DrawSpritesNs, gFrame.DrawSpritesNs);
     MergeCounter(gWindow.DrawScanlineCalls, gFrame.DrawScanlineCalls);
@@ -339,6 +383,23 @@ inline void EndFrame()
         NsPerFrame(gWindow.LCDStartHBlankNs), CountPerFrame(gWindow.LCDStartHBlankCount),
         NsPerFrame(gWindow.LCDStartScanlineNs), CountPerFrame(gWindow.LCDStartScanlineCount),
         NsPerFrame(gWindow.LCDFinishFrameNs), CountPerFrame(gWindow.LCDFinishFrameCount));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] lcd_hblank draw=%.3fms spriteprep=%.3fms dma=%.3fms vcount215=%.3fms irq=%.3fms sched=%.3fms",
+        NsPerFrame(gWindow.LCDHBlankDrawNs),
+        NsPerFrame(gWindow.LCDHBlankSpritePrepNs),
+        NsPerFrame(gWindow.LCDHBlankDMANs),
+        NsPerFrame(gWindow.LCDHBlank3DNs),
+        NsPerFrame(gWindow.LCDHBlankIRQNs),
+        NsPerFrame(gWindow.LCDHBlankScheduleNs));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] lcd_scanline state=%.3fms windows=%.3fms dma=%.3fms vblank=%.3fms sched=%.3fms",
+        NsPerFrame(gWindow.LCDScanlineStateNs),
+        NsPerFrame(gWindow.LCDScanlineWindowNs),
+        NsPerFrame(gWindow.LCDScanlineDMANs),
+        NsPerFrame(gWindow.LCDScanlineVBlankNs),
+        NsPerFrame(gWindow.LCDScanlineScheduleNs));
 
     gWindowFrames = 0;
     ResetWindow();

@@ -1002,8 +1002,11 @@ void GPU::StartHBlank(u32 line) noexcept
     LiteProfile::AddAtomic(LiteProfile::gFrame.LCDStartHBlankCount);
     LiteProfile::ScopeTimer hblankTimer(LiteProfile::gFrame.LCDStartHBlankNs);
 
-    DispStat[0] |= (1<<1);
-    DispStat[1] |= (1<<1);
+    {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankIRQNs);
+        DispStat[0] |= (1<<1);
+        DispStat[1] |= (1<<1);
+    }
 
     if (VCount < 192)
     {
@@ -1015,6 +1018,7 @@ void GPU::StartHBlank(u32 line) noexcept
             if (!SkipThisFrame)
 #endif
             {
+                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankDrawNs);
                 GPU2D_Renderer->DrawScanline(line, &GPU2D_A);
                 GPU2D_Renderer->DrawScanline(line, &GPU2D_B);
             }
@@ -1027,12 +1031,16 @@ void GPU::StartHBlank(u32 line) noexcept
             if (!SkipThisFrame)
 #endif
             {
+                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankSpritePrepNs);
                 GPU2D_Renderer->DrawSprites(line+1, &GPU2D_A);
                 GPU2D_Renderer->DrawSprites(line+1, &GPU2D_B);
             }
         }
 
-        NDS.CheckDMAs(0, 0x02);
+        {
+            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankDMANs);
+            NDS.CheckDMAs(0, 0x02);
+        }
     }
     else if (VCount == 215)
     {
@@ -1040,6 +1048,7 @@ void GPU::StartHBlank(u32 line) noexcept
         if (!SkipThisFrame || !GPU3D.RenderFrameIdentical)
 #endif
         {
+            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlank3DNs);
             GPU3D.VCount215(*this);
         }
     }
@@ -1049,18 +1058,25 @@ void GPU::StartHBlank(u32 line) noexcept
         if (!SkipThisFrame)
 #endif
         {
+            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankSpritePrepNs);
             GPU2D_Renderer->DrawSprites(0, &GPU2D_A);
             GPU2D_Renderer->DrawSprites(0, &GPU2D_B);
         }
     }
 
-    if (DispStat[0] & (1<<4)) NDS.SetIRQ(0, IRQ_HBlank);
-    if (DispStat[1] & (1<<4)) NDS.SetIRQ(1, IRQ_HBlank);
+    {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankIRQNs);
+        if (DispStat[0] & (1<<4)) NDS.SetIRQ(0, IRQ_HBlank);
+        if (DispStat[1] & (1<<4)) NDS.SetIRQ(1, IRQ_HBlank);
+    }
 
-    if (VCount < 262)
-        NDS.ScheduleEvent(Event_LCD, true, (LINE_CYCLES - HBLANK_CYCLES), LCD_StartScanline, line+1);
-    else
-        NDS.ScheduleEvent(Event_LCD, true, (LINE_CYCLES - HBLANK_CYCLES), LCD_FinishFrame, line+1);
+    {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDHBlankScheduleNs);
+        if (VCount < 262)
+            NDS.ScheduleEvent(Event_LCD, true, (LINE_CYCLES - HBLANK_CYCLES), LCD_StartScanline, line+1);
+        else
+            NDS.ScheduleEvent(Event_LCD, true, (LINE_CYCLES - HBLANK_CYCLES), LCD_FinishFrame, line+1);
+    }
 }
 
 void GPU::FinishFrame(u32 lines) noexcept
@@ -1103,46 +1119,56 @@ void GPU::StartScanline(u32 line) noexcept
     LiteProfile::AddAtomic(LiteProfile::gFrame.LCDStartScanlineCount);
     LiteProfile::ScopeTimer scanlineTimer(LiteProfile::gFrame.LCDStartScanlineNs);
 
-    if (line == 0)
-        VCount = 0;
-    else if (NextVCount != 0xFFFFFFFF)
-        VCount = NextVCount;
-    else
-        VCount++;
-
-    NextVCount = -1;
-
-    DispStat[0] &= ~(1<<1);
-    DispStat[1] &= ~(1<<1);
-
-    if (VCount == VMatch[0])
     {
-        DispStat[0] |= (1<<2);
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineStateNs);
+        if (line == 0)
+            VCount = 0;
+        else if (NextVCount != 0xFFFFFFFF)
+            VCount = NextVCount;
+        else
+            VCount++;
 
-        if (DispStat[0] & (1<<5)) NDS.SetIRQ(0, IRQ_VCount);
+        NextVCount = -1;
+
+        DispStat[0] &= ~(1<<1);
+        DispStat[1] &= ~(1<<1);
+
+        if (VCount == VMatch[0])
+        {
+            DispStat[0] |= (1<<2);
+
+            if (DispStat[0] & (1<<5)) NDS.SetIRQ(0, IRQ_VCount);
+        }
+        else
+            DispStat[0] &= ~(1<<2);
+
+        if (VCount == VMatch[1])
+        {
+            DispStat[1] |= (1<<2);
+
+            if (DispStat[1] & (1<<5)) NDS.SetIRQ(1, IRQ_VCount);
+        }
+        else
+            DispStat[1] &= ~(1<<2);
     }
-    else
-        DispStat[0] &= ~(1<<2);
 
-    if (VCount == VMatch[1])
     {
-        DispStat[1] |= (1<<2);
-
-        if (DispStat[1] & (1<<5)) NDS.SetIRQ(1, IRQ_VCount);
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineWindowNs);
+        GPU2D_A.CheckWindows(VCount);
+        GPU2D_B.CheckWindows(VCount);
     }
-    else
-        DispStat[1] &= ~(1<<2);
 
-    GPU2D_A.CheckWindows(VCount);
-    GPU2D_B.CheckWindows(VCount);
-
-    if (VCount >= 2 && VCount < 194)
-        NDS.CheckDMAs(0, 0x03);
-    else if (VCount == 194)
-        NDS.StopDMAs(0, 0x03);
+    {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineDMANs);
+        if (VCount >= 2 && VCount < 194)
+            NDS.CheckDMAs(0, 0x03);
+        else if (VCount == 194)
+            NDS.StopDMAs(0, 0x03);
+    }
 
     if (line < 192)
     {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineVBlankNs);
         if (line == 0)
         {
             GPU2D_Renderer->VBlankEnd(&GPU2D_A, &GPU2D_B);
@@ -1158,6 +1184,7 @@ void GPU::StartScanline(u32 line) noexcept
     {
         // frame end
 
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineVBlankNs);
         DispStat[0] &= ~(1<<0);
         DispStat[1] &= ~(1<<0);
     }
@@ -1171,6 +1198,7 @@ void GPU::StartScanline(u32 line) noexcept
             // texture memory anyway and only update it before the start
             //of the next frame.
             // So we can give the rasteriser a bit more headroom
+            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineVBlankNs);
             GPU3D.VCount144(*this);
 
             // VBlank
@@ -1195,7 +1223,10 @@ void GPU::StartScanline(u32 line) noexcept
         }
     }
 
-    NDS.ScheduleEvent(Event_LCD, true, HBLANK_CYCLES, LCD_StartHBlank, line);
+    {
+        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.LCDScanlineScheduleNs);
+        NDS.ScheduleEvent(Event_LCD, true, HBLANK_CYCLES, LCD_StartHBlank, line);
+    }
 }
 
 
