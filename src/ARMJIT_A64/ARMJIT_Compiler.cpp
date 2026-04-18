@@ -671,7 +671,9 @@ void Compiler::Comp_BranchSpecialBehaviour(bool taken)
         if (ConstantCycles)
             ADD(RCycles, RCycles, ConstantCycles);
 
-        if (Num == 0 && taken && (CurInstr.BranchFlags & branch_FollowCondNotTaken))
+        if (Num == 0
+            && ((taken && (CurInstr.BranchFlags & branch_FollowCondNotTaken))
+                || (!taken && (CurInstr.BranchFlags & branch_FollowCondTaken))))
         {
             SaveCycles();
             SaveCPSR();
