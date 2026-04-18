@@ -43,6 +43,7 @@
 #include "SPU.h"
 #include "Wifi.h"
 #include "NDSCart.h"
+#include "LiteProfile.h"
 #include "Platform.h"
 #include "ARMJIT_x64/ARMJIT_Offsets.h"
 
@@ -131,6 +132,8 @@ u32 ARMJIT::LocaliseCodeAddress(u32 num, u32 addr) const noexcept
 template <typename T, int ConsoleType>
 T SlowRead9(u32 addr, ARMv5* cpu)
 {
+    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadCalls);
+    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9SlowReadNs);
     u32 offset = addr & 0x3;
     addr &= ~(sizeof(T) - 1);
 
@@ -195,6 +198,8 @@ T SlowRead7(u32 addr)
 template <typename T, int ConsoleType>
 void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
 {
+    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteCalls);
+    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9SlowWriteNs);
     addr &= ~(sizeof(T) - 1);
 
     auto& nds = cpu->NDS;
@@ -260,6 +265,7 @@ void SlowWrite7(u32 addr, u32 val)
 template <bool Write, int ConsoleType>
 void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
+    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
     addr &= ~0x3;
     auto& nds = cpu->NDS;
 

@@ -23,6 +23,26 @@ struct FrameCounters
     std::atomic<uint64_t> RunSystemFastSkips{0};
 
     std::atomic<uint64_t> ARM9ExecNs{0};
+    std::atomic<uint64_t> ARM9JitDispatchNs{0};
+    std::atomic<uint64_t> ARM9JitCompileNs{0};
+    std::atomic<uint64_t> ARM9JitLookupNs{0};
+    std::atomic<uint64_t> ARM9JitDispatchCalls{0};
+    std::atomic<uint64_t> ARM9JitCompileCalls{0};
+    std::atomic<uint64_t> ARM9JitLookupCalls{0};
+    std::atomic<uint64_t> ARM9JitGuestCycles{0};
+    std::atomic<uint64_t> ARM9JitLastBlockHits{0};
+    std::atomic<uint64_t> ARM9JitReturnsNormal{0};
+    std::atomic<uint64_t> ARM9JitReturnsStop{0};
+    std::atomic<uint64_t> ARM9JitReturnsIdle{0};
+    std::atomic<uint64_t> ARM9JitReturnsHalt{0};
+    std::atomic<uint64_t> ARM9JitBlockCacheHits{0};
+    std::atomic<uint64_t> ARM9JitBlockCacheMisses{0};
+    std::atomic<uint64_t> ARM9LibHLEHits{0};
+    std::atomic<uint64_t> ARM9SlowReadNs{0};
+    std::atomic<uint64_t> ARM9SlowWriteNs{0};
+    std::atomic<uint64_t> ARM9SlowReadCalls{0};
+    std::atomic<uint64_t> ARM9SlowWriteCalls{0};
+    std::atomic<uint64_t> ARM9SlowBlockTransferCalls{0};
     std::atomic<uint64_t> ARM7ExecNs{0};
     std::atomic<uint64_t> ARM7WaitNs{0};
     std::atomic<uint64_t> GPU3DRunNs{0};
@@ -125,6 +145,26 @@ inline void ResetFrame()
     gFrame.SchedulerEventIterations.store(0, std::memory_order_relaxed);
     gFrame.RunSystemFastSkips.store(0, std::memory_order_relaxed);
     gFrame.ARM9ExecNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitDispatchNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCompileNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitLookupNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitDispatchCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCompileCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitLookupCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitGuestCycles.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnsHalt.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitBlockCacheHits.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitBlockCacheMisses.store(0, std::memory_order_relaxed);
+    gFrame.ARM9LibHLEHits.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM7ExecNs.store(0, std::memory_order_relaxed);
     gFrame.ARM7WaitNs.store(0, std::memory_order_relaxed);
     gFrame.GPU3DRunNs.store(0, std::memory_order_relaxed);
@@ -210,6 +250,26 @@ inline void ResetWindow()
     gWindow.SchedulerEventIterations.store(0, std::memory_order_relaxed);
     gWindow.RunSystemFastSkips.store(0, std::memory_order_relaxed);
     gWindow.ARM9ExecNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitDispatchNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCompileNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitLookupNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitDispatchCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCompileCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitLookupCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitGuestCycles.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnsHalt.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitBlockCacheHits.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitBlockCacheMisses.store(0, std::memory_order_relaxed);
+    gWindow.ARM9LibHLEHits.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM7ExecNs.store(0, std::memory_order_relaxed);
     gWindow.ARM7WaitNs.store(0, std::memory_order_relaxed);
     gWindow.GPU3DRunNs.store(0, std::memory_order_relaxed);
@@ -335,6 +395,26 @@ inline void EndFrame()
     MergeCounter(gWindow.SchedulerEventIterations, gFrame.SchedulerEventIterations);
     MergeCounter(gWindow.RunSystemFastSkips, gFrame.RunSystemFastSkips);
     MergeCounter(gWindow.ARM9ExecNs, gFrame.ARM9ExecNs);
+    MergeCounter(gWindow.ARM9JitDispatchNs, gFrame.ARM9JitDispatchNs);
+    MergeCounter(gWindow.ARM9JitCompileNs, gFrame.ARM9JitCompileNs);
+    MergeCounter(gWindow.ARM9JitLookupNs, gFrame.ARM9JitLookupNs);
+    MergeCounter(gWindow.ARM9JitDispatchCalls, gFrame.ARM9JitDispatchCalls);
+    MergeCounter(gWindow.ARM9JitCompileCalls, gFrame.ARM9JitCompileCalls);
+    MergeCounter(gWindow.ARM9JitLookupCalls, gFrame.ARM9JitLookupCalls);
+    MergeCounter(gWindow.ARM9JitGuestCycles, gFrame.ARM9JitGuestCycles);
+    MergeCounter(gWindow.ARM9JitLastBlockHits, gFrame.ARM9JitLastBlockHits);
+    MergeCounter(gWindow.ARM9JitReturnsNormal, gFrame.ARM9JitReturnsNormal);
+    MergeCounter(gWindow.ARM9JitReturnsStop, gFrame.ARM9JitReturnsStop);
+    MergeCounter(gWindow.ARM9JitReturnsIdle, gFrame.ARM9JitReturnsIdle);
+    MergeCounter(gWindow.ARM9JitReturnsHalt, gFrame.ARM9JitReturnsHalt);
+    MergeCounter(gWindow.ARM9JitBlockCacheHits, gFrame.ARM9JitBlockCacheHits);
+    MergeCounter(gWindow.ARM9JitBlockCacheMisses, gFrame.ARM9JitBlockCacheMisses);
+    MergeCounter(gWindow.ARM9LibHLEHits, gFrame.ARM9LibHLEHits);
+    MergeCounter(gWindow.ARM9SlowReadNs, gFrame.ARM9SlowReadNs);
+    MergeCounter(gWindow.ARM9SlowWriteNs, gFrame.ARM9SlowWriteNs);
+    MergeCounter(gWindow.ARM9SlowReadCalls, gFrame.ARM9SlowReadCalls);
+    MergeCounter(gWindow.ARM9SlowWriteCalls, gFrame.ARM9SlowWriteCalls);
+    MergeCounter(gWindow.ARM9SlowBlockTransferCalls, gFrame.ARM9SlowBlockTransferCalls);
     MergeCounter(gWindow.ARM7ExecNs, gFrame.ARM7ExecNs);
     MergeCounter(gWindow.ARM7WaitNs, gFrame.ARM7WaitNs);
     MergeCounter(gWindow.GPU3DRunNs, gFrame.GPU3DRunNs);
@@ -440,6 +520,29 @@ inline void EndFrame()
         NsPerFrame(gWindow.RunSystemNs),
         NsPerFrame(gWindow.DrawScanlineNs),
         NsPerFrame(gWindow.DrawSpritesNs));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_jit dispatch=%.3fms/%.1f lookup=%.3fms/%.1f compile=%.3fms/%.1f guest_cycles=%.1f last_hit=%.1f ret_normal=%.1f ret_stop=%.1f ret_idle=%.1f ret_halt=%.1f cache_hit=%.1f cache_miss=%.1f hle=%.1f slowread=%.3fms/%.1f slowwrite=%.3fms/%.1f slowblock=%.1f",
+        NsPerFrame(gWindow.ARM9JitDispatchNs),
+        CountPerFrame(gWindow.ARM9JitDispatchCalls),
+        NsPerFrame(gWindow.ARM9JitLookupNs),
+        CountPerFrame(gWindow.ARM9JitLookupCalls),
+        NsPerFrame(gWindow.ARM9JitCompileNs),
+        CountPerFrame(gWindow.ARM9JitCompileCalls),
+        CountPerFrame(gWindow.ARM9JitGuestCycles),
+        CountPerFrame(gWindow.ARM9JitLastBlockHits),
+        CountPerFrame(gWindow.ARM9JitReturnsNormal),
+        CountPerFrame(gWindow.ARM9JitReturnsStop),
+        CountPerFrame(gWindow.ARM9JitReturnsIdle),
+        CountPerFrame(gWindow.ARM9JitReturnsHalt),
+        CountPerFrame(gWindow.ARM9JitBlockCacheHits),
+        CountPerFrame(gWindow.ARM9JitBlockCacheMisses),
+        CountPerFrame(gWindow.ARM9LibHLEHits),
+        NsPerFrame(gWindow.ARM9SlowReadNs),
+        CountPerFrame(gWindow.ARM9SlowReadCalls),
+        NsPerFrame(gWindow.ARM9SlowWriteNs),
+        CountPerFrame(gWindow.ARM9SlowWriteCalls),
+        CountPerFrame(gWindow.ARM9SlowBlockTransferCalls));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] caches composed_hit=%.1f%% eligible/frame=%.1f ineligible/frame=%.1f text_hit=%.1f%% spritebin_hit=%.1f%% sprite_skip/frame=%.1f scan_calls/frame=%.1f sprite_calls/frame=%.1f",

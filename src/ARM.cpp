@@ -28,6 +28,7 @@
 #include "Platform.h"
 #include "GPU.h"
 #include "ARMJIT_Memory.h"
+#include "LiteProfile.h"
 #ifdef LITEV_ARM7_HLE_AUDIO
 #include "ARM7HLE_Core.h"
 #endif
@@ -627,6 +628,7 @@ void ARMv5::Execute()
 
             if (NDS.ARM9LibHLE.TryHandle(*this, instrAddr))
             {
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9LibHLEHits);
                 NDS.ARM9Timestamp += Cycles;
                 Cycles = 0;
                 continue;
@@ -642,21 +644,51 @@ void ARMv5::Execute()
 
             JitBlockEntry block = nullptr;
             if (LastJitBlockAddr == instrAddr)
+            {
                 block = LastJitBlockEntry;
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitLastBlockHits);
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitBlockCacheHits);
+            }
             else
             {
-                block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
-                    instrAddr - FastBlockLookupStart, instrAddr);
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitLookupCalls);
+                {
+                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitLookupNs);
+                    block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
+                        instrAddr - FastBlockLookupStart, instrAddr);
+                }
                 if (block)
                 {
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitBlockCacheHits);
                     LastJitBlockAddr = instrAddr;
                     LastJitBlockEntry = block;
                 }
+                else
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitBlockCacheMisses);
             }
             if (block)
+            {
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitDispatchCalls);
+                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitDispatchNs);
                 ARM_Dispatch(this, block);
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
+                if (StopExecution)
+                {
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsStop);
+                    if (IdleLoop)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsIdle);
+                    if (Halted)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsHalt);
+                }
+                else
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsNormal);
+            }
             else
+            {
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitCompileCalls);
+                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitCompileNs);
                 NDS.JIT.CompileBlock(this);
+            }
 
             if (StopExecution)
             {
