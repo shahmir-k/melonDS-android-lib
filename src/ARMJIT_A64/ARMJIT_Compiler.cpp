@@ -670,6 +670,20 @@ void Compiler::Comp_BranchSpecialBehaviour(bool taken)
 
         if (ConstantCycles)
             ADD(RCycles, RCycles, ConstantCycles);
+
+        if (Num == 0 && taken && (CurInstr.BranchFlags & branch_FollowCondNotTaken))
+        {
+            SaveCycles();
+            SaveCPSR();
+
+            MOV(X0, RCPU);
+            QuickCallFunction(X1, ARM9_ContinueBlock);
+
+            FixupBranch noChain = CBZ(X0);
+            BR(X0);
+            SetJumpTarget(noChain);
+        }
+
         QuickTailCall(X0, ARM_Ret);
     }
 }
