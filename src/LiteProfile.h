@@ -38,6 +38,8 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9ExecARMSingleStore{0};
     std::atomic<uint64_t> ARM9ExecARMBlockLoad{0};
     std::atomic<uint64_t> ARM9ExecARMBlockStore{0};
+    std::atomic<uint64_t> ARM9ExecARMStackBlockLoad{0};
+    std::atomic<uint64_t> ARM9ExecARMStackBlockStore{0};
     std::atomic<uint64_t> ARM9ExecARMStackLoad{0};
     std::atomic<uint64_t> ARM9ExecARMStackStore{0};
     std::atomic<uint64_t> ARM9ExecARMBranchImm{0};
@@ -118,6 +120,16 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockTransferCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockTransferReads{0};
     std::atomic<uint64_t> ARM9SlowBlockTransferWrites{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadDTCM{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadMainRAM{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadSharedWRAM{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadIO{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadOther{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteDTCM{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteMainRAM{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteSharedWRAM{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteIO{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteOther{0};
     std::atomic<uint64_t> ARM9SlowReadMainRAM{0};
     std::atomic<uint64_t> ARM9SlowReadSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowReadIO{0};
@@ -255,6 +267,8 @@ inline void ResetFrame()
     gFrame.ARM9ExecARMSingleStore.store(0, std::memory_order_relaxed);
     gFrame.ARM9ExecARMBlockLoad.store(0, std::memory_order_relaxed);
     gFrame.ARM9ExecARMBlockStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMStackBlockLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMStackBlockStore.store(0, std::memory_order_relaxed);
     gFrame.ARM9ExecARMStackLoad.store(0, std::memory_order_relaxed);
     gFrame.ARM9ExecARMStackStore.store(0, std::memory_order_relaxed);
     gFrame.ARM9ExecARMBranchImm.store(0, std::memory_order_relaxed);
@@ -335,6 +349,16 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockTransferReads.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockTransferWrites.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadDTCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteDTCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
@@ -455,6 +479,8 @@ inline void ResetWindow()
     gWindow.ARM9ExecARMSingleStore.store(0, std::memory_order_relaxed);
     gWindow.ARM9ExecARMBlockLoad.store(0, std::memory_order_relaxed);
     gWindow.ARM9ExecARMBlockStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMStackBlockLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMStackBlockStore.store(0, std::memory_order_relaxed);
     gWindow.ARM9ExecARMStackLoad.store(0, std::memory_order_relaxed);
     gWindow.ARM9ExecARMStackStore.store(0, std::memory_order_relaxed);
     gWindow.ARM9ExecARMBranchImm.store(0, std::memory_order_relaxed);
@@ -535,6 +561,16 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockTransferReads.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockTransferWrites.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadDTCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteDTCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
@@ -695,6 +731,8 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9ExecARMSingleStore, gFrame.ARM9ExecARMSingleStore);
     MergeCounter(gWindow.ARM9ExecARMBlockLoad, gFrame.ARM9ExecARMBlockLoad);
     MergeCounter(gWindow.ARM9ExecARMBlockStore, gFrame.ARM9ExecARMBlockStore);
+    MergeCounter(gWindow.ARM9ExecARMStackBlockLoad, gFrame.ARM9ExecARMStackBlockLoad);
+    MergeCounter(gWindow.ARM9ExecARMStackBlockStore, gFrame.ARM9ExecARMStackBlockStore);
     MergeCounter(gWindow.ARM9ExecARMStackLoad, gFrame.ARM9ExecARMStackLoad);
     MergeCounter(gWindow.ARM9ExecARMStackStore, gFrame.ARM9ExecARMStackStore);
     MergeCounter(gWindow.ARM9ExecARMBranchImm, gFrame.ARM9ExecARMBranchImm);
@@ -775,6 +813,16 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockTransferCalls, gFrame.ARM9SlowBlockTransferCalls);
     MergeCounter(gWindow.ARM9SlowBlockTransferReads, gFrame.ARM9SlowBlockTransferReads);
     MergeCounter(gWindow.ARM9SlowBlockTransferWrites, gFrame.ARM9SlowBlockTransferWrites);
+    MergeCounter(gWindow.ARM9SlowBlockReadDTCM, gFrame.ARM9SlowBlockReadDTCM);
+    MergeCounter(gWindow.ARM9SlowBlockReadMainRAM, gFrame.ARM9SlowBlockReadMainRAM);
+    MergeCounter(gWindow.ARM9SlowBlockReadSharedWRAM, gFrame.ARM9SlowBlockReadSharedWRAM);
+    MergeCounter(gWindow.ARM9SlowBlockReadIO, gFrame.ARM9SlowBlockReadIO);
+    MergeCounter(gWindow.ARM9SlowBlockReadOther, gFrame.ARM9SlowBlockReadOther);
+    MergeCounter(gWindow.ARM9SlowBlockWriteDTCM, gFrame.ARM9SlowBlockWriteDTCM);
+    MergeCounter(gWindow.ARM9SlowBlockWriteMainRAM, gFrame.ARM9SlowBlockWriteMainRAM);
+    MergeCounter(gWindow.ARM9SlowBlockWriteSharedWRAM, gFrame.ARM9SlowBlockWriteSharedWRAM);
+    MergeCounter(gWindow.ARM9SlowBlockWriteIO, gFrame.ARM9SlowBlockWriteIO);
+    MergeCounter(gWindow.ARM9SlowBlockWriteOther, gFrame.ARM9SlowBlockWriteOther);
     MergeCounter(gWindow.ARM9SlowReadMainRAM, gFrame.ARM9SlowReadMainRAM);
     MergeCounter(gWindow.ARM9SlowReadSharedWRAM, gFrame.ARM9SlowReadSharedWRAM);
     MergeCounter(gWindow.ARM9SlowReadIO, gFrame.ARM9SlowReadIO);
@@ -928,7 +976,7 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockTransferCalls));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] arm9_mix total=%.1f arm_alu=%.1f arm_mul=%.1f arm_ld=%.1f arm_st=%.1f arm_ldm=%.1f arm_stm=%.1f arm_stack_ld=%.1f arm_stack_st=%.1f arm_bimm=%.1f arm_breg=%.1f arm_sys=%.1f arm_other=%.1f",
+        "[LITEV_PROFILE] arm9_mix total=%.1f arm_alu=%.1f arm_mul=%.1f arm_ld=%.1f arm_st=%.1f arm_ldm=%.1f arm_stm=%.1f arm_stack_ld=%.1f arm_stack_st=%.1f arm_stack_ldm=%.1f arm_stack_stm=%.1f arm_bimm=%.1f arm_breg=%.1f arm_sys=%.1f arm_other=%.1f",
         CountPerFrame(gWindow.ARM9ExecInstrs),
         CountPerFrame(gWindow.ARM9ExecARMALU),
         CountPerFrame(gWindow.ARM9ExecARMMul),
@@ -938,6 +986,8 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9ExecARMBlockStore),
         CountPerFrame(gWindow.ARM9ExecARMStackLoad),
         CountPerFrame(gWindow.ARM9ExecARMStackStore),
+        CountPerFrame(gWindow.ARM9ExecARMStackBlockLoad),
+        CountPerFrame(gWindow.ARM9ExecARMStackBlockStore),
         CountPerFrame(gWindow.ARM9ExecARMBranchImm),
         CountPerFrame(gWindow.ARM9ExecARMBranchReg),
         CountPerFrame(gWindow.ARM9ExecARMSys),
@@ -961,7 +1011,7 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9ExecLiteralLoads));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] arm9_mix_mem itcm=%.1f dtcm=%.1f main=%.1f shared=%.1f io=%.1f vram=%.1f other=%.1f slowblock_r=%.1f slowblock_w=%.1f",
+        "[LITEV_PROFILE] arm9_mix_mem itcm=%.1f dtcm=%.1f main=%.1f shared=%.1f io=%.1f vram=%.1f other=%.1f slowblock_r=%.1f slowblock_w=%.1f slowblock_r_dtcm=%.1f slowblock_r_main=%.1f slowblock_r_shared=%.1f slowblock_r_io=%.1f slowblock_r_other=%.1f slowblock_w_dtcm=%.1f slowblock_w_main=%.1f slowblock_w_shared=%.1f slowblock_w_io=%.1f slowblock_w_other=%.1f",
         CountPerFrame(gWindow.ARM9ExecMemITCM),
         CountPerFrame(gWindow.ARM9ExecMemDTCM),
         CountPerFrame(gWindow.ARM9ExecMemMainRAM),
@@ -970,7 +1020,17 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9ExecMemVRAM),
         CountPerFrame(gWindow.ARM9ExecMemOther),
         CountPerFrame(gWindow.ARM9SlowBlockTransferReads),
-        CountPerFrame(gWindow.ARM9SlowBlockTransferWrites));
+        CountPerFrame(gWindow.ARM9SlowBlockTransferWrites),
+        CountPerFrame(gWindow.ARM9SlowBlockReadDTCM),
+        CountPerFrame(gWindow.ARM9SlowBlockReadMainRAM),
+        CountPerFrame(gWindow.ARM9SlowBlockReadSharedWRAM),
+        CountPerFrame(gWindow.ARM9SlowBlockReadIO),
+        CountPerFrame(gWindow.ARM9SlowBlockReadOther),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteDTCM),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteMainRAM),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteSharedWRAM),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteIO),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteOther));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] arm9_chain miss_stop=%.1f miss_budget=%.1f miss_target=%.1f miss_hle=%.1f miss_setup=%.1f miss_lookup=%.1f",

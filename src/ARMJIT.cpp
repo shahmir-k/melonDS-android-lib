@@ -416,6 +416,57 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
     addr &= ~0x3;
     auto& nds = cpu->NDS;
 
+    auto noteRegion = [&](std::atomic<uint64_t>& dtcm,
+                          std::atomic<uint64_t>& main,
+                          std::atomic<uint64_t>& shared,
+                          std::atomic<uint64_t>& io,
+                          std::atomic<uint64_t>& other)
+    {
+        if (addr < cpu->ITCMSize)
+        {
+            LiteProfile::AddAtomic(other);
+        }
+        else if ((addr & cpu->DTCMMask) == cpu->DTCMBase)
+        {
+            LiteProfile::AddAtomic(dtcm);
+        }
+        else
+        {
+            switch (addr & 0xFF000000)
+            {
+            case 0x02000000:
+                LiteProfile::AddAtomic(main);
+                break;
+            case 0x03000000:
+                LiteProfile::AddAtomic(shared);
+                break;
+            case 0x04000000:
+                LiteProfile::AddAtomic(io);
+                break;
+            default:
+                LiteProfile::AddAtomic(other);
+                break;
+            }
+        }
+    };
+
+    if constexpr (Write)
+    {
+        noteRegion(LiteProfile::gFrame.ARM9SlowBlockWriteDTCM,
+            LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM,
+            LiteProfile::gFrame.ARM9SlowBlockWriteSharedWRAM,
+            LiteProfile::gFrame.ARM9SlowBlockWriteIO,
+            LiteProfile::gFrame.ARM9SlowBlockWriteOther);
+    }
+    else
+    {
+        noteRegion(LiteProfile::gFrame.ARM9SlowBlockReadDTCM,
+            LiteProfile::gFrame.ARM9SlowBlockReadMainRAM,
+            LiteProfile::gFrame.ARM9SlowBlockReadSharedWRAM,
+            LiteProfile::gFrame.ARM9SlowBlockReadIO,
+            LiteProfile::gFrame.ARM9SlowBlockReadOther);
+    }
+
     if (addr < cpu->ITCMSize)
     {
         u32 bytes = num * sizeof(u32);
@@ -885,6 +936,8 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     u16 execSingleStoreCount = 0;
     u16 execBlockLoadCount = 0;
     u16 execBlockStoreCount = 0;
+    u16 execStackBlockLoadCount = 0;
+    u16 execStackBlockStoreCount = 0;
     u16 execStackLoadCount = 0;
     u16 execStackStoreCount = 0;
     u16 execBranchCondCount = 0;
@@ -1134,6 +1187,10 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             execStackLoadCount++;
         if (isStackStore)
             execStackStoreCount++;
+        if (isStackLoad && isBlockLoad)
+            execStackBlockLoadCount++;
+        if (isStackStore && isBlockStore)
+            execStackBlockStoreCount++;
         if (isLiteralLoad)
             execLiteralLoadCount++;
 
@@ -1354,6 +1411,8 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         block->ExecSingleStoreCount = execSingleStoreCount;
         block->ExecBlockLoadCount = execBlockLoadCount;
         block->ExecBlockStoreCount = execBlockStoreCount;
+        block->ExecStackBlockLoadCount = execStackBlockLoadCount;
+        block->ExecStackBlockStoreCount = execStackBlockStoreCount;
         block->ExecStackLoadCount = execStackLoadCount;
         block->ExecStackStoreCount = execStackStoreCount;
         block->ExecBranchCondCount = execBranchCondCount;

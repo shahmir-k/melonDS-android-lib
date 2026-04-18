@@ -709,6 +709,8 @@ void ARMv5::Execute()
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSingleStore, info->ExecSingleStoreCount);
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBlockLoad, info->ExecBlockLoadCount);
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBlockStore, info->ExecBlockStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackBlockLoad, info->ExecStackBlockLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackBlockStore, info->ExecStackBlockStoreCount);
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackLoad, info->ExecStackLoadCount);
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackStore, info->ExecStackStoreCount);
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBranchImm, info->ExecBranchImmCount);

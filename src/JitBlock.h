@@ -66,6 +66,8 @@ public:
         ExecSingleStoreCount = 0;
         ExecBlockLoadCount = 0;
         ExecBlockStoreCount = 0;
+        ExecStackBlockLoadCount = 0;
+        ExecStackBlockStoreCount = 0;
         ExecStackLoadCount = 0;
         ExecStackStoreCount = 0;
         ExecBranchCondCount = 0;
@@ -108,6 +110,8 @@ public:
     u16 ExecSingleStoreCount;
     u16 ExecBlockLoadCount;
     u16 ExecBlockStoreCount;
+    u16 ExecStackBlockLoadCount;
+    u16 ExecStackBlockStoreCount;
     u16 ExecStackLoadCount;
     u16 ExecStackStoreCount;
     u16 ExecBranchCondCount;
