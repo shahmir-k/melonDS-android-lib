@@ -190,17 +190,33 @@ T SlowRead9(u32 addr, ARMv5* cpu)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadMainRAM);
             val = *(T*)&nds.MainRAM[addr & nds.MainRAMMask];
             break;
 
         case 0x03000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadSharedWRAM);
             if (nds.SWRAM_ARM9.Mem)
                 val = *(T*)&nds.SWRAM_ARM9.Mem[addr & nds.SWRAM_ARM9.Mask];
             else
                 val = 0;
             break;
 
+        case 0x06000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadVRAM);
+            if constexpr (std::is_same_v<T, u32>)
+                val = nds.ARM9Read32(addr);
+            else if constexpr (std::is_same_v<T, u16>)
+                val = nds.ARM9Read16(addr);
+            else
+                val = nds.ARM9Read8(addr);
+            break;
+
         default:
+            if ((addr & 0xFF000000) == 0x04000000)
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIO);
+            else
+                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadOther);
             if constexpr (std::is_same_v<T, u32>)
                 val = nds.ARM9Read32(addr);
             else if constexpr (std::is_same_v<T, u16>)
@@ -259,11 +275,13 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteMainRAM);
             nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_MainRAM>(addr);
             *(T*)&nds.MainRAM[addr & nds.MainRAMMask] = val;
             break;
 
         case 0x03000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteSharedWRAM);
             if (nds.SWRAM_ARM9.Mem)
             {
                 nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_SharedWRAM>(addr);
@@ -271,7 +289,36 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
             }
             break;
 
+        case 0x04000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteIO);
+            if constexpr (std::is_same_v<T, u32>)
+            {
+                if (nds.ARM9FastIOWrite32(addr, val))
+                    return;
+                nds.ARM9Write32(addr, val);
+            }
+            else if constexpr (std::is_same_v<T, u16>)
+            {
+                if (nds.ARM9FastIOWrite16(addr, val))
+                    return;
+                nds.ARM9Write16(addr, val);
+            }
+            else
+                nds.ARM9Write8(addr, val);
+            break;
+
+        case 0x06000000:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteVRAM);
+            if constexpr (std::is_same_v<T, u32>)
+                nds.ARM9Write32(addr, val);
+            else if constexpr (std::is_same_v<T, u16>)
+                nds.ARM9Write16(addr, val);
+            else
+                nds.ARM9Write8(addr, val);
+            break;
+
         default:
+            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteOther);
             if constexpr (std::is_same_v<T, u32>)
             {
                 if ((addr & 0xFF000000) == 0x04000000 && nds.ARM9FastIOWrite32(addr, val))

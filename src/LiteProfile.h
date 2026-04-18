@@ -45,6 +45,16 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowReadCalls{0};
     std::atomic<uint64_t> ARM9SlowWriteCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockTransferCalls{0};
+    std::atomic<uint64_t> ARM9SlowReadMainRAM{0};
+    std::atomic<uint64_t> ARM9SlowReadSharedWRAM{0};
+    std::atomic<uint64_t> ARM9SlowReadIO{0};
+    std::atomic<uint64_t> ARM9SlowReadVRAM{0};
+    std::atomic<uint64_t> ARM9SlowReadOther{0};
+    std::atomic<uint64_t> ARM9SlowWriteMainRAM{0};
+    std::atomic<uint64_t> ARM9SlowWriteSharedWRAM{0};
+    std::atomic<uint64_t> ARM9SlowWriteIO{0};
+    std::atomic<uint64_t> ARM9SlowWriteVRAM{0};
+    std::atomic<uint64_t> ARM9SlowWriteOther{0};
     std::atomic<uint64_t> ARM7ExecNs{0};
     std::atomic<uint64_t> ARM7WaitNs{0};
     std::atomic<uint64_t> GPU3DRunNs{0};
@@ -169,6 +179,16 @@ inline void ResetFrame()
     gFrame.ARM9SlowReadCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowWriteCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadVRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteVRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowWriteOther.store(0, std::memory_order_relaxed);
     gFrame.ARM7ExecNs.store(0, std::memory_order_relaxed);
     gFrame.ARM7WaitNs.store(0, std::memory_order_relaxed);
     gFrame.GPU3DRunNs.store(0, std::memory_order_relaxed);
@@ -276,6 +296,16 @@ inline void ResetWindow()
     gWindow.ARM9SlowReadCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowWriteCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadVRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteVRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowWriteOther.store(0, std::memory_order_relaxed);
     gWindow.ARM7ExecNs.store(0, std::memory_order_relaxed);
     gWindow.ARM7WaitNs.store(0, std::memory_order_relaxed);
     gWindow.GPU3DRunNs.store(0, std::memory_order_relaxed);
@@ -423,6 +453,16 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowReadCalls, gFrame.ARM9SlowReadCalls);
     MergeCounter(gWindow.ARM9SlowWriteCalls, gFrame.ARM9SlowWriteCalls);
     MergeCounter(gWindow.ARM9SlowBlockTransferCalls, gFrame.ARM9SlowBlockTransferCalls);
+    MergeCounter(gWindow.ARM9SlowReadMainRAM, gFrame.ARM9SlowReadMainRAM);
+    MergeCounter(gWindow.ARM9SlowReadSharedWRAM, gFrame.ARM9SlowReadSharedWRAM);
+    MergeCounter(gWindow.ARM9SlowReadIO, gFrame.ARM9SlowReadIO);
+    MergeCounter(gWindow.ARM9SlowReadVRAM, gFrame.ARM9SlowReadVRAM);
+    MergeCounter(gWindow.ARM9SlowReadOther, gFrame.ARM9SlowReadOther);
+    MergeCounter(gWindow.ARM9SlowWriteMainRAM, gFrame.ARM9SlowWriteMainRAM);
+    MergeCounter(gWindow.ARM9SlowWriteSharedWRAM, gFrame.ARM9SlowWriteSharedWRAM);
+    MergeCounter(gWindow.ARM9SlowWriteIO, gFrame.ARM9SlowWriteIO);
+    MergeCounter(gWindow.ARM9SlowWriteVRAM, gFrame.ARM9SlowWriteVRAM);
+    MergeCounter(gWindow.ARM9SlowWriteOther, gFrame.ARM9SlowWriteOther);
     MergeCounter(gWindow.ARM7ExecNs, gFrame.ARM7ExecNs);
     MergeCounter(gWindow.ARM7WaitNs, gFrame.ARM7WaitNs);
     MergeCounter(gWindow.GPU3DRunNs, gFrame.GPU3DRunNs);
@@ -636,6 +676,19 @@ inline void EndFrame()
         Ratio(transBatchPolys, transBatchCalls),
         CountPerFrame(gWindow.GPU3DSceneTransSingleCalls),
         CountPerFrame(gWindow.GPU3DSceneTransNeedOpaqueSingles));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_slowmem read main=%.1f swram=%.1f io=%.1f vram=%.1f other=%.1f write main=%.1f swram=%.1f io=%.1f vram=%.1f other=%.1f",
+        CountPerFrame(gWindow.ARM9SlowReadMainRAM),
+        CountPerFrame(gWindow.ARM9SlowReadSharedWRAM),
+        CountPerFrame(gWindow.ARM9SlowReadIO),
+        CountPerFrame(gWindow.ARM9SlowReadVRAM),
+        CountPerFrame(gWindow.ARM9SlowReadOther),
+        CountPerFrame(gWindow.ARM9SlowWriteMainRAM),
+        CountPerFrame(gWindow.ARM9SlowWriteSharedWRAM),
+        CountPerFrame(gWindow.ARM9SlowWriteIO),
+        CountPerFrame(gWindow.ARM9SlowWriteVRAM),
+        CountPerFrame(gWindow.ARM9SlowWriteOther));
 
     gWindowFrames = 0;
     ResetWindow();
