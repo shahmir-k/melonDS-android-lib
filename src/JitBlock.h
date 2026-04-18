@@ -29,11 +29,21 @@ typedef void (*JitBlockEntry)();
 class JitBlock
 {
 public:
+    enum ExitKind : u8
+    {
+        ExitUnknown = 0,
+        ExitEndBlock,
+        ExitMaxBlockSize,
+        ExitIRQBoundary,
+        ExitHaltBoundary,
+    };
+
     JitBlock(u32 num, u32 literalHash, u32 numAddresses, u32 numLiterals)
     {
         Num = num;
         NumAddresses = numAddresses;
         NumLiterals = numLiterals;
+        Exit = ExitUnknown;
         Data.SetLength(numAddresses * 2 + numLiterals);
     }
 
@@ -43,6 +53,7 @@ public:
     u8 Num;
     u16 NumAddresses;
     u16 NumLiterals;
+    u8 Exit;
 
     JitBlockEntry EntryPoint;
 

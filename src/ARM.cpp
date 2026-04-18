@@ -681,7 +681,30 @@ void ARMv5::Execute()
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsHalt);
                 }
                 else
+                {
                     LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsNormal);
+                    auto it = NDS.JIT.JitBlocks9.find(instrAddr);
+                    if (it != NDS.JIT.JitBlocks9.end())
+                    {
+                        switch (it->second->Exit)
+                        {
+                        case JitBlock::ExitEndBlock:
+                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndBlock);
+                            break;
+                        case JitBlock::ExitMaxBlockSize:
+                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxBlock);
+                            break;
+                        case JitBlock::ExitIRQBoundary:
+                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnIRQBoundary);
+                            break;
+                        case JitBlock::ExitHaltBoundary:
+                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnHaltBoundary);
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
             }
             else
             {

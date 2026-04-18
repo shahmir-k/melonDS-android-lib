@@ -37,6 +37,10 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitReturnsStop{0};
     std::atomic<uint64_t> ARM9JitReturnsIdle{0};
     std::atomic<uint64_t> ARM9JitReturnsHalt{0};
+    std::atomic<uint64_t> ARM9JitReturnEndBlock{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxBlock{0};
+    std::atomic<uint64_t> ARM9JitReturnIRQBoundary{0};
+    std::atomic<uint64_t> ARM9JitReturnHaltBoundary{0};
     std::atomic<uint64_t> ARM9JitBlockCacheHits{0};
     std::atomic<uint64_t> ARM9JitBlockCacheMisses{0};
     std::atomic<uint64_t> ARM9LibHLEHits{0};
@@ -181,6 +185,10 @@ inline void ResetFrame()
     gFrame.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsHalt.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndBlock.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnIRQBoundary.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnHaltBoundary.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitBlockCacheHits.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitBlockCacheMisses.store(0, std::memory_order_relaxed);
     gFrame.ARM9LibHLEHits.store(0, std::memory_order_relaxed);
@@ -308,6 +316,10 @@ inline void ResetWindow()
     gWindow.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsHalt.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndBlock.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnIRQBoundary.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnHaltBoundary.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitBlockCacheHits.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitBlockCacheMisses.store(0, std::memory_order_relaxed);
     gWindow.ARM9LibHLEHits.store(0, std::memory_order_relaxed);
@@ -475,6 +487,10 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitReturnsStop, gFrame.ARM9JitReturnsStop);
     MergeCounter(gWindow.ARM9JitReturnsIdle, gFrame.ARM9JitReturnsIdle);
     MergeCounter(gWindow.ARM9JitReturnsHalt, gFrame.ARM9JitReturnsHalt);
+    MergeCounter(gWindow.ARM9JitReturnEndBlock, gFrame.ARM9JitReturnEndBlock);
+    MergeCounter(gWindow.ARM9JitReturnMaxBlock, gFrame.ARM9JitReturnMaxBlock);
+    MergeCounter(gWindow.ARM9JitReturnIRQBoundary, gFrame.ARM9JitReturnIRQBoundary);
+    MergeCounter(gWindow.ARM9JitReturnHaltBoundary, gFrame.ARM9JitReturnHaltBoundary);
     MergeCounter(gWindow.ARM9JitBlockCacheHits, gFrame.ARM9JitBlockCacheHits);
     MergeCounter(gWindow.ARM9JitBlockCacheMisses, gFrame.ARM9JitBlockCacheMisses);
     MergeCounter(gWindow.ARM9LibHLEHits, gFrame.ARM9LibHLEHits);
@@ -633,6 +649,13 @@ inline void EndFrame()
         NsPerFrame(gWindow.ARM9SlowWriteNs),
         CountPerFrame(gWindow.ARM9SlowWriteCalls),
         CountPerFrame(gWindow.ARM9SlowBlockTransferCalls));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_ret normal_end=%.1f normal_max=%.1f normal_irq=%.1f normal_halt=%.1f",
+        CountPerFrame(gWindow.ARM9JitReturnEndBlock),
+        CountPerFrame(gWindow.ARM9JitReturnMaxBlock),
+        CountPerFrame(gWindow.ARM9JitReturnIRQBoundary),
+        CountPerFrame(gWindow.ARM9JitReturnHaltBoundary));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] caches composed_hit=%.1f%% eligible/frame=%.1f ineligible/frame=%.1f text_hit=%.1f%% spritebin_hit=%.1f%% sprite_skip/frame=%.1f scan_calls/frame=%.1f sprite_calls/frame=%.1f",

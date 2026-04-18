@@ -242,6 +242,25 @@ T SlowRead9(u32 addr, ARMv5* cpu)
                         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOOther);
                     break;
                 }
+
+                if constexpr (!std::is_same_v<T, u8>)
+                {
+                    if (addr >= 0x04000280 && addr < 0x040002C0)
+                    {
+                        if constexpr (std::is_same_v<T, u32>)
+                        {}
+                        else
+                        {}
+                    }
+
+                    if (addr >= 0x04000204 && addr < 0x04000218)
+                    {
+                        if constexpr (std::is_same_v<T, u32>)
+                        {}
+                        else
+                        {}
+                    }
+                }
             }
             else
                 LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadOther);
@@ -1072,6 +1091,14 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             FloodFillSetFlags(instrs, i - 2, !secondaryFlagReadCond ? instrs[i - 1].Info.ReadFlags : 0xF);
     } while(!instrs[i - 1].Info.EndBlock && i < MaxBlockSize && !cpu->Halted && (!cpu->IRQ || (cpu->CPSR & 0x80)));
 
+    u8 exitKind = JitBlock::ExitEndBlock;
+    if (cpu->Halted)
+        exitKind = JitBlock::ExitHaltBoundary;
+    else if (i >= MaxBlockSize && !instrs[i - 1].Info.EndBlock)
+        exitKind = JitBlock::ExitMaxBlockSize;
+    else if (cpu->IRQ && !(cpu->CPSR & 0x80) && !instrs[i - 1].Info.EndBlock)
+        exitKind = JitBlock::ExitIRQBoundary;
+
     if (numLiterals)
     {
         for (u32 j = 0; j < numWriteAddrs; j++)
@@ -1143,6 +1170,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         block->StartAddr = blockAddr;
         block->StartAddrLocal = localAddr;
+        block->Exit = exitKind;
 
         FloodFillSetFlags(instrs, i - 1, 0xF);
 
