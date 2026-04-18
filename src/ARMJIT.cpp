@@ -58,7 +58,7 @@ static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset, "");
 
 extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 {
-    constexpr s32 kChainCycleBudget = 96;
+    constexpr s32 kChainCycleBudget = 128;
 
     auto* cpu = static_cast<ARMv5*>(cpuBase);
     auto& nds = cpu->NDS;
