@@ -214,7 +214,35 @@ T SlowRead9(u32 addr, ARMv5* cpu)
 
         default:
             if ((addr & 0xFF000000) == 0x04000000)
+            {
                 LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIO);
+                switch (addr & 0xFFFFFFF0)
+                {
+                case 0x04000000:
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIODispStat);
+                    break;
+                default:
+                    if (addr >= 0x040000B0 && addr < 0x040000F0)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIODMA);
+                    else if (addr >= 0x04000100 && addr < 0x04000110)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOTimer);
+                    else if (addr >= 0x04000130 && addr < 0x04000134)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOKey);
+                    else if (addr >= 0x04000180 && addr < 0x04000190)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOIPC);
+                    else if (addr >= 0x040001A0 && addr < 0x040001B0)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOCart);
+                    else if ((addr >= 0x04000204 && addr < 0x04000218) || addr == 0x04000208)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOIRQ);
+                    else if (addr >= 0x04000240 && addr < 0x0400024C)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOVRAMCtl);
+                    else if (addr >= 0x04000280 && addr < 0x040002C0)
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIODivSqrt);
+                    else
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOOther);
+                    break;
+                }
+            }
             else
                 LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadOther);
             if constexpr (std::is_same_v<T, u32>)

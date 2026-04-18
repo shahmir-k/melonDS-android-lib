@@ -48,6 +48,16 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowReadMainRAM{0};
     std::atomic<uint64_t> ARM9SlowReadSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowReadIO{0};
+    std::atomic<uint64_t> ARM9SlowReadIODispStat{0};
+    std::atomic<uint64_t> ARM9SlowReadIODMA{0};
+    std::atomic<uint64_t> ARM9SlowReadIOTimer{0};
+    std::atomic<uint64_t> ARM9SlowReadIOKey{0};
+    std::atomic<uint64_t> ARM9SlowReadIOIPC{0};
+    std::atomic<uint64_t> ARM9SlowReadIOCart{0};
+    std::atomic<uint64_t> ARM9SlowReadIOIRQ{0};
+    std::atomic<uint64_t> ARM9SlowReadIOVRAMCtl{0};
+    std::atomic<uint64_t> ARM9SlowReadIODivSqrt{0};
+    std::atomic<uint64_t> ARM9SlowReadIOOther{0};
     std::atomic<uint64_t> ARM9SlowReadVRAM{0};
     std::atomic<uint64_t> ARM9SlowReadOther{0};
     std::atomic<uint64_t> ARM9SlowWriteMainRAM{0};
@@ -182,6 +192,16 @@ inline void ResetFrame()
     gFrame.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIODispStat.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIODMA.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOTimer.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOKey.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOIPC.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOCart.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOIRQ.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOVRAMCtl.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIODivSqrt.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowReadIOOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadVRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowWriteMainRAM.store(0, std::memory_order_relaxed);
@@ -299,6 +319,16 @@ inline void ResetWindow()
     gWindow.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIODispStat.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIODMA.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOTimer.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOKey.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOIPC.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOCart.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOIRQ.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOVRAMCtl.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIODivSqrt.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowReadIOOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadVRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowWriteMainRAM.store(0, std::memory_order_relaxed);
@@ -456,6 +486,16 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowReadMainRAM, gFrame.ARM9SlowReadMainRAM);
     MergeCounter(gWindow.ARM9SlowReadSharedWRAM, gFrame.ARM9SlowReadSharedWRAM);
     MergeCounter(gWindow.ARM9SlowReadIO, gFrame.ARM9SlowReadIO);
+    MergeCounter(gWindow.ARM9SlowReadIODispStat, gFrame.ARM9SlowReadIODispStat);
+    MergeCounter(gWindow.ARM9SlowReadIODMA, gFrame.ARM9SlowReadIODMA);
+    MergeCounter(gWindow.ARM9SlowReadIOTimer, gFrame.ARM9SlowReadIOTimer);
+    MergeCounter(gWindow.ARM9SlowReadIOKey, gFrame.ARM9SlowReadIOKey);
+    MergeCounter(gWindow.ARM9SlowReadIOIPC, gFrame.ARM9SlowReadIOIPC);
+    MergeCounter(gWindow.ARM9SlowReadIOCart, gFrame.ARM9SlowReadIOCart);
+    MergeCounter(gWindow.ARM9SlowReadIOIRQ, gFrame.ARM9SlowReadIOIRQ);
+    MergeCounter(gWindow.ARM9SlowReadIOVRAMCtl, gFrame.ARM9SlowReadIOVRAMCtl);
+    MergeCounter(gWindow.ARM9SlowReadIODivSqrt, gFrame.ARM9SlowReadIODivSqrt);
+    MergeCounter(gWindow.ARM9SlowReadIOOther, gFrame.ARM9SlowReadIOOther);
     MergeCounter(gWindow.ARM9SlowReadVRAM, gFrame.ARM9SlowReadVRAM);
     MergeCounter(gWindow.ARM9SlowReadOther, gFrame.ARM9SlowReadOther);
     MergeCounter(gWindow.ARM9SlowWriteMainRAM, gFrame.ARM9SlowWriteMainRAM);
@@ -689,6 +729,19 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowWriteIO),
         CountPerFrame(gWindow.ARM9SlowWriteVRAM),
         CountPerFrame(gWindow.ARM9SlowWriteOther));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_slowio dispstat=%.1f dma=%.1f timer=%.1f key=%.1f ipc=%.1f cart=%.1f irq=%.1f vramctl=%.1f divsqrt=%.1f other=%.1f",
+        CountPerFrame(gWindow.ARM9SlowReadIODispStat),
+        CountPerFrame(gWindow.ARM9SlowReadIODMA),
+        CountPerFrame(gWindow.ARM9SlowReadIOTimer),
+        CountPerFrame(gWindow.ARM9SlowReadIOKey),
+        CountPerFrame(gWindow.ARM9SlowReadIOIPC),
+        CountPerFrame(gWindow.ARM9SlowReadIOCart),
+        CountPerFrame(gWindow.ARM9SlowReadIOIRQ),
+        CountPerFrame(gWindow.ARM9SlowReadIOVRAMCtl),
+        CountPerFrame(gWindow.ARM9SlowReadIODivSqrt),
+        CountPerFrame(gWindow.ARM9SlowReadIOOther));
 
     gWindowFrames = 0;
     ResetWindow();
