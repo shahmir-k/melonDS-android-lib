@@ -33,11 +33,20 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitLastBlockHits{0};
     std::atomic<uint64_t> ARM9JitChainAttempts{0};
     std::atomic<uint64_t> ARM9JitChainHits{0};
+    std::atomic<uint64_t> ARM9JitChainMissStop{0};
+    std::atomic<uint64_t> ARM9JitChainMissBudget{0};
+    std::atomic<uint64_t> ARM9JitChainMissTarget{0};
+    std::atomic<uint64_t> ARM9JitChainMissHLE{0};
+    std::atomic<uint64_t> ARM9JitChainMissSetup{0};
+    std::atomic<uint64_t> ARM9JitChainMissLookup{0};
     std::atomic<uint64_t> ARM9JitReturnsNormal{0};
     std::atomic<uint64_t> ARM9JitReturnsStop{0};
     std::atomic<uint64_t> ARM9JitReturnsIdle{0};
     std::atomic<uint64_t> ARM9JitReturnsHalt{0};
     std::atomic<uint64_t> ARM9JitReturnEndBlock{0};
+    std::atomic<uint64_t> ARM9JitReturnEndBranch{0};
+    std::atomic<uint64_t> ARM9JitReturnEndCondBranch{0};
+    std::atomic<uint64_t> ARM9JitReturnEndOther{0};
     std::atomic<uint64_t> ARM9JitReturnMaxBlock{0};
     std::atomic<uint64_t> ARM9JitReturnIRQBoundary{0};
     std::atomic<uint64_t> ARM9JitReturnHaltBoundary{0};
@@ -181,11 +190,20 @@ inline void ResetFrame()
     gFrame.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainAttempts.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainHits.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainMissStop.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainMissBudget.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainMissTarget.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainMissHLE.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainMissSetup.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainMissLookup.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsHalt.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnEndBlock.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndBranch.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndCondBranch.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnIRQBoundary.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnHaltBoundary.store(0, std::memory_order_relaxed);
@@ -312,11 +330,20 @@ inline void ResetWindow()
     gWindow.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainAttempts.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainHits.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainMissStop.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainMissBudget.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainMissTarget.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainMissHLE.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainMissSetup.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainMissLookup.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsHalt.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnEndBlock.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndBranch.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndCondBranch.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnIRQBoundary.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnHaltBoundary.store(0, std::memory_order_relaxed);
@@ -483,11 +510,20 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitLastBlockHits, gFrame.ARM9JitLastBlockHits);
     MergeCounter(gWindow.ARM9JitChainAttempts, gFrame.ARM9JitChainAttempts);
     MergeCounter(gWindow.ARM9JitChainHits, gFrame.ARM9JitChainHits);
+    MergeCounter(gWindow.ARM9JitChainMissStop, gFrame.ARM9JitChainMissStop);
+    MergeCounter(gWindow.ARM9JitChainMissBudget, gFrame.ARM9JitChainMissBudget);
+    MergeCounter(gWindow.ARM9JitChainMissTarget, gFrame.ARM9JitChainMissTarget);
+    MergeCounter(gWindow.ARM9JitChainMissHLE, gFrame.ARM9JitChainMissHLE);
+    MergeCounter(gWindow.ARM9JitChainMissSetup, gFrame.ARM9JitChainMissSetup);
+    MergeCounter(gWindow.ARM9JitChainMissLookup, gFrame.ARM9JitChainMissLookup);
     MergeCounter(gWindow.ARM9JitReturnsNormal, gFrame.ARM9JitReturnsNormal);
     MergeCounter(gWindow.ARM9JitReturnsStop, gFrame.ARM9JitReturnsStop);
     MergeCounter(gWindow.ARM9JitReturnsIdle, gFrame.ARM9JitReturnsIdle);
     MergeCounter(gWindow.ARM9JitReturnsHalt, gFrame.ARM9JitReturnsHalt);
     MergeCounter(gWindow.ARM9JitReturnEndBlock, gFrame.ARM9JitReturnEndBlock);
+    MergeCounter(gWindow.ARM9JitReturnEndBranch, gFrame.ARM9JitReturnEndBranch);
+    MergeCounter(gWindow.ARM9JitReturnEndCondBranch, gFrame.ARM9JitReturnEndCondBranch);
+    MergeCounter(gWindow.ARM9JitReturnEndOther, gFrame.ARM9JitReturnEndOther);
     MergeCounter(gWindow.ARM9JitReturnMaxBlock, gFrame.ARM9JitReturnMaxBlock);
     MergeCounter(gWindow.ARM9JitReturnIRQBoundary, gFrame.ARM9JitReturnIRQBoundary);
     MergeCounter(gWindow.ARM9JitReturnHaltBoundary, gFrame.ARM9JitReturnHaltBoundary);
@@ -651,8 +687,20 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockTransferCalls));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] arm9_ret normal_end=%.1f normal_max=%.1f normal_irq=%.1f normal_halt=%.1f",
+        "[LITEV_PROFILE] arm9_chain miss_stop=%.1f miss_budget=%.1f miss_target=%.1f miss_hle=%.1f miss_setup=%.1f miss_lookup=%.1f",
+        CountPerFrame(gWindow.ARM9JitChainMissStop),
+        CountPerFrame(gWindow.ARM9JitChainMissBudget),
+        CountPerFrame(gWindow.ARM9JitChainMissTarget),
+        CountPerFrame(gWindow.ARM9JitChainMissHLE),
+        CountPerFrame(gWindow.ARM9JitChainMissSetup),
+        CountPerFrame(gWindow.ARM9JitChainMissLookup));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_ret normal_end=%.1f end_branch=%.1f end_cond=%.1f end_other=%.1f normal_max=%.1f normal_irq=%.1f normal_halt=%.1f",
         CountPerFrame(gWindow.ARM9JitReturnEndBlock),
+        CountPerFrame(gWindow.ARM9JitReturnEndBranch),
+        CountPerFrame(gWindow.ARM9JitReturnEndCondBranch),
+        CountPerFrame(gWindow.ARM9JitReturnEndOther),
         CountPerFrame(gWindow.ARM9JitReturnMaxBlock),
         CountPerFrame(gWindow.ARM9JitReturnIRQBoundary),
         CountPerFrame(gWindow.ARM9JitReturnHaltBoundary));

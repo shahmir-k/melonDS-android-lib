@@ -690,6 +690,16 @@ void ARMv5::Execute()
                         {
                         case JitBlock::ExitEndBlock:
                             LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndBlock);
+                            if (it->second->ExitIsBranch)
+                            {
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndBranch);
+                                if (it->second->ExitIsCondBranch)
+                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndCondBranch);
+                            }
+                            else
+                            {
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndOther);
+                            }
                             break;
                         case JitBlock::ExitMaxBlockSize:
                             LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxBlock);

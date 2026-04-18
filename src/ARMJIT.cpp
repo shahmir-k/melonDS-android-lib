@@ -66,31 +66,45 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainAttempts);
 
     if (cpu->StopExecution || cpu->Halted || cpu->IdleLoop)
+    {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissStop);
         return nullptr;
+    }
 
     if (cpu->Cycles >= kChainCycleBudget)
+    {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissBudget);
         return nullptr;
+    }
 
     if (nds.ARM9Timestamp + cpu->Cycles >= nds.ARM9Target)
+    {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissTarget);
         return nullptr;
+    }
 
     const u32 instrAddr = cpu->R[15] - ((cpu->CPSR & 0x20) ? 2 : 4);
     if (nds.ARM9LibHLE.TryHandle(*cpu, instrAddr))
     {
         LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9LibHLEHits);
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissHLE);
         return nullptr;
     }
 
     if ((instrAddr < cpu->FastBlockLookupStart || instrAddr >= (cpu->FastBlockLookupStart + cpu->FastBlockLookupSize))
         && !nds.JIT.SetupExecutableRegion(0, instrAddr, cpu->FastBlockLookup, cpu->FastBlockLookupStart, cpu->FastBlockLookupSize))
     {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissSetup);
         return nullptr;
     }
 
     JitBlockEntry block = nds.JIT.LookUpBlock(0, cpu->FastBlockLookup,
         instrAddr - cpu->FastBlockLookupStart, instrAddr);
     if (!block)
+    {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissLookup);
         return nullptr;
+    }
 
     cpu->LastJitBlockAddr = instrAddr;
     cpu->LastJitBlockEntry = block;
@@ -1092,6 +1106,10 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     } while(!instrs[i - 1].Info.EndBlock && i < MaxBlockSize && !cpu->Halted && (!cpu->IRQ || (cpu->CPSR & 0x80)));
 
     u8 exitKind = JitBlock::ExitEndBlock;
+    bool exitIsBranch = instrs[i - 1].Info.Branches();
+    bool exitIsCondBranch = thumb
+        ? instrs[i - 1].Info.Kind == ARMInstrInfo::tk_BCOND
+        : instrs[i - 1].Cond() < 0xE;
     if (cpu->Halted)
         exitKind = JitBlock::ExitHaltBoundary;
     else if (i >= MaxBlockSize && !instrs[i - 1].Info.EndBlock)
@@ -1171,6 +1189,8 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         block->StartAddr = blockAddr;
         block->StartAddrLocal = localAddr;
         block->Exit = exitKind;
+        block->ExitIsBranch = exitIsBranch;
+        block->ExitIsCondBranch = exitIsCondBranch;
 
         FloodFillSetFlags(instrs, i - 1, 0xF);
 

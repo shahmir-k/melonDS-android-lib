@@ -44,6 +44,8 @@ public:
         NumAddresses = numAddresses;
         NumLiterals = numLiterals;
         Exit = ExitUnknown;
+        ExitIsBranch = 0;
+        ExitIsCondBranch = 0;
         Data.SetLength(numAddresses * 2 + numLiterals);
     }
 
@@ -54,6 +56,8 @@ public:
     u16 NumAddresses;
     u16 NumLiterals;
     u8 Exit;
+    u8 ExitIsBranch;
+    u8 ExitIsCondBranch;
 
     JitBlockEntry EntryPoint;
 
