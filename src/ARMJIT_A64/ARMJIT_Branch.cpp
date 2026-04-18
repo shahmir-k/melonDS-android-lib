@@ -21,6 +21,9 @@
 
 using namespace Arm64Gen;
 
+extern "C" void ARM_Ret();
+extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpu);
+
 // hack
 const int kCodeCacheTiming = 3;
 
@@ -350,9 +353,43 @@ void Compiler::A_Comp_BranchImm()
 void Compiler::A_Comp_BranchXchangeReg()
 {
     ARM64Reg rn = MapReg(CurInstr.A_Reg(0));
-    MOV(W0, rn);
     if ((CurInstr.Instr & 0xF0) == 0x30) // BLX_reg
+    {
+        MOV(W0, rn);
         MOVI2R(MapReg(14), R15 - 4);
+        Comp_JumpTo(W0, true);
+        return;
+    }
+
+    if (CurInstr.A_Reg(0) == 14)
+    {
+        MOV(W0, rn);
+        FixupBranch switchToThumb = TBNZ(W0, 0);
+
+        Comp_JumpTo(W0, false);
+
+        RegCache.PrepareExit();
+
+        if (ConstantCycles)
+            ADD(RCycles, RCycles, ConstantCycles);
+
+        SaveCycles();
+        SaveCPSR();
+
+        MOV(X0, RCPU);
+        QuickCallFunction(X1, ARM9_ContinueBlock);
+
+        FixupBranch noChain = CBZ(X0);
+        BR(X0);
+        SetJumpTarget(noChain);
+        QuickTailCall(X0, ARM_Ret);
+
+        SetJumpTarget(switchToThumb);
+        Comp_JumpTo(rn, true);
+        return;
+    }
+
+    MOV(W0, rn);
     Comp_JumpTo(W0, true);
 }
 
