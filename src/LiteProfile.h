@@ -70,6 +70,10 @@ struct FrameCounters
     std::atomic<uint64_t> GPU3DRenderClearNs{0};
     std::atomic<uint64_t> GPU3DRenderGeometryNs{0};
     std::atomic<uint64_t> GPU3DRenderSceneNs{0};
+    std::atomic<uint64_t> GPU3DSceneOpaqueNs{0};
+    std::atomic<uint64_t> GPU3DSceneClearWorkaroundNs{0};
+    std::atomic<uint64_t> GPU3DSceneTranslucentNs{0};
+    std::atomic<uint64_t> GPU3DScenePostNs{0};
 
     std::atomic<uint64_t> DrawScanlineNs{0};
     std::atomic<uint64_t> DrawSpritesNs{0};
@@ -158,6 +162,10 @@ inline void ResetFrame()
     gFrame.GPU3DRenderClearNs.store(0, std::memory_order_relaxed);
     gFrame.GPU3DRenderGeometryNs.store(0, std::memory_order_relaxed);
     gFrame.GPU3DRenderSceneNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DSceneOpaqueNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DSceneClearWorkaroundNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DSceneTranslucentNs.store(0, std::memory_order_relaxed);
+    gFrame.GPU3DScenePostNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gFrame.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gFrame.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -229,6 +237,10 @@ inline void ResetWindow()
     gWindow.GPU3DRenderClearNs.store(0, std::memory_order_relaxed);
     gWindow.GPU3DRenderGeometryNs.store(0, std::memory_order_relaxed);
     gWindow.GPU3DRenderSceneNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DSceneOpaqueNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DSceneClearWorkaroundNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DSceneTranslucentNs.store(0, std::memory_order_relaxed);
+    gWindow.GPU3DScenePostNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineNs.store(0, std::memory_order_relaxed);
     gWindow.DrawSpritesNs.store(0, std::memory_order_relaxed);
     gWindow.DrawScanlineCalls.store(0, std::memory_order_relaxed);
@@ -333,6 +345,10 @@ inline void EndFrame()
     MergeCounter(gWindow.GPU3DRenderClearNs, gFrame.GPU3DRenderClearNs);
     MergeCounter(gWindow.GPU3DRenderGeometryNs, gFrame.GPU3DRenderGeometryNs);
     MergeCounter(gWindow.GPU3DRenderSceneNs, gFrame.GPU3DRenderSceneNs);
+    MergeCounter(gWindow.GPU3DSceneOpaqueNs, gFrame.GPU3DSceneOpaqueNs);
+    MergeCounter(gWindow.GPU3DSceneClearWorkaroundNs, gFrame.GPU3DSceneClearWorkaroundNs);
+    MergeCounter(gWindow.GPU3DSceneTranslucentNs, gFrame.GPU3DSceneTranslucentNs);
+    MergeCounter(gWindow.GPU3DScenePostNs, gFrame.GPU3DScenePostNs);
     MergeCounter(gWindow.DrawScanlineNs, gFrame.DrawScanlineNs);
     MergeCounter(gWindow.DrawSpritesNs, gFrame.DrawSpritesNs);
     MergeCounter(gWindow.DrawScanlineCalls, gFrame.DrawScanlineCalls);
@@ -433,6 +449,13 @@ inline void EndFrame()
         NsPerFrame(gWindow.GPU3DRenderClearNs),
         NsPerFrame(gWindow.GPU3DRenderGeometryNs),
         NsPerFrame(gWindow.GPU3DRenderSceneNs));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] gpu3d_scene opaque=%.3fms clearwork=%.3fms translucent=%.3fms post=%.3fms",
+        NsPerFrame(gWindow.GPU3DSceneOpaqueNs),
+        NsPerFrame(gWindow.GPU3DSceneClearWorkaroundNs),
+        NsPerFrame(gWindow.GPU3DSceneTranslucentNs),
+        NsPerFrame(gWindow.GPU3DScenePostNs));
 
     gWindowFrames = 0;
     ResetWindow();
