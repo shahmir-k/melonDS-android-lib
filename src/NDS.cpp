@@ -53,7 +53,7 @@ using namespace Platform;
 #ifdef LITEV_WIDE_SCHEDULER
 const s32 kMaxIterationCycles = 512;
 #else
-const s32 kMaxIterationCycles = 64;
+const s32 kMaxIterationCycles = 96;
 #endif
 const s32 kIterationCycleMargin = 8;
 
