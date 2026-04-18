@@ -31,6 +31,8 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitLookupCalls{0};
     std::atomic<uint64_t> ARM9JitGuestCycles{0};
     std::atomic<uint64_t> ARM9JitLastBlockHits{0};
+    std::atomic<uint64_t> ARM9JitChainAttempts{0};
+    std::atomic<uint64_t> ARM9JitChainHits{0};
     std::atomic<uint64_t> ARM9JitReturnsNormal{0};
     std::atomic<uint64_t> ARM9JitReturnsStop{0};
     std::atomic<uint64_t> ARM9JitReturnsIdle{0};
@@ -153,6 +155,8 @@ inline void ResetFrame()
     gFrame.ARM9JitLookupCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitGuestCycles.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainAttempts.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainHits.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
@@ -258,6 +262,8 @@ inline void ResetWindow()
     gWindow.ARM9JitLookupCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitGuestCycles.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainAttempts.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainHits.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
@@ -403,6 +409,8 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitLookupCalls, gFrame.ARM9JitLookupCalls);
     MergeCounter(gWindow.ARM9JitGuestCycles, gFrame.ARM9JitGuestCycles);
     MergeCounter(gWindow.ARM9JitLastBlockHits, gFrame.ARM9JitLastBlockHits);
+    MergeCounter(gWindow.ARM9JitChainAttempts, gFrame.ARM9JitChainAttempts);
+    MergeCounter(gWindow.ARM9JitChainHits, gFrame.ARM9JitChainHits);
     MergeCounter(gWindow.ARM9JitReturnsNormal, gFrame.ARM9JitReturnsNormal);
     MergeCounter(gWindow.ARM9JitReturnsStop, gFrame.ARM9JitReturnsStop);
     MergeCounter(gWindow.ARM9JitReturnsIdle, gFrame.ARM9JitReturnsIdle);
@@ -522,7 +530,7 @@ inline void EndFrame()
         NsPerFrame(gWindow.DrawSpritesNs));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] arm9_jit dispatch=%.3fms/%.1f lookup=%.3fms/%.1f compile=%.3fms/%.1f guest_cycles=%.1f last_hit=%.1f ret_normal=%.1f ret_stop=%.1f ret_idle=%.1f ret_halt=%.1f cache_hit=%.1f cache_miss=%.1f hle=%.1f slowread=%.3fms/%.1f slowwrite=%.3fms/%.1f slowblock=%.1f",
+        "[LITEV_PROFILE] arm9_jit dispatch=%.3fms/%.1f lookup=%.3fms/%.1f compile=%.3fms/%.1f guest_cycles=%.1f last_hit=%.1f chain=%.1f/%.1f ret_normal=%.1f ret_stop=%.1f ret_idle=%.1f ret_halt=%.1f cache_hit=%.1f cache_miss=%.1f hle=%.1f slowread=%.3fms/%.1f slowwrite=%.3fms/%.1f slowblock=%.1f",
         NsPerFrame(gWindow.ARM9JitDispatchNs),
         CountPerFrame(gWindow.ARM9JitDispatchCalls),
         NsPerFrame(gWindow.ARM9JitLookupNs),
@@ -531,6 +539,8 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9JitCompileCalls),
         CountPerFrame(gWindow.ARM9JitGuestCycles),
         CountPerFrame(gWindow.ARM9JitLastBlockHits),
+        CountPerFrame(gWindow.ARM9JitChainHits),
+        CountPerFrame(gWindow.ARM9JitChainAttempts),
         CountPerFrame(gWindow.ARM9JitReturnsNormal),
         CountPerFrame(gWindow.ARM9JitReturnsStop),
         CountPerFrame(gWindow.ARM9JitReturnsIdle),

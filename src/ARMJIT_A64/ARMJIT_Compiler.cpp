@@ -29,6 +29,7 @@
 using namespace Arm64Gen;
 
 extern "C" void ARM_Ret();
+extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpu);
 
 namespace melonDS
 {
@@ -821,6 +822,20 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
 
     if (ConstantCycles)
         ADD(RCycles, RCycles, ConstantCycles);
+
+    if (Num == 0)
+    {
+        STR(INDEX_UNSIGNED, RCycles, RCPU, offsetof(ARM, Cycles));
+        STR(INDEX_UNSIGNED, RCPSR, RCPU, offsetof(ARM, CPSR));
+
+        MOV(X0, RCPU);
+        QuickCallFunction(X1, ARM9_ContinueBlock);
+
+        FixupBranch noChain = CBZ(X0);
+        BR(X0);
+        SetJumpTarget(noChain);
+    }
+
     QuickTailCall(X0, ARM_Ret);
 
     FlushIcache();

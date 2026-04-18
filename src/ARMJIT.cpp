@@ -56,6 +56,48 @@ static_assert(offsetof(ARM, CPSR) == ARM_CPSR_offset, "");
 static_assert(offsetof(ARM, Cycles) == ARM_Cycles_offset, "");
 static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset, "");
 
+extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
+{
+    constexpr s32 kChainCycleBudget = 96;
+
+    auto* cpu = static_cast<ARMv5*>(cpuBase);
+    auto& nds = cpu->NDS;
+
+    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainAttempts);
+
+    if (cpu->StopExecution || cpu->Halted || cpu->IdleLoop)
+        return nullptr;
+
+    if (cpu->Cycles >= kChainCycleBudget)
+        return nullptr;
+
+    if (nds.ARM9Timestamp + cpu->Cycles >= nds.ARM9Target)
+        return nullptr;
+
+    const u32 instrAddr = cpu->R[15] - ((cpu->CPSR & 0x20) ? 2 : 4);
+    if (nds.ARM9LibHLE.TryHandle(*cpu, instrAddr))
+    {
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9LibHLEHits);
+        return nullptr;
+    }
+
+    if ((instrAddr < cpu->FastBlockLookupStart || instrAddr >= (cpu->FastBlockLookupStart + cpu->FastBlockLookupSize))
+        && !nds.JIT.SetupExecutableRegion(0, instrAddr, cpu->FastBlockLookup, cpu->FastBlockLookupStart, cpu->FastBlockLookupSize))
+    {
+        return nullptr;
+    }
+
+    JitBlockEntry block = nds.JIT.LookUpBlock(0, cpu->FastBlockLookup,
+        instrAddr - cpu->FastBlockLookupStart, instrAddr);
+    if (!block)
+        return nullptr;
+
+    cpu->LastJitBlockAddr = instrAddr;
+    cpu->LastJitBlockEntry = block;
+    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainHits);
+    return block;
+}
+
 
 #define JIT_DEBUGPRINT(msg, ...)
 //#define JIT_DEBUGPRINT(msg, ...) Platform::Log(Platform::LogLevel::Debug, msg, ## __VA_ARGS__)
