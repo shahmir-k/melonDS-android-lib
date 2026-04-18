@@ -31,6 +31,40 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitLookupCalls{0};
     std::atomic<uint64_t> ARM9JitGuestCycles{0};
     std::atomic<uint64_t> ARM9JitLastBlockHits{0};
+    std::atomic<uint64_t> ARM9ExecInstrs{0};
+    std::atomic<uint64_t> ARM9ExecARMALU{0};
+    std::atomic<uint64_t> ARM9ExecARMMul{0};
+    std::atomic<uint64_t> ARM9ExecARMSingleLoad{0};
+    std::atomic<uint64_t> ARM9ExecARMSingleStore{0};
+    std::atomic<uint64_t> ARM9ExecARMBlockLoad{0};
+    std::atomic<uint64_t> ARM9ExecARMBlockStore{0};
+    std::atomic<uint64_t> ARM9ExecARMStackLoad{0};
+    std::atomic<uint64_t> ARM9ExecARMStackStore{0};
+    std::atomic<uint64_t> ARM9ExecARMBranchImm{0};
+    std::atomic<uint64_t> ARM9ExecARMBranchReg{0};
+    std::atomic<uint64_t> ARM9ExecARMSys{0};
+    std::atomic<uint64_t> ARM9ExecARMOther{0};
+    std::atomic<uint64_t> ARM9ExecThumbALU{0};
+    std::atomic<uint64_t> ARM9ExecThumbMul{0};
+    std::atomic<uint64_t> ARM9ExecThumbSingleLoad{0};
+    std::atomic<uint64_t> ARM9ExecThumbSingleStore{0};
+    std::atomic<uint64_t> ARM9ExecThumbBlockLoad{0};
+    std::atomic<uint64_t> ARM9ExecThumbBlockStore{0};
+    std::atomic<uint64_t> ARM9ExecThumbStackLoad{0};
+    std::atomic<uint64_t> ARM9ExecThumbStackStore{0};
+    std::atomic<uint64_t> ARM9ExecThumbBranchCond{0};
+    std::atomic<uint64_t> ARM9ExecThumbBranchImm{0};
+    std::atomic<uint64_t> ARM9ExecThumbBranchReg{0};
+    std::atomic<uint64_t> ARM9ExecThumbSys{0};
+    std::atomic<uint64_t> ARM9ExecThumbOther{0};
+    std::atomic<uint64_t> ARM9ExecLiteralLoads{0};
+    std::atomic<uint64_t> ARM9ExecMemITCM{0};
+    std::atomic<uint64_t> ARM9ExecMemDTCM{0};
+    std::atomic<uint64_t> ARM9ExecMemMainRAM{0};
+    std::atomic<uint64_t> ARM9ExecMemSharedWRAM{0};
+    std::atomic<uint64_t> ARM9ExecMemIO{0};
+    std::atomic<uint64_t> ARM9ExecMemVRAM{0};
+    std::atomic<uint64_t> ARM9ExecMemOther{0};
     std::atomic<uint64_t> ARM9JitChainAttempts{0};
     std::atomic<uint64_t> ARM9JitChainHits{0};
     std::atomic<uint64_t> ARM9JitChainMissStop{0};
@@ -47,7 +81,30 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitReturnEndBranch{0};
     std::atomic<uint64_t> ARM9JitReturnEndCondBranch{0};
     std::atomic<uint64_t> ARM9JitReturnEndOther{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMImm{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMReg{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMRegARM{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMRegThumb{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMRegLR{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMRegOther{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMRegLink{0};
+    std::atomic<uint64_t> ARM9JitReturnEndThumbCond{0};
+    std::atomic<uint64_t> ARM9JitReturnEndThumbImm{0};
+    std::atomic<uint64_t> ARM9JitReturnEndThumbReg{0};
     std::atomic<uint64_t> ARM9JitReturnMaxBlock{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxARM{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxThumb{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxWithMemory{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxNoMemory{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxWithLoad{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxWithStore{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxITCM{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxDTCM{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxMainRAM{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxSharedWRAM{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxIO{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxVRAM{0};
+    std::atomic<uint64_t> ARM9JitReturnMaxOtherMem{0};
     std::atomic<uint64_t> ARM9JitReturnIRQBoundary{0};
     std::atomic<uint64_t> ARM9JitReturnHaltBoundary{0};
     std::atomic<uint64_t> ARM9JitBlockCacheHits{0};
@@ -55,9 +112,12 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9LibHLEHits{0};
     std::atomic<uint64_t> ARM9SlowReadNs{0};
     std::atomic<uint64_t> ARM9SlowWriteNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockTransferNs{0};
     std::atomic<uint64_t> ARM9SlowReadCalls{0};
     std::atomic<uint64_t> ARM9SlowWriteCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockTransferCalls{0};
+    std::atomic<uint64_t> ARM9SlowBlockTransferReads{0};
+    std::atomic<uint64_t> ARM9SlowBlockTransferWrites{0};
     std::atomic<uint64_t> ARM9SlowReadMainRAM{0};
     std::atomic<uint64_t> ARM9SlowReadSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowReadIO{0};
@@ -188,6 +248,40 @@ inline void ResetFrame()
     gFrame.ARM9JitLookupCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitGuestCycles.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecInstrs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMALU.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMMul.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMSingleLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMSingleStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMBlockLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMBlockStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMStackLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMStackStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMBranchImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMBranchReg.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMSys.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecARMOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbALU.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbMul.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbSingleLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbSingleStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbBlockLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbBlockStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbStackLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbStackStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbBranchCond.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbBranchImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbBranchReg.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbSys.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecThumbOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecLiteralLoads.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemITCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemDTCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemVRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9ExecMemOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainAttempts.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainHits.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainMissStop.store(0, std::memory_order_relaxed);
@@ -204,7 +298,30 @@ inline void ResetFrame()
     gFrame.ARM9JitReturnEndBranch.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnEndCondBranch.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnEndOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMReg.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMRegARM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMRegThumb.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMRegLR.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMRegOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMRegLink.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndThumbCond.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndThumbImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndThumbReg.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxARM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxThumb.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxWithMemory.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxNoMemory.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxWithLoad.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxWithStore.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxITCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxDTCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxVRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnMaxOtherMem.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnIRQBoundary.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnHaltBoundary.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitBlockCacheHits.store(0, std::memory_order_relaxed);
@@ -212,9 +329,12 @@ inline void ResetFrame()
     gFrame.ARM9LibHLEHits.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowWriteNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockTransferNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowWriteCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockTransferReads.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockTransferWrites.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
@@ -328,6 +448,40 @@ inline void ResetWindow()
     gWindow.ARM9JitLookupCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitGuestCycles.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitLastBlockHits.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecInstrs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMALU.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMMul.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMSingleLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMSingleStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMBlockLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMBlockStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMStackLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMStackStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMBranchImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMBranchReg.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMSys.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecARMOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbALU.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbMul.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbSingleLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbSingleStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbBlockLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbBlockStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbStackLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbStackStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbBranchCond.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbBranchImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbBranchReg.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbSys.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecThumbOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecLiteralLoads.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemITCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemDTCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemVRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9ExecMemOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainAttempts.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainHits.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainMissStop.store(0, std::memory_order_relaxed);
@@ -344,7 +498,30 @@ inline void ResetWindow()
     gWindow.ARM9JitReturnEndBranch.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnEndCondBranch.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnEndOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMReg.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMRegARM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMRegThumb.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMRegLR.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMRegOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMRegLink.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndThumbCond.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndThumbImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndThumbReg.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxARM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxThumb.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxWithMemory.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxNoMemory.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxWithLoad.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxWithStore.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxITCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxDTCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxVRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnMaxOtherMem.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnIRQBoundary.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnHaltBoundary.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitBlockCacheHits.store(0, std::memory_order_relaxed);
@@ -352,9 +529,12 @@ inline void ResetWindow()
     gWindow.ARM9LibHLEHits.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowWriteNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockTransferNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowWriteCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockTransferReads.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockTransferWrites.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
@@ -508,6 +688,40 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitLookupCalls, gFrame.ARM9JitLookupCalls);
     MergeCounter(gWindow.ARM9JitGuestCycles, gFrame.ARM9JitGuestCycles);
     MergeCounter(gWindow.ARM9JitLastBlockHits, gFrame.ARM9JitLastBlockHits);
+    MergeCounter(gWindow.ARM9ExecInstrs, gFrame.ARM9ExecInstrs);
+    MergeCounter(gWindow.ARM9ExecARMALU, gFrame.ARM9ExecARMALU);
+    MergeCounter(gWindow.ARM9ExecARMMul, gFrame.ARM9ExecARMMul);
+    MergeCounter(gWindow.ARM9ExecARMSingleLoad, gFrame.ARM9ExecARMSingleLoad);
+    MergeCounter(gWindow.ARM9ExecARMSingleStore, gFrame.ARM9ExecARMSingleStore);
+    MergeCounter(gWindow.ARM9ExecARMBlockLoad, gFrame.ARM9ExecARMBlockLoad);
+    MergeCounter(gWindow.ARM9ExecARMBlockStore, gFrame.ARM9ExecARMBlockStore);
+    MergeCounter(gWindow.ARM9ExecARMStackLoad, gFrame.ARM9ExecARMStackLoad);
+    MergeCounter(gWindow.ARM9ExecARMStackStore, gFrame.ARM9ExecARMStackStore);
+    MergeCounter(gWindow.ARM9ExecARMBranchImm, gFrame.ARM9ExecARMBranchImm);
+    MergeCounter(gWindow.ARM9ExecARMBranchReg, gFrame.ARM9ExecARMBranchReg);
+    MergeCounter(gWindow.ARM9ExecARMSys, gFrame.ARM9ExecARMSys);
+    MergeCounter(gWindow.ARM9ExecARMOther, gFrame.ARM9ExecARMOther);
+    MergeCounter(gWindow.ARM9ExecThumbALU, gFrame.ARM9ExecThumbALU);
+    MergeCounter(gWindow.ARM9ExecThumbMul, gFrame.ARM9ExecThumbMul);
+    MergeCounter(gWindow.ARM9ExecThumbSingleLoad, gFrame.ARM9ExecThumbSingleLoad);
+    MergeCounter(gWindow.ARM9ExecThumbSingleStore, gFrame.ARM9ExecThumbSingleStore);
+    MergeCounter(gWindow.ARM9ExecThumbBlockLoad, gFrame.ARM9ExecThumbBlockLoad);
+    MergeCounter(gWindow.ARM9ExecThumbBlockStore, gFrame.ARM9ExecThumbBlockStore);
+    MergeCounter(gWindow.ARM9ExecThumbStackLoad, gFrame.ARM9ExecThumbStackLoad);
+    MergeCounter(gWindow.ARM9ExecThumbStackStore, gFrame.ARM9ExecThumbStackStore);
+    MergeCounter(gWindow.ARM9ExecThumbBranchCond, gFrame.ARM9ExecThumbBranchCond);
+    MergeCounter(gWindow.ARM9ExecThumbBranchImm, gFrame.ARM9ExecThumbBranchImm);
+    MergeCounter(gWindow.ARM9ExecThumbBranchReg, gFrame.ARM9ExecThumbBranchReg);
+    MergeCounter(gWindow.ARM9ExecThumbSys, gFrame.ARM9ExecThumbSys);
+    MergeCounter(gWindow.ARM9ExecThumbOther, gFrame.ARM9ExecThumbOther);
+    MergeCounter(gWindow.ARM9ExecLiteralLoads, gFrame.ARM9ExecLiteralLoads);
+    MergeCounter(gWindow.ARM9ExecMemITCM, gFrame.ARM9ExecMemITCM);
+    MergeCounter(gWindow.ARM9ExecMemDTCM, gFrame.ARM9ExecMemDTCM);
+    MergeCounter(gWindow.ARM9ExecMemMainRAM, gFrame.ARM9ExecMemMainRAM);
+    MergeCounter(gWindow.ARM9ExecMemSharedWRAM, gFrame.ARM9ExecMemSharedWRAM);
+    MergeCounter(gWindow.ARM9ExecMemIO, gFrame.ARM9ExecMemIO);
+    MergeCounter(gWindow.ARM9ExecMemVRAM, gFrame.ARM9ExecMemVRAM);
+    MergeCounter(gWindow.ARM9ExecMemOther, gFrame.ARM9ExecMemOther);
     MergeCounter(gWindow.ARM9JitChainAttempts, gFrame.ARM9JitChainAttempts);
     MergeCounter(gWindow.ARM9JitChainHits, gFrame.ARM9JitChainHits);
     MergeCounter(gWindow.ARM9JitChainMissStop, gFrame.ARM9JitChainMissStop);
@@ -524,7 +738,30 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitReturnEndBranch, gFrame.ARM9JitReturnEndBranch);
     MergeCounter(gWindow.ARM9JitReturnEndCondBranch, gFrame.ARM9JitReturnEndCondBranch);
     MergeCounter(gWindow.ARM9JitReturnEndOther, gFrame.ARM9JitReturnEndOther);
+    MergeCounter(gWindow.ARM9JitReturnEndARMImm, gFrame.ARM9JitReturnEndARMImm);
+    MergeCounter(gWindow.ARM9JitReturnEndARMReg, gFrame.ARM9JitReturnEndARMReg);
+    MergeCounter(gWindow.ARM9JitReturnEndARMRegARM, gFrame.ARM9JitReturnEndARMRegARM);
+    MergeCounter(gWindow.ARM9JitReturnEndARMRegThumb, gFrame.ARM9JitReturnEndARMRegThumb);
+    MergeCounter(gWindow.ARM9JitReturnEndARMRegLR, gFrame.ARM9JitReturnEndARMRegLR);
+    MergeCounter(gWindow.ARM9JitReturnEndARMRegOther, gFrame.ARM9JitReturnEndARMRegOther);
+    MergeCounter(gWindow.ARM9JitReturnEndARMRegLink, gFrame.ARM9JitReturnEndARMRegLink);
+    MergeCounter(gWindow.ARM9JitReturnEndThumbCond, gFrame.ARM9JitReturnEndThumbCond);
+    MergeCounter(gWindow.ARM9JitReturnEndThumbImm, gFrame.ARM9JitReturnEndThumbImm);
+    MergeCounter(gWindow.ARM9JitReturnEndThumbReg, gFrame.ARM9JitReturnEndThumbReg);
     MergeCounter(gWindow.ARM9JitReturnMaxBlock, gFrame.ARM9JitReturnMaxBlock);
+    MergeCounter(gWindow.ARM9JitReturnMaxARM, gFrame.ARM9JitReturnMaxARM);
+    MergeCounter(gWindow.ARM9JitReturnMaxThumb, gFrame.ARM9JitReturnMaxThumb);
+    MergeCounter(gWindow.ARM9JitReturnMaxWithMemory, gFrame.ARM9JitReturnMaxWithMemory);
+    MergeCounter(gWindow.ARM9JitReturnMaxNoMemory, gFrame.ARM9JitReturnMaxNoMemory);
+    MergeCounter(gWindow.ARM9JitReturnMaxWithLoad, gFrame.ARM9JitReturnMaxWithLoad);
+    MergeCounter(gWindow.ARM9JitReturnMaxWithStore, gFrame.ARM9JitReturnMaxWithStore);
+    MergeCounter(gWindow.ARM9JitReturnMaxITCM, gFrame.ARM9JitReturnMaxITCM);
+    MergeCounter(gWindow.ARM9JitReturnMaxDTCM, gFrame.ARM9JitReturnMaxDTCM);
+    MergeCounter(gWindow.ARM9JitReturnMaxMainRAM, gFrame.ARM9JitReturnMaxMainRAM);
+    MergeCounter(gWindow.ARM9JitReturnMaxSharedWRAM, gFrame.ARM9JitReturnMaxSharedWRAM);
+    MergeCounter(gWindow.ARM9JitReturnMaxIO, gFrame.ARM9JitReturnMaxIO);
+    MergeCounter(gWindow.ARM9JitReturnMaxVRAM, gFrame.ARM9JitReturnMaxVRAM);
+    MergeCounter(gWindow.ARM9JitReturnMaxOtherMem, gFrame.ARM9JitReturnMaxOtherMem);
     MergeCounter(gWindow.ARM9JitReturnIRQBoundary, gFrame.ARM9JitReturnIRQBoundary);
     MergeCounter(gWindow.ARM9JitReturnHaltBoundary, gFrame.ARM9JitReturnHaltBoundary);
     MergeCounter(gWindow.ARM9JitBlockCacheHits, gFrame.ARM9JitBlockCacheHits);
@@ -532,9 +769,12 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9LibHLEHits, gFrame.ARM9LibHLEHits);
     MergeCounter(gWindow.ARM9SlowReadNs, gFrame.ARM9SlowReadNs);
     MergeCounter(gWindow.ARM9SlowWriteNs, gFrame.ARM9SlowWriteNs);
+    MergeCounter(gWindow.ARM9SlowBlockTransferNs, gFrame.ARM9SlowBlockTransferNs);
     MergeCounter(gWindow.ARM9SlowReadCalls, gFrame.ARM9SlowReadCalls);
     MergeCounter(gWindow.ARM9SlowWriteCalls, gFrame.ARM9SlowWriteCalls);
     MergeCounter(gWindow.ARM9SlowBlockTransferCalls, gFrame.ARM9SlowBlockTransferCalls);
+    MergeCounter(gWindow.ARM9SlowBlockTransferReads, gFrame.ARM9SlowBlockTransferReads);
+    MergeCounter(gWindow.ARM9SlowBlockTransferWrites, gFrame.ARM9SlowBlockTransferWrites);
     MergeCounter(gWindow.ARM9SlowReadMainRAM, gFrame.ARM9SlowReadMainRAM);
     MergeCounter(gWindow.ARM9SlowReadSharedWRAM, gFrame.ARM9SlowReadSharedWRAM);
     MergeCounter(gWindow.ARM9SlowReadIO, gFrame.ARM9SlowReadIO);
@@ -662,7 +902,7 @@ inline void EndFrame()
         NsPerFrame(gWindow.DrawSpritesNs));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] arm9_jit dispatch=%.3fms/%.1f lookup=%.3fms/%.1f compile=%.3fms/%.1f guest_cycles=%.1f last_hit=%.1f chain=%.1f/%.1f ret_normal=%.1f ret_stop=%.1f ret_idle=%.1f ret_halt=%.1f cache_hit=%.1f cache_miss=%.1f hle=%.1f slowread=%.3fms/%.1f slowwrite=%.3fms/%.1f slowblock=%.1f",
+        "[LITEV_PROFILE] arm9_jit dispatch=%.3fms/%.1f lookup=%.3fms/%.1f compile=%.3fms/%.1f guest_cycles=%.1f last_hit=%.1f chain=%.1f/%.1f ret_normal=%.1f ret_stop=%.1f ret_idle=%.1f ret_halt=%.1f cache_hit=%.1f cache_miss=%.1f hle=%.1f slowread=%.3fms/%.1f slowwrite=%.3fms/%.1f slowblock=%.3fms/%.1f",
         NsPerFrame(gWindow.ARM9JitDispatchNs),
         CountPerFrame(gWindow.ARM9JitDispatchCalls),
         NsPerFrame(gWindow.ARM9JitLookupNs),
@@ -684,7 +924,53 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowReadCalls),
         NsPerFrame(gWindow.ARM9SlowWriteNs),
         CountPerFrame(gWindow.ARM9SlowWriteCalls),
+        NsPerFrame(gWindow.ARM9SlowBlockTransferNs),
         CountPerFrame(gWindow.ARM9SlowBlockTransferCalls));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_mix total=%.1f arm_alu=%.1f arm_mul=%.1f arm_ld=%.1f arm_st=%.1f arm_ldm=%.1f arm_stm=%.1f arm_stack_ld=%.1f arm_stack_st=%.1f arm_bimm=%.1f arm_breg=%.1f arm_sys=%.1f arm_other=%.1f",
+        CountPerFrame(gWindow.ARM9ExecInstrs),
+        CountPerFrame(gWindow.ARM9ExecARMALU),
+        CountPerFrame(gWindow.ARM9ExecARMMul),
+        CountPerFrame(gWindow.ARM9ExecARMSingleLoad),
+        CountPerFrame(gWindow.ARM9ExecARMSingleStore),
+        CountPerFrame(gWindow.ARM9ExecARMBlockLoad),
+        CountPerFrame(gWindow.ARM9ExecARMBlockStore),
+        CountPerFrame(gWindow.ARM9ExecARMStackLoad),
+        CountPerFrame(gWindow.ARM9ExecARMStackStore),
+        CountPerFrame(gWindow.ARM9ExecARMBranchImm),
+        CountPerFrame(gWindow.ARM9ExecARMBranchReg),
+        CountPerFrame(gWindow.ARM9ExecARMSys),
+        CountPerFrame(gWindow.ARM9ExecARMOther));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_mix_thumb alu=%.1f mul=%.1f ld=%.1f st=%.1f ldm=%.1f stm=%.1f stack_ld=%.1f stack_st=%.1f bcond=%.1f bimm=%.1f breg=%.1f sys=%.1f other=%.1f literal=%.1f",
+        CountPerFrame(gWindow.ARM9ExecThumbALU),
+        CountPerFrame(gWindow.ARM9ExecThumbMul),
+        CountPerFrame(gWindow.ARM9ExecThumbSingleLoad),
+        CountPerFrame(gWindow.ARM9ExecThumbSingleStore),
+        CountPerFrame(gWindow.ARM9ExecThumbBlockLoad),
+        CountPerFrame(gWindow.ARM9ExecThumbBlockStore),
+        CountPerFrame(gWindow.ARM9ExecThumbStackLoad),
+        CountPerFrame(gWindow.ARM9ExecThumbStackStore),
+        CountPerFrame(gWindow.ARM9ExecThumbBranchCond),
+        CountPerFrame(gWindow.ARM9ExecThumbBranchImm),
+        CountPerFrame(gWindow.ARM9ExecThumbBranchReg),
+        CountPerFrame(gWindow.ARM9ExecThumbSys),
+        CountPerFrame(gWindow.ARM9ExecThumbOther),
+        CountPerFrame(gWindow.ARM9ExecLiteralLoads));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_mix_mem itcm=%.1f dtcm=%.1f main=%.1f shared=%.1f io=%.1f vram=%.1f other=%.1f slowblock_r=%.1f slowblock_w=%.1f",
+        CountPerFrame(gWindow.ARM9ExecMemITCM),
+        CountPerFrame(gWindow.ARM9ExecMemDTCM),
+        CountPerFrame(gWindow.ARM9ExecMemMainRAM),
+        CountPerFrame(gWindow.ARM9ExecMemSharedWRAM),
+        CountPerFrame(gWindow.ARM9ExecMemIO),
+        CountPerFrame(gWindow.ARM9ExecMemVRAM),
+        CountPerFrame(gWindow.ARM9ExecMemOther),
+        CountPerFrame(gWindow.ARM9SlowBlockTransferReads),
+        CountPerFrame(gWindow.ARM9SlowBlockTransferWrites));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] arm9_chain miss_stop=%.1f miss_budget=%.1f miss_target=%.1f miss_hle=%.1f miss_setup=%.1f miss_lookup=%.1f",
@@ -704,6 +990,38 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9JitReturnMaxBlock),
         CountPerFrame(gWindow.ARM9JitReturnIRQBoundary),
         CountPerFrame(gWindow.ARM9JitReturnHaltBoundary));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_ret_max arm=%.1f thumb=%.1f mem=%.1f nomem=%.1f",
+        CountPerFrame(gWindow.ARM9JitReturnMaxARM),
+        CountPerFrame(gWindow.ARM9JitReturnMaxThumb),
+        CountPerFrame(gWindow.ARM9JitReturnMaxWithMemory),
+        CountPerFrame(gWindow.ARM9JitReturnMaxNoMemory));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_ret_max_mem load=%.1f store=%.1f itcm=%.1f dtcm=%.1f main=%.1f shared=%.1f io=%.1f vram=%.1f other=%.1f",
+        CountPerFrame(gWindow.ARM9JitReturnMaxWithLoad),
+        CountPerFrame(gWindow.ARM9JitReturnMaxWithStore),
+        CountPerFrame(gWindow.ARM9JitReturnMaxITCM),
+        CountPerFrame(gWindow.ARM9JitReturnMaxDTCM),
+        CountPerFrame(gWindow.ARM9JitReturnMaxMainRAM),
+        CountPerFrame(gWindow.ARM9JitReturnMaxSharedWRAM),
+        CountPerFrame(gWindow.ARM9JitReturnMaxIO),
+        CountPerFrame(gWindow.ARM9JitReturnMaxVRAM),
+        CountPerFrame(gWindow.ARM9JitReturnMaxOtherMem));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_ret_branch arm_imm=%.1f arm_reg=%.1f arm_reg_arm=%.1f arm_reg_thumb=%.1f arm_reg_lr=%.1f arm_reg_other=%.1f arm_reg_link=%.1f thumb_cond=%.1f thumb_imm=%.1f thumb_reg=%.1f",
+        CountPerFrame(gWindow.ARM9JitReturnEndARMImm),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMReg),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMRegARM),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMRegThumb),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMRegLR),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMRegOther),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMRegLink),
+        CountPerFrame(gWindow.ARM9JitReturnEndThumbCond),
+        CountPerFrame(gWindow.ARM9JitReturnEndThumbImm),
+        CountPerFrame(gWindow.ARM9JitReturnEndThumbReg));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] caches composed_hit=%.1f%% eligible/frame=%.1f ineligible/frame=%.1f text_hit=%.1f%% spritebin_hit=%.1f%% sprite_skip/frame=%.1f scan_calls/frame=%.1f sprite_calls/frame=%.1f",

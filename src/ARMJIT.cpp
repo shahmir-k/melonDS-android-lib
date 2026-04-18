@@ -259,14 +259,6 @@ T SlowRead9(u32 addr, ARMv5* cpu)
 
                 if constexpr (!std::is_same_v<T, u8>)
                 {
-                    if (addr >= 0x04000280 && addr < 0x040002C0)
-                    {
-                        if constexpr (std::is_same_v<T, u32>)
-                        {}
-                        else
-                        {}
-                    }
-
                     if (addr >= 0x04000204 && addr < 0x04000218)
                     {
                         if constexpr (std::is_same_v<T, u32>)
@@ -416,6 +408,11 @@ template <bool Write, int ConsoleType>
 void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
     LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
+    if constexpr (Write)
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
+    else
+        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
+    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9SlowBlockTransferNs);
     addr &= ~0x3;
     auto& nds = cpu->NDS;
 
@@ -816,7 +813,6 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     NDS.ARM7.ClearJitCache();
 
     bool thumb = cpu->CPSR & 0x20;
-
     u32 blockAddr = cpu->R[15] - (thumb ? 2 : 4);
 
     u32 localAddr = LocaliseCodeAddress(cpu->Num, blockAddr);
@@ -880,6 +876,65 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     bool hasLink = false;
 
     bool hasMemoryInstr = false;
+    bool hasLoadInstr = false;
+    bool hasStoreInstr = false;
+    u8 memRegionMask = 0;
+    u16 execALUCount = 0;
+    u16 execMulCount = 0;
+    u16 execSingleLoadCount = 0;
+    u16 execSingleStoreCount = 0;
+    u16 execBlockLoadCount = 0;
+    u16 execBlockStoreCount = 0;
+    u16 execStackLoadCount = 0;
+    u16 execStackStoreCount = 0;
+    u16 execBranchCondCount = 0;
+    u16 execBranchImmCount = 0;
+    u16 execBranchRegCount = 0;
+    u16 execSysCount = 0;
+    u16 execOtherCount = 0;
+    u16 execLiteralLoadCount = 0;
+    u16 execMemITCMCount = 0;
+    u16 execMemDTCMCount = 0;
+    u16 execMemMainCount = 0;
+    u16 execMemSharedCount = 0;
+    u16 execMemIOCount = 0;
+    u16 execMemVRAMCount = 0;
+    u16 execMemOtherCount = 0;
+
+    auto classifyMemRegionBit = [&](u32 dataAddr) -> u8
+    {
+        if (cpu->Num == 0)
+        {
+            ARMv5* cpuv5 = static_cast<ARMv5*>(cpu);
+            if (dataAddr < cpuv5->ITCMSize)
+                return 1 << 0;
+            if ((dataAddr & cpuv5->DTCMMask) == cpuv5->DTCMBase)
+                return 1 << 1;
+        }
+
+        switch (dataAddr >> 24)
+        {
+        case 0x02: return 1 << 2;
+        case 0x03: return 1 << 3;
+        case 0x04: return 1 << 4;
+        case 0x06: return 1 << 5;
+        default:   return 1 << 6;
+        }
+    };
+
+    auto noteMemRegion = [&](u8 regionBit)
+    {
+        switch (regionBit)
+        {
+        case 1 << 0: execMemITCMCount++; break;
+        case 1 << 1: execMemDTCMCount++; break;
+        case 1 << 2: execMemMainCount++; break;
+        case 1 << 3: execMemSharedCount++; break;
+        case 1 << 4: execMemIOCount++; break;
+        case 1 << 5: execMemVRAMCount++; break;
+        default:     execMemOtherCount++; break;
+        }
+    };
 
     do
     {
@@ -983,6 +1038,104 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         instrs[i].DataCycles = cpu->DataCycles;
         instrs[i].DataRegion = cpu->DataRegion;
+        const u16 kind = instrs[i].Info.Kind;
+        const bool isLiteralLoad = instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral;
+        const bool isMemLoad = instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadMem || isLiteralLoad;
+        const bool isMemStore = instrs[i].Info.SpecialKind == ARMInstrInfo::special_WriteMem;
+        const bool isBlockLoad = thumb
+            ? (kind == ARMInstrInfo::tk_POP || kind == ARMInstrInfo::tk_LDMIA)
+            : (kind == ARMInstrInfo::ak_LDM);
+        const bool isBlockStore = thumb
+            ? (kind == ARMInstrInfo::tk_PUSH || kind == ARMInstrInfo::tk_STMIA)
+            : (kind == ARMInstrInfo::ak_STM);
+        const bool isBranchCond = thumb && kind == ARMInstrInfo::tk_BCOND;
+        const bool isBranchImm = thumb
+            ? (kind == ARMInstrInfo::tk_B || kind == ARMInstrInfo::tk_BL_LONG)
+            : (kind == ARMInstrInfo::ak_B || kind == ARMInstrInfo::ak_BL || kind == ARMInstrInfo::ak_BLX_IMM);
+        const bool isBranchReg = thumb
+            ? (kind == ARMInstrInfo::tk_BX || kind == ARMInstrInfo::tk_BLX_REG)
+            : (kind == ARMInstrInfo::ak_BX || kind == ARMInstrInfo::ak_BLX_REG);
+        const bool isMul = thumb
+            ? (kind == ARMInstrInfo::tk_MUL_REG)
+            : (kind >= ARMInstrInfo::ak_MUL && kind <= ARMInstrInfo::ak_SMULxy);
+        const bool isSys = thumb
+            ? (kind == ARMInstrInfo::tk_SVC || kind == ARMInstrInfo::tk_UNK)
+            : (kind == ARMInstrInfo::ak_MSR_IMM || kind == ARMInstrInfo::ak_MSR_REG
+                || kind == ARMInstrInfo::ak_MRS || kind == ARMInstrInfo::ak_MCR
+                || kind == ARMInstrInfo::ak_MRC || kind == ARMInstrInfo::ak_SVC
+                || kind == ARMInstrInfo::ak_UNK);
+        const bool isALU = thumb
+            ? (kind < ARMInstrInfo::tk_LDR_PCREL || kind == ARMInstrInfo::tk_ADD_PCREL
+                || kind == ARMInstrInfo::tk_ADD_SPREL || kind == ARMInstrInfo::tk_ADD_SP
+                || kind == ARMInstrInfo::tk_ADD_HIREG || kind == ARMInstrInfo::tk_CMP_HIREG
+                || kind == ARMInstrInfo::tk_MOV_HIREG)
+            : (kind < ARMInstrInfo::ak_MUL
+                || (kind >= ARMInstrInfo::ak_CLZ && kind <= ARMInstrInfo::ak_QDSUB)
+                || kind == ARMInstrInfo::ak_Nop);
+        bool isStackLoad = false;
+        bool isStackStore = false;
+
+        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadMem
+            || instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral)
+            hasLoadInstr = true;
+        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_WriteMem)
+            hasStoreInstr = true;
+        if (isMemLoad || isMemStore)
+        {
+            u32 dataAddr = instrs[i].DataRegion;
+            u8 regionBit = classifyMemRegionBit(dataAddr);
+            memRegionMask |= regionBit;
+            if (!isLiteralLoad)
+                noteMemRegion(regionBit);
+        }
+
+        if (thumb)
+        {
+            if (kind == ARMInstrInfo::tk_LDR_SPREL || kind == ARMInstrInfo::tk_POP)
+                isStackLoad = true;
+            else if (kind == ARMInstrInfo::tk_STR_SPREL || kind == ARMInstrInfo::tk_PUSH)
+                isStackStore = true;
+        }
+        else if ((kind >= ARMInstrInfo::ak_STR_REG_LSL && kind <= ARMInstrInfo::ak_LDRSH_POST_IMM)
+            || kind == ARMInstrInfo::ak_LDM || kind == ARMInstrInfo::ak_STM)
+        {
+            const u32 baseReg = instrs[i].A_Reg(16);
+            if (baseReg == 13)
+            {
+                isStackLoad = isMemLoad;
+                isStackStore = isMemStore;
+            }
+        }
+
+        if (isBlockLoad)
+            execBlockLoadCount++;
+        else if (isBlockStore)
+            execBlockStoreCount++;
+        else if (isMemLoad)
+            execSingleLoadCount++;
+        else if (isMemStore)
+            execSingleStoreCount++;
+        else if (isBranchCond)
+            execBranchCondCount++;
+        else if (isBranchImm)
+            execBranchImmCount++;
+        else if (isBranchReg)
+            execBranchRegCount++;
+        else if (isMul)
+            execMulCount++;
+        else if (isSys)
+            execSysCount++;
+        else if (isALU)
+            execALUCount++;
+        else
+            execOtherCount++;
+
+        if (isStackLoad)
+            execStackLoadCount++;
+        if (isStackStore)
+            execStackStoreCount++;
+        if (isLiteralLoad)
+            execLiteralLoadCount++;
 
         u32 literalAddr;
         if (LiteralOptimizations
@@ -1188,9 +1341,81 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         block->StartAddr = blockAddr;
         block->StartAddrLocal = localAddr;
+        block->InstrCount = i;
         block->Exit = exitKind;
         block->ExitIsBranch = exitIsBranch;
         block->ExitIsCondBranch = exitIsCondBranch;
+        block->ExitBranchFamily = JitBlock::ExitBranchNone;
+        block->ExitBranchReg = 0xFF;
+        block->ExitBranchIsLink = 0;
+        block->ExecALUCount = execALUCount;
+        block->ExecMulCount = execMulCount;
+        block->ExecSingleLoadCount = execSingleLoadCount;
+        block->ExecSingleStoreCount = execSingleStoreCount;
+        block->ExecBlockLoadCount = execBlockLoadCount;
+        block->ExecBlockStoreCount = execBlockStoreCount;
+        block->ExecStackLoadCount = execStackLoadCount;
+        block->ExecStackStoreCount = execStackStoreCount;
+        block->ExecBranchCondCount = execBranchCondCount;
+        block->ExecBranchImmCount = execBranchImmCount;
+        block->ExecBranchRegCount = execBranchRegCount;
+        block->ExecSysCount = execSysCount;
+        block->ExecOtherCount = execOtherCount;
+        block->ExecLiteralLoadCount = execLiteralLoadCount;
+        block->ExecMemITCMCount = execMemITCMCount;
+        block->ExecMemDTCMCount = execMemDTCMCount;
+        block->ExecMemMainCount = execMemMainCount;
+        block->ExecMemSharedCount = execMemSharedCount;
+        block->ExecMemIOCount = execMemIOCount;
+        block->ExecMemVRAMCount = execMemVRAMCount;
+        block->ExecMemOtherCount = execMemOtherCount;
+        block->HasMemoryInstr = hasMemoryInstr;
+        block->IsThumb = thumb;
+        block->HasLoadInstr = hasLoadInstr;
+        block->HasStoreInstr = hasStoreInstr;
+        block->MemRegionMask = memRegionMask;
+        if (exitIsBranch)
+        {
+            const auto& exitInstr = instrs[i - 1];
+            if (thumb)
+            {
+                switch (exitInstr.Info.Kind)
+                {
+                case ARMInstrInfo::tk_BCOND:
+                    block->ExitBranchFamily = JitBlock::ExitBranchThumbCond;
+                    break;
+                case ARMInstrInfo::tk_B:
+                case ARMInstrInfo::tk_BL_LONG:
+                    block->ExitBranchFamily = JitBlock::ExitBranchThumbImm;
+                    break;
+                case ARMInstrInfo::tk_BX:
+                case ARMInstrInfo::tk_BLX_REG:
+                    block->ExitBranchFamily = JitBlock::ExitBranchThumbReg;
+                    break;
+                default:
+                    break;
+                }
+            }
+            else
+            {
+                switch (exitInstr.Info.Kind)
+                {
+                case ARMInstrInfo::ak_B:
+                case ARMInstrInfo::ak_BL:
+                case ARMInstrInfo::ak_BLX_IMM:
+                    block->ExitBranchFamily = JitBlock::ExitBranchARMImm;
+                    break;
+                case ARMInstrInfo::ak_BX:
+                case ARMInstrInfo::ak_BLX_REG:
+                    block->ExitBranchFamily = JitBlock::ExitBranchARMReg;
+                    block->ExitBranchReg = exitInstr.A_Reg(0);
+                    block->ExitBranchIsLink = exitInstr.Info.Kind == ARMInstrInfo::ak_BLX_REG;
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
 
         FloodFillSetFlags(instrs, i - 1, 0xF);
 

@@ -38,14 +38,54 @@ public:
         ExitHaltBoundary,
     };
 
+    enum ExitBranchKind : u8
+    {
+        ExitBranchNone = 0,
+        ExitBranchARMImm,
+        ExitBranchARMReg,
+        ExitBranchThumbCond,
+        ExitBranchThumbImm,
+        ExitBranchThumbReg,
+    };
+
     JitBlock(u32 num, u32 literalHash, u32 numAddresses, u32 numLiterals)
     {
         Num = num;
         NumAddresses = numAddresses;
         NumLiterals = numLiterals;
+        InstrCount = 0;
         Exit = ExitUnknown;
         ExitIsBranch = 0;
         ExitIsCondBranch = 0;
+        ExitBranchFamily = ExitBranchNone;
+        ExitBranchReg = 0xFF;
+        ExitBranchIsLink = 0;
+        ExecALUCount = 0;
+        ExecMulCount = 0;
+        ExecSingleLoadCount = 0;
+        ExecSingleStoreCount = 0;
+        ExecBlockLoadCount = 0;
+        ExecBlockStoreCount = 0;
+        ExecStackLoadCount = 0;
+        ExecStackStoreCount = 0;
+        ExecBranchCondCount = 0;
+        ExecBranchImmCount = 0;
+        ExecBranchRegCount = 0;
+        ExecSysCount = 0;
+        ExecOtherCount = 0;
+        ExecLiteralLoadCount = 0;
+        ExecMemITCMCount = 0;
+        ExecMemDTCMCount = 0;
+        ExecMemMainCount = 0;
+        ExecMemSharedCount = 0;
+        ExecMemIOCount = 0;
+        ExecMemVRAMCount = 0;
+        ExecMemOtherCount = 0;
+        HasMemoryInstr = 0;
+        IsThumb = 0;
+        HasLoadInstr = 0;
+        HasStoreInstr = 0;
+        MemRegionMask = 0;
         Data.SetLength(numAddresses * 2 + numLiterals);
     }
 
@@ -55,9 +95,39 @@ public:
     u8 Num;
     u16 NumAddresses;
     u16 NumLiterals;
+    u16 InstrCount;
     u8 Exit;
     u8 ExitIsBranch;
     u8 ExitIsCondBranch;
+    u8 ExitBranchFamily;
+    u8 ExitBranchReg;
+    u8 ExitBranchIsLink;
+    u16 ExecALUCount;
+    u16 ExecMulCount;
+    u16 ExecSingleLoadCount;
+    u16 ExecSingleStoreCount;
+    u16 ExecBlockLoadCount;
+    u16 ExecBlockStoreCount;
+    u16 ExecStackLoadCount;
+    u16 ExecStackStoreCount;
+    u16 ExecBranchCondCount;
+    u16 ExecBranchImmCount;
+    u16 ExecBranchRegCount;
+    u16 ExecSysCount;
+    u16 ExecOtherCount;
+    u16 ExecLiteralLoadCount;
+    u16 ExecMemITCMCount;
+    u16 ExecMemDTCMCount;
+    u16 ExecMemMainCount;
+    u16 ExecMemSharedCount;
+    u16 ExecMemIOCount;
+    u16 ExecMemVRAMCount;
+    u16 ExecMemOtherCount;
+    u8 HasMemoryInstr;
+    u8 IsThumb;
+    u8 HasLoadInstr;
+    u8 HasStoreInstr;
+    u8 MemRegionMask;
 
     JitBlockEntry EntryPoint;
 

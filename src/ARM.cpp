@@ -672,6 +672,51 @@ void ARMv5::Execute()
                 LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitDispatchNs);
                 ARM_Dispatch(this, block);
                 LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
+                if (auto it = NDS.JIT.JitBlocks9.find(instrAddr); it != NDS.JIT.JitBlocks9.end())
+                {
+                    const JitBlock* info = it->second;
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecInstrs, info->InstrCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecLiteralLoads, info->ExecLiteralLoadCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemITCM, info->ExecMemITCMCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemDTCM, info->ExecMemDTCMCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemMainRAM, info->ExecMemMainCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemSharedWRAM, info->ExecMemSharedCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemIO, info->ExecMemIOCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemVRAM, info->ExecMemVRAMCount);
+                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemOther, info->ExecMemOtherCount);
+
+                    if (info->IsThumb)
+                    {
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbALU, info->ExecALUCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbMul, info->ExecMulCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbSingleLoad, info->ExecSingleLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbSingleStore, info->ExecSingleStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBlockLoad, info->ExecBlockLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBlockStore, info->ExecBlockStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbStackLoad, info->ExecStackLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbStackStore, info->ExecStackStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBranchCond, info->ExecBranchCondCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBranchImm, info->ExecBranchImmCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBranchReg, info->ExecBranchRegCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbSys, info->ExecSysCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbOther, info->ExecOtherCount);
+                    }
+                    else
+                    {
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMALU, info->ExecALUCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMMul, info->ExecMulCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSingleLoad, info->ExecSingleLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSingleStore, info->ExecSingleStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBlockLoad, info->ExecBlockLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBlockStore, info->ExecBlockStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackLoad, info->ExecStackLoadCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackStore, info->ExecStackStoreCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBranchImm, info->ExecBranchImmCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBranchReg, info->ExecBranchRegCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSys, info->ExecSysCount);
+                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMOther, info->ExecOtherCount);
+                    }
+                }
                 if (StopExecution)
                 {
                     LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsStop);
@@ -695,6 +740,37 @@ void ARMv5::Execute()
                                 LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndBranch);
                                 if (it->second->ExitIsCondBranch)
                                     LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndCondBranch);
+
+                                switch (it->second->ExitBranchFamily)
+                                {
+                                case JitBlock::ExitBranchARMImm:
+                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMImm);
+                                    break;
+                                case JitBlock::ExitBranchARMReg:
+                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMReg);
+                                    if (CPSR & 0x20)
+                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegThumb);
+                                    else
+                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegARM);
+                                    if (it->second->ExitBranchReg == 14)
+                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegLR);
+                                    else
+                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegOther);
+                                    if (it->second->ExitBranchIsLink)
+                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegLink);
+                                    break;
+                                case JitBlock::ExitBranchThumbCond:
+                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndThumbCond);
+                                    break;
+                                case JitBlock::ExitBranchThumbImm:
+                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndThumbImm);
+                                    break;
+                                case JitBlock::ExitBranchThumbReg:
+                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndThumbReg);
+                                    break;
+                                default:
+                                    break;
+                                }
                             }
                             else
                             {
@@ -703,6 +779,32 @@ void ARMv5::Execute()
                             break;
                         case JitBlock::ExitMaxBlockSize:
                             LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxBlock);
+                            if (it->second->IsThumb)
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxThumb);
+                            else
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxARM);
+                            if (it->second->HasMemoryInstr)
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxWithMemory);
+                            else
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxNoMemory);
+                            if (it->second->HasLoadInstr)
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxWithLoad);
+                            if (it->second->HasStoreInstr)
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxWithStore);
+                            if (it->second->MemRegionMask & (1 << 0))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxITCM);
+                            if (it->second->MemRegionMask & (1 << 1))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxDTCM);
+                            if (it->second->MemRegionMask & (1 << 2))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxMainRAM);
+                            if (it->second->MemRegionMask & (1 << 3))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxSharedWRAM);
+                            if (it->second->MemRegionMask & (1 << 4))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxIO);
+                            if (it->second->MemRegionMask & (1 << 5))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxVRAM);
+                            if (it->second->MemRegionMask & (1 << 6))
+                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxOtherMem);
                             break;
                         case JitBlock::ExitIRQBoundary:
                             LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnIRQBoundary);
