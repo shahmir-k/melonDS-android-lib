@@ -499,7 +499,9 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         : NDS.JIT.Memory.ClassifyAddress7(CurInstr.DataRegion);
 
     bool compileFastPath = NDS.JIT.FastMemoryEnabled()
-        && store && !usermode && (CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget));
+        && !usermode
+        && (store || (Num == 0 && !store && rn == 13 && expectedTarget == ARMJIT_Memory::memregion_DTCM))
+        && (CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget));
 
     {
         s32 offset = decrement
