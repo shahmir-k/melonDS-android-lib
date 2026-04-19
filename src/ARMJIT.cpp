@@ -509,6 +509,24 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
             LITE_PROFILE_ADD(b17p);
     };
 
+    auto noteMainRAMSizeBucket = [&](std::atomic<uint64_t>& b1_2,
+                                     std::atomic<uint64_t>& b3_4,
+                                     std::atomic<uint64_t>& b5_8,
+                                     std::atomic<uint64_t>& b9_16,
+                                     std::atomic<uint64_t>& b17p)
+    {
+        if (num <= 2)
+            LITE_PROFILE_ADD(b1_2);
+        else if (num <= 4)
+            LITE_PROFILE_ADD(b3_4);
+        else if (num <= 8)
+            LITE_PROFILE_ADD(b5_8);
+        else if (num <= 16)
+            LITE_PROFILE_ADD(b9_16);
+        else
+            LITE_PROFILE_ADD(b17p);
+    };
+
     if constexpr (Write)
     {
         noteRegion(LiteProfile::gFrame.ARM9SlowBlockWriteDTCM,
@@ -577,6 +595,24 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
+#if LITEV_PROFILE
+            if constexpr (Write)
+            {
+                noteMainRAMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_1_2,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_3_4,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_5_8,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_9_16,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_17P);
+            }
+            else
+            {
+                noteMainRAMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_1_2,
+                    LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_3_4,
+                    LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_5_8,
+                    LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_9_16,
+                    LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_17P);
+            }
+#endif
             if (TryBlockTransferLinear<Write, 0, ARMJIT_Memory::memregion_MainRAM>(
                     nds.JIT, nds.MainRAM, nds.MainRAMMask, addr, data, num))
                 return;
