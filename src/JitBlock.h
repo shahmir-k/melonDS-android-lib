@@ -22,6 +22,10 @@
 #include "types.h"
 #include "TinyVector.h"
 
+#ifndef LITEV_PROFILE
+#define LITEV_PROFILE 0
+#endif
+
 namespace melonDS
 {
 typedef void (*JitBlockEntry)();
@@ -29,6 +33,7 @@ typedef void (*JitBlockEntry)();
 class JitBlock
 {
 public:
+#if LITEV_PROFILE
     enum ExitKind : u8
     {
         ExitUnknown = 0,
@@ -47,12 +52,14 @@ public:
         ExitBranchThumbImm,
         ExitBranchThumbReg,
     };
+#endif
 
     JitBlock(u32 num, u32 literalHash, u32 numAddresses, u32 numLiterals)
     {
         Num = num;
         NumAddresses = numAddresses;
         NumLiterals = numLiterals;
+#if LITEV_PROFILE
         InstrCount = 0;
         Exit = ExitUnknown;
         ExitIsBranch = 0;
@@ -88,6 +95,7 @@ public:
         HasLoadInstr = 0;
         HasStoreInstr = 0;
         MemRegionMask = 0;
+#endif
         Data.SetLength(numAddresses * 2 + numLiterals);
     }
 
@@ -97,6 +105,7 @@ public:
     u8 Num;
     u16 NumAddresses;
     u16 NumLiterals;
+#if LITEV_PROFILE
     u16 InstrCount;
     u8 Exit;
     u8 ExitIsBranch;
@@ -132,6 +141,7 @@ public:
     u8 HasLoadInstr;
     u8 HasStoreInstr;
     u8 MemRegionMask;
+#endif
 
     JitBlockEntry EntryPoint;
 

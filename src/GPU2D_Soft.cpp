@@ -145,8 +145,8 @@ __attribute((always_inline)) inline u32 SoftRenderer::ColorComposite(int i, u32 
 
 void SoftRenderer::DrawScanline(u32 line, Unit* unit)
 {
-    LiteProfile::ScopeTimer profileTimer(LiteProfile::gFrame.DrawScanlineNs);
-    LiteProfile::AddAtomic(LiteProfile::gFrame.DrawScanlineCalls);
+    LITE_PROFILE_SCOPE(profileTimer, LiteProfile::gFrame.DrawScanlineNs);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.DrawScanlineCalls);
     CurUnit = unit;
 
     bool rendererAccelerated = GPU.GPU3D.IsRendererAccelerated();
@@ -1106,19 +1106,19 @@ void SoftRenderer::DrawScanline_BGOBJ(u32 line)
 
     const bool lineCacheEligible = CanUseComposedLineCache(line);
     if (lineCacheEligible)
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ComposedEligibleLines);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ComposedEligibleLines);
     else
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ComposedIneligibleLines);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ComposedIneligibleLines);
     s32 lineCacheBGXRefInternal[2] = {CurUnit->BGXRefInternal[0], CurUnit->BGXRefInternal[1]};
     s32 lineCacheBGYRefInternal[2] = {CurUnit->BGYRefInternal[0], CurUnit->BGYRefInternal[1]};
 
     if (lineCacheEligible && TryReplayComposedLineCache(line))
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ComposedReplayHits);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ComposedReplayHits);
         return;
     }
     if (lineCacheEligible)
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ComposedReplayMisses);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ComposedReplayMisses);
 
     if (line < 192 && SpriteLineSkipped[CurUnit->Num][line])
     {
@@ -1423,11 +1423,11 @@ bool SoftRenderer::PrepareTextBGFrameCacheLine(u32 line, u32 bgnum, u16 bgcnt, T
 
     if (cache->ValidLines[line] != 0)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.TextBGLineCacheHits);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.TextBGLineCacheHits);
         return true;
     }
 
-    LiteProfile::AddAtomic(LiteProfile::gFrame.TextBGLineCacheMisses);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.TextBGLineCacheMisses);
     return false;
 }
 
@@ -2407,11 +2407,11 @@ bool SoftRenderer::PrepareSpriteLineBins()
 
     if (cacheMatches)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.SpriteBinHits);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.SpriteBinHits);
         return true;
     }
 
-    LiteProfile::AddAtomic(LiteProfile::gFrame.SpriteBinMisses);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.SpriteBinMisses);
 
     cache.OAMStamp = preparedSprites.OAMStamp;
     cache.DispCnt = dispKey;
@@ -2455,8 +2455,8 @@ bool SoftRenderer::PrepareSpriteLineBins()
 
 void SoftRenderer::DrawSprites(u32 line, Unit* unit)
 {
-    LiteProfile::ScopeTimer profileTimer(LiteProfile::gFrame.DrawSpritesNs);
-    LiteProfile::AddAtomic(LiteProfile::gFrame.DrawSpritesCalls);
+    LITE_PROFILE_SCOPE(profileTimer, LiteProfile::gFrame.DrawSpritesNs);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.DrawSpritesCalls);
     CurUnit = unit;
 
     if (line == 0)
@@ -2500,7 +2500,7 @@ void SoftRenderer::DrawSprites(u32 line, Unit* unit)
 
     if (line < 192 && !ForceSpriteDraw && ComposedLineCacheMatches(line, false))
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.SpriteLineSkips);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.SpriteLineSkips);
         SpriteLineSkipped[CurUnit->Num][line] = true;
         NumSprites[CurUnit->Num] = LineCache[CurUnit->Num][line].NumSprites;
         return;

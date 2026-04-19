@@ -936,7 +936,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
     glBindVertexArray(VertexArrayID);
 
     {
-        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DSceneOpaqueNs);
+        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DSceneOpaqueNs);
         for (int i = 0; i < numFinalPolys; )
         {
             const RendererPolygon* rp = &polygons[i];
@@ -957,8 +957,8 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
             glStencilMask(0xFF);
 
             const int drawn = RenderPolygonBatch(i);
-            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneOpaqueBatchCalls);
-            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneOpaqueBatchPolys, drawn);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneOpaqueBatchCalls);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.GPU3DSceneOpaqueBatchPolys, drawn);
             i += drawn;
         }
     }
@@ -1012,7 +1012,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
             glDisable(GL_BLEND);
 
             {
-                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DSceneClearWorkaroundNs);
+                LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DSceneClearWorkaroundNs);
                 for (int i = 0; i < numFinalPolys; )
                 {
                     const RendererPolygon* rp = &polygons[i];
@@ -1034,8 +1034,8 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                         glStencilMask(0x01);
 
                         const int drawn = RenderPolygonBatch(i);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearBatchCalls);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearBatchPolys, drawn);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearBatchCalls);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.GPU3DSceneClearBatchPolys, drawn);
                         i += drawn;
                     }
                     else if (rp->PolyData->Translucent)
@@ -1065,8 +1065,8 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                             glDepthMask(GL_TRUE);
 
                             RenderSinglePolygon(i);
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearSingleCalls);
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearNeedOpaqueSingles);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearSingleCalls);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearNeedOpaqueSingles);
                         }
 
                         UseRenderShader(flags | RenderFlag_Trans);
@@ -1095,13 +1095,13 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                             if (needopaque)
                             {
                                 i += RenderSinglePolygon(i);
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearSingleCalls);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearSingleCalls);
                             }
                             else
                             {
                                 const int drawn = RenderPolygonBatch(i);
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearBatchCalls);
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearBatchPolys, drawn);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearBatchCalls);
+                                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.GPU3DSceneClearBatchPolys, drawn);
                                 i += drawn;
                             }
                         }
@@ -1120,13 +1120,13 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                             if (needopaque)
                             {
                                 i += RenderSinglePolygon(i);
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearSingleCalls);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearSingleCalls);
                             }
                             else
                             {
                                 const int drawn = RenderPolygonBatch(i);
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearBatchCalls);
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneClearBatchPolys, drawn);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneClearBatchCalls);
+                                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.GPU3DSceneClearBatchPolys, drawn);
                                 i += drawn;
                             }
                         }
@@ -1143,7 +1143,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
         // pass 3: translucent pixels
 
         {
-            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DSceneTranslucentNs);
+            LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DSceneTranslucentNs);
             for (int i = 0; i < numFinalPolys; )
             {
                 const RendererPolygon* rp = &polygons[i];
@@ -1169,8 +1169,8 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                     glStencilOp(GL_KEEP, GL_REPLACE, GL_KEEP);
 
                     const int drawn = RenderPolygonBatch(i);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransBatchCalls);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransBatchPolys, drawn);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransBatchCalls);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.GPU3DSceneTransBatchPolys, drawn);
                     i += drawn;
                 }
                 else if (rp->PolyData->Translucent)
@@ -1200,8 +1200,8 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                         glDepthMask(GL_TRUE);
 
                         RenderSinglePolygon(i);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransNeedOpaqueSingles);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransNeedOpaqueSingles);
                     }
 
                     UseRenderShader(flags | RenderFlag_Trans);
@@ -1221,7 +1221,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                         glStencilMask(0x80);
 
                         RenderSinglePolygon(i);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
 
                         glEnable(GL_BLEND);
                         glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -1235,7 +1235,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                         else                    glDepthMask(GL_FALSE);
 
                         i += RenderSinglePolygon(i);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
                     }
                     else
                     {
@@ -1253,13 +1253,13 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
                         if (needopaque)
                         {
                             i += RenderSinglePolygon(i);
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransSingleCalls);
                         }
                         else
                         {
                             const int drawn = RenderPolygonBatch(i);
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransBatchCalls);
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.GPU3DSceneTransBatchPolys, drawn);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.GPU3DSceneTransBatchCalls);
+                            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.GPU3DSceneTransBatchPolys, drawn);
                             i += drawn;
                         }
                     }
@@ -1272,7 +1272,7 @@ void GLRenderer::RenderSceneChunk(const GPU3D& gpu3d, int y, int h)
 
     if (gpu3d.RenderDispCnt & 0x00A0) // fog/edge enabled
     {
-        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DScenePostNs);
+        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DScenePostNs);
         glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glColorMaski(1, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 
@@ -1351,7 +1351,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, MainFramebuffer);
 
     {
-        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderStateNs);
+        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRenderStateNs);
         ShaderConfig.uScreenSize[0] = ScreenW;
         ShaderConfig.uScreenSize[1] = ScreenH;
         ShaderConfig.uDispCnt = gpu.GPU3D.RenderDispCnt;
@@ -1412,7 +1412,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     glBindTexture(GL_TEXTURE_2D, TexMemID);
     if (textureDirty.Any())
     {
-        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderTextureNs);
+        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRenderTextureNs);
         gpu.MakeVRAMFlat_TextureCoherent(textureDirty);
         ForEachDirtyByteRange(textureDirty, VRAMDirtyGranularity,
             [&gpu](u32 byteStart, u32 byteEnd)
@@ -1426,7 +1426,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     glBindTexture(GL_TEXTURE_2D, TexPalMemID);
     if (texPalDirty.Any())
     {
-        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderTexPalNs);
+        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRenderTexPalNs);
         constexpr u32 texPalEntries = 1024 * 48;
         constexpr u32 texPalBytes = texPalEntries * sizeof(u16);
 
@@ -1479,7 +1479,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     // TODO: check whether 'clear polygon ID' affects translucent polyID
     // (for example when alpha is 1..30)
     {
-        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderClearNs);
+        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRenderClearNs);
         glUseProgram(ClearShaderPlain);
         glDepthFunc(GL_ALWAYS);
 
@@ -1511,7 +1511,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
     if (gpu.GPU3D.RenderNumPolygons)
     {
         {
-            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderGeometryNs);
+            LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRenderGeometryNs);
             const PreparedFrameData* prepared = ResolvePreparedFrame(gpu.GPU3D.RenderFrameToken);
             if (!prepared)
             {
@@ -1545,7 +1545,7 @@ void GLRenderer::RenderFrame(GPU& gpu)
         }
 
         {
-            LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRenderSceneNs);
+            LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRenderSceneNs);
             RenderSceneChunk(gpu.GPU3D, 0, 192);
         }
     }

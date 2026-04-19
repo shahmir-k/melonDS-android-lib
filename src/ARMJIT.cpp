@@ -63,38 +63,38 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     auto* cpu = static_cast<ARMv5*>(cpuBase);
     auto& nds = cpu->NDS;
 
-    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainAttempts);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainAttempts);
 
     if (cpu->StopExecution || cpu->Halted || cpu->IdleLoop)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissStop);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissStop);
         return nullptr;
     }
 
     if (cpu->Cycles >= kChainCycleBudget)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissBudget);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissBudget);
         return nullptr;
     }
 
     if (nds.ARM9Timestamp + cpu->Cycles >= nds.ARM9Target)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissTarget);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissTarget);
         return nullptr;
     }
 
     const u32 instrAddr = cpu->R[15] - ((cpu->CPSR & 0x20) ? 2 : 4);
     if (nds.ARM9LibHLE.TryHandle(*cpu, instrAddr))
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9LibHLEHits);
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissHLE);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9LibHLEHits);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissHLE);
         return nullptr;
     }
 
     if ((instrAddr < cpu->FastBlockLookupStart || instrAddr >= (cpu->FastBlockLookupStart + cpu->FastBlockLookupSize))
         && !nds.JIT.SetupExecutableRegion(0, instrAddr, cpu->FastBlockLookup, cpu->FastBlockLookupStart, cpu->FastBlockLookupSize))
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissSetup);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissSetup);
         return nullptr;
     }
 
@@ -102,13 +102,13 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
         instrAddr - cpu->FastBlockLookupStart, instrAddr);
     if (!block)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainMissLookup);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissLookup);
         return nullptr;
     }
 
     cpu->LastJitBlockAddr = instrAddr;
     cpu->LastJitBlockEntry = block;
-    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitChainHits);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
     return block;
 }
 
@@ -188,8 +188,8 @@ u32 ARMJIT::LocaliseCodeAddress(u32 num, u32 addr) const noexcept
 template <typename T, int ConsoleType>
 T SlowRead9(u32 addr, ARMv5* cpu)
 {
-    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadCalls);
-    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9SlowReadNs);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadCalls);
+    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowReadNs);
     u32 offset = addr & 0x3;
     addr &= ~(sizeof(T) - 1);
 
@@ -204,12 +204,12 @@ T SlowRead9(u32 addr, ARMv5* cpu)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadMainRAM);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadMainRAM);
             val = *(T*)&nds.MainRAM[addr & nds.MainRAMMask];
             break;
 
         case 0x03000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadSharedWRAM);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadSharedWRAM);
             if (nds.SWRAM_ARM9.Mem)
                 val = *(T*)&nds.SWRAM_ARM9.Mem[addr & nds.SWRAM_ARM9.Mask];
             else
@@ -217,7 +217,7 @@ T SlowRead9(u32 addr, ARMv5* cpu)
             break;
 
         case 0x06000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadVRAM);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadVRAM);
             if constexpr (std::is_same_v<T, u32>)
                 val = nds.ARM9Read32(addr);
             else if constexpr (std::is_same_v<T, u16>)
@@ -229,31 +229,31 @@ T SlowRead9(u32 addr, ARMv5* cpu)
         default:
             if ((addr & 0xFF000000) == 0x04000000)
             {
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIO);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIO);
                 switch (addr & 0xFFFFFFF0)
                 {
                 case 0x04000000:
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIODispStat);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODispStat);
                     break;
                 default:
                     if (addr >= 0x040000B0 && addr < 0x040000F0)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIODMA);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODMA);
                     else if (addr >= 0x04000100 && addr < 0x04000110)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOTimer);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOTimer);
                     else if (addr >= 0x04000130 && addr < 0x04000134)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOKey);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOKey);
                     else if (addr >= 0x04000180 && addr < 0x04000190)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOIPC);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOIPC);
                     else if (addr >= 0x040001A0 && addr < 0x040001B0)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOCart);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOCart);
                     else if ((addr >= 0x04000204 && addr < 0x04000218) || addr == 0x04000208)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOIRQ);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOIRQ);
                     else if (addr >= 0x04000240 && addr < 0x0400024C)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOVRAMCtl);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOVRAMCtl);
                     else if (addr >= 0x04000280 && addr < 0x040002C0)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIODivSqrt);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODivSqrt);
                     else
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadIOOther);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOOther);
                     break;
                 }
 
@@ -269,7 +269,7 @@ T SlowRead9(u32 addr, ARMv5* cpu)
                 }
             }
             else
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowReadOther);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadOther);
             if constexpr (std::is_same_v<T, u32>)
                 val = nds.ARM9Read32(addr);
             else if constexpr (std::is_same_v<T, u16>)
@@ -309,8 +309,8 @@ T SlowRead7(u32 addr)
 template <typename T, int ConsoleType>
 void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
 {
-    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteCalls);
-    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9SlowWriteNs);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteCalls);
+    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowWriteNs);
     addr &= ~(sizeof(T) - 1);
 
     auto& nds = cpu->NDS;
@@ -328,13 +328,13 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteMainRAM);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteMainRAM);
             nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_MainRAM>(addr);
             *(T*)&nds.MainRAM[addr & nds.MainRAMMask] = val;
             break;
 
         case 0x03000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteSharedWRAM);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteSharedWRAM);
             if (nds.SWRAM_ARM9.Mem)
             {
                 nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_SharedWRAM>(addr);
@@ -343,7 +343,7 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
             break;
 
         case 0x04000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteIO);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteIO);
             if constexpr (std::is_same_v<T, u32>)
             {
                 if (nds.ARM9FastIOWrite32(addr, val))
@@ -361,7 +361,7 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
             break;
 
         case 0x06000000:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteVRAM);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteVRAM);
             if constexpr (std::is_same_v<T, u32>)
                 nds.ARM9Write32(addr, val);
             else if constexpr (std::is_same_v<T, u16>)
@@ -371,7 +371,7 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
             break;
 
         default:
-            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowWriteOther);
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteOther);
             if constexpr (std::is_same_v<T, u32>)
             {
                 if ((addr & 0xFF000000) == 0x04000000 && nds.ARM9FastIOWrite32(addr, val))
@@ -407,15 +407,16 @@ void SlowWrite7(u32 addr, u32 val)
 template <bool Write, int ConsoleType>
 void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
-    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
     if constexpr (Write)
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
     else
-        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
-    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9SlowBlockTransferNs);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
+    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
     addr &= ~0x3;
     auto& nds = cpu->NDS;
 
+#if LITEV_PROFILE
     auto noteRegion = [&](std::atomic<uint64_t>& dtcm,
                           std::atomic<uint64_t>& main,
                           std::atomic<uint64_t>& shared,
@@ -424,27 +425,27 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
     {
         if (addr < cpu->ITCMSize)
         {
-            LiteProfile::AddAtomic(other);
+            LITE_PROFILE_ADD(other);
         }
         else if ((addr & cpu->DTCMMask) == cpu->DTCMBase)
         {
-            LiteProfile::AddAtomic(dtcm);
+            LITE_PROFILE_ADD(dtcm);
         }
         else
         {
             switch (addr & 0xFF000000)
             {
             case 0x02000000:
-                LiteProfile::AddAtomic(main);
+                LITE_PROFILE_ADD(main);
                 break;
             case 0x03000000:
-                LiteProfile::AddAtomic(shared);
+                LITE_PROFILE_ADD(shared);
                 break;
             case 0x04000000:
-                LiteProfile::AddAtomic(io);
+                LITE_PROFILE_ADD(io);
                 break;
             default:
-                LiteProfile::AddAtomic(other);
+                LITE_PROFILE_ADD(other);
                 break;
             }
         }
@@ -466,6 +467,7 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
             LiteProfile::gFrame.ARM9SlowBlockReadIO,
             LiteProfile::gFrame.ARM9SlowBlockReadOther);
     }
+#endif
 
     if (addr < cpu->ITCMSize)
     {
@@ -927,6 +929,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     bool hasLink = false;
 
     bool hasMemoryInstr = false;
+#if LITEV_PROFILE
     bool hasLoadInstr = false;
     bool hasStoreInstr = false;
     u8 memRegionMask = 0;
@@ -988,6 +991,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         default:     execMemOtherCount++; break;
         }
     };
+#endif
 
     do
     {
@@ -1091,6 +1095,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         instrs[i].DataCycles = cpu->DataCycles;
         instrs[i].DataRegion = cpu->DataRegion;
+#if LITEV_PROFILE
         const u16 kind = instrs[i].Info.Kind;
         const bool isLiteralLoad = instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral;
         const bool isMemLoad = instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadMem || isLiteralLoad;
@@ -1193,6 +1198,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             execStackBlockStoreCount++;
         if (isLiteralLoad)
             execLiteralLoadCount++;
+#endif
 
         u32 literalAddr;
         if (LiteralOptimizations
@@ -1315,6 +1321,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             FloodFillSetFlags(instrs, i - 2, !secondaryFlagReadCond ? instrs[i - 1].Info.ReadFlags : 0xF);
     } while(!instrs[i - 1].Info.EndBlock && i < MaxBlockSize && !cpu->Halted && (!cpu->IRQ || (cpu->CPSR & 0x80)));
 
+#if LITEV_PROFILE
     u8 exitKind = JitBlock::ExitEndBlock;
     bool exitIsBranch = instrs[i - 1].Info.Branches();
     bool exitIsCondBranch = thumb
@@ -1326,6 +1333,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         exitKind = JitBlock::ExitMaxBlockSize;
     else if (cpu->IRQ && !(cpu->CPSR & 0x80) && !instrs[i - 1].Info.EndBlock)
         exitKind = JitBlock::ExitIRQBoundary;
+#endif
 
     if (numLiterals)
     {
@@ -1398,6 +1406,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         block->StartAddr = blockAddr;
         block->StartAddrLocal = localAddr;
+#if LITEV_PROFILE
         block->InstrCount = i;
         block->Exit = exitKind;
         block->ExitIsBranch = exitIsBranch;
@@ -1475,6 +1484,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
                 }
             }
         }
+#endif
 
         FloodFillSetFlags(instrs, i - 1, 0xF);
 

@@ -4,6 +4,12 @@
 
 #pragma once
 
+#ifndef LITEV_PROFILE
+#define LITEV_PROFILE 0
+#endif
+
+#if LITEV_PROFILE
+
 #include "Platform.h"
 
 #include <atomic>
@@ -1212,3 +1218,21 @@ private:
     uint64_t Start;
 };
 }
+
+#define LITE_PROFILE_SCOPE(var_name, counter) melonDS::LiteProfile::ScopeTimer var_name(counter)
+#define LITE_PROFILE_ADD(counter) melonDS::LiteProfile::AddAtomic(counter)
+#define LITE_PROFILE_ADD_VALUE(counter, value) melonDS::LiteProfile::AddAtomic((counter), (value))
+#define LITE_PROFILE_RESET_FRAME() melonDS::LiteProfile::ResetFrame()
+#define LITE_PROFILE_END_FRAME() melonDS::LiteProfile::EndFrame()
+#define LITE_PROFILE_NOW_NS() melonDS::LiteProfile::NowNs()
+
+#else
+
+#define LITE_PROFILE_SCOPE(var_name, counter) do { } while (0)
+#define LITE_PROFILE_ADD(counter) do { } while (0)
+#define LITE_PROFILE_ADD_VALUE(counter, value) do { } while (0)
+#define LITE_PROFILE_RESET_FRAME() do { } while (0)
+#define LITE_PROFILE_END_FRAME() do { } while (0)
+#define LITE_PROFILE_NOW_NS() 0ULL
+
+#endif

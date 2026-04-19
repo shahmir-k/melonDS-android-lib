@@ -76,6 +76,7 @@ static void LogDMAModeMaskMiss(u32 cpu, u32 mode)
         Log(LogLevel::Warn, "DMA mode mask miss on ARM%u mode %02X; falling back to full scan\n", cpu ? 7u : 9u, mode);
 }
 
+#if LITEV_PROFILE
 static void ProfileRunSystemEvent(u32 eventID, uint64_t elapsedNs)
 {
     using namespace LiteProfile;
@@ -132,6 +133,7 @@ static void ProfileRunSystemEvent(u32 eventID, uint64_t elapsedNs)
         break;
     }
 }
+#endif
 
 #ifdef LITEV_ARM7_THREAD
 // Per-thread current CPU index (0=ARM9, 1=ARM7).
@@ -983,17 +985,21 @@ void NDS::RunSystem(u64 timestamp)
 
     if (timestamp < minEvent)
     {
-        LiteProfile::AddAtomic(LiteProfile::gFrame.RunSystemFastSkips);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.RunSystemFastSkips);
         return;
     }
 
     if (LCDScheduled && LCDTimestamp <= SysTimestamp)
     {
         LCDScheduled = false;
-        const uint64_t eventStart = LiteProfile::NowNs();
         EventFunc func = SchedList[Event_LCD].Funcs[LCDFuncID];
+#if LITEV_PROFILE
+        const uint64_t eventStart = LITE_PROFILE_NOW_NS();
         func(SchedList[Event_LCD].That, LCDParam);
-        ProfileRunSystemEvent(Event_LCD, LiteProfile::NowNs() - eventStart);
+        ProfileRunSystemEvent(Event_LCD, LITE_PROFILE_NOW_NS() - eventStart);
+#else
+        func(SchedList[Event_LCD].That, LCDParam);
+#endif
     }
 
     u32 mask = SchedListMask;
@@ -1008,9 +1014,13 @@ void NDS::RunSystem(u64 timestamp)
                 __atomic_fetch_and(&SchedListMask, ~(1u<<i), __ATOMIC_ACQ_REL);
 
                 EventFunc func = evt.Funcs[evt.FuncID];
-                const uint64_t eventStart = LiteProfile::NowNs();
+#if LITEV_PROFILE
+                const uint64_t eventStart = LITE_PROFILE_NOW_NS();
                 func(evt.That, evt.Param);
-                ProfileRunSystemEvent(i, LiteProfile::NowNs() - eventStart);
+                ProfileRunSystemEvent(i, LITE_PROFILE_NOW_NS() - eventStart);
+#else
+                func(evt.That, evt.Param);
+#endif
             }
         }
 
@@ -1131,7 +1141,7 @@ void NDS::ARM7ThreadFunc()
 
             if (CPUStop & CPUStop_DMA7)
             {
-                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
+                LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM7ExecNs);
                 DMAs[4].Run();
                 DMAs[5].Run();
                 DMAs[6].Run();
@@ -1144,7 +1154,7 @@ void NDS::ARM7ThreadFunc()
             }
             else
             {
-                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
+                LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM7ExecNs);
                 switch (arm7CPUMode)
                 {
 #ifdef JIT_ENABLED
@@ -1182,7 +1192,7 @@ u32 NDS::RunFrame()
 #endif
 
     FrameStartTimestamp = SysTimestamp;
-    LiteProfile::ResetFrame();
+    LITE_PROFILE_RESET_FRAME();
 
     GPU.TotalScanlines = 0;
 
@@ -1235,11 +1245,11 @@ u32 NDS::RunFrame()
             while (Running && GPU.TotalScanlines==0)
             {
                 u64 target = NextTarget();
-                LiteProfile::AddAtomic(LiteProfile::gFrame.SchedulerIterations);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.SchedulerIterations);
                 if (target == SysTimestamp + kMaxIterationCycles)
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.SchedulerCappedIterations);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.SchedulerCappedIterations);
                 else
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.SchedulerEventIterations);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.SchedulerEventIterations);
                 ARM9Target = target << ARM9ClockShift;
                 CurCPU = 0;
 #ifdef LITEV_ARM7_THREAD
@@ -1249,14 +1259,14 @@ u32 NDS::RunFrame()
                 if (CPUStop & CPUStop_GXStall)
                 {
                     // GXFIFO stall
-                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9ExecNs);
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9ExecNs);
                     s32 cycles = GPU.GPU3D.CyclesToRunFor();
 
                     ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
                 }
                 else if (CPUStop & CPUStop_DMA9)
                 {
-                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9ExecNs);
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9ExecNs);
                     DMAs[0].Run();
                     if (!(CPUStop & CPUStop_GXStall)) DMAs[1].Run();
                     if (!(CPUStop & CPUStop_GXStall)) DMAs[2].Run();
@@ -1269,13 +1279,13 @@ u32 NDS::RunFrame()
                 }
                 else
                 {
-                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9ExecNs);
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9ExecNs);
                     ARM9.Execute<cpuMode>();
                 }
 
                 if (GPU.GPU3D.HasPendingWork())
                 {
-                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.GPU3DRunNs);
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.GPU3DRunNs);
                     GPU.GPU3D.Run();
                 }
 
@@ -1291,12 +1301,12 @@ u32 NDS::RunFrame()
 
                 // Wait for ARM7 to finish before processing scheduled events.
                 {
-                    const uint64_t waitStart = LiteProfile::NowNs();
+                    const uint64_t waitStart = LITE_PROFILE_NOW_NS();
                     std::unique_lock<std::mutex> lock(arm7Mutex);
                     arm7Done.wait(lock, [this] {
                         return arm7WorkDone.load(std::memory_order_relaxed);
                     });
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM7WaitNs, LiteProfile::NowNs() - waitStart);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM7WaitNs, LITE_PROFILE_NOW_NS() - waitStart);
                 }
 #else
                 CurCPU = 1;
@@ -1307,7 +1317,7 @@ u32 NDS::RunFrame()
 
                     if (CPUStop & CPUStop_DMA7)
                     {
-                        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
+                        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM7ExecNs);
                         DMAs[4].Run();
                         DMAs[5].Run();
                         DMAs[6].Run();
@@ -1320,7 +1330,7 @@ u32 NDS::RunFrame()
                     }
                     else
                     {
-                        LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM7ExecNs);
+                        LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM7ExecNs);
                         ARM7.Execute<cpuMode>();
                     }
 
@@ -1328,7 +1338,7 @@ u32 NDS::RunFrame()
 #endif
 
                 {
-                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.RunSystemNs);
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.RunSystemNs);
                     RunSystem(target);
                 }
 
@@ -1361,7 +1371,7 @@ u32 NDS::RunFrame()
     if (LagFrameFlag)
         NumLagFrames++;
 
-    LiteProfile::EndFrame();
+    LITE_PROFILE_END_FRAME();
 
     if (Running)
         return GPU.TotalScanlines;

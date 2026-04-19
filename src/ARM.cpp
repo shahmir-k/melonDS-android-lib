@@ -628,7 +628,7 @@ void ARMv5::Execute()
 
             if (NDS.ARM9LibHLE.TryHandle(*this, instrAddr))
             {
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9LibHLEHits);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9LibHLEHits);
                 NDS.ARM9Timestamp += Cycles;
                 Cycles = 0;
                 continue;
@@ -646,129 +646,132 @@ void ARMv5::Execute()
             if (LastJitBlockAddr == instrAddr)
             {
                 block = LastJitBlockEntry;
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitLastBlockHits);
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitBlockCacheHits);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitLastBlockHits);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitBlockCacheHits);
             }
             else
             {
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitLookupCalls);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitLookupCalls);
                 {
-                    LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitLookupNs);
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitLookupNs);
                     block = NDS.JIT.LookUpBlock(0, FastBlockLookup,
                         instrAddr - FastBlockLookupStart, instrAddr);
                 }
                 if (block)
                 {
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitBlockCacheHits);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitBlockCacheHits);
                     LastJitBlockAddr = instrAddr;
                     LastJitBlockEntry = block;
                 }
                 else
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitBlockCacheMisses);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitBlockCacheMisses);
             }
             if (block)
             {
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitDispatchCalls);
-                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitDispatchNs);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
+                LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitDispatchNs);
                 ARM_Dispatch(this, block);
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
+#if LITEV_PROFILE
                 if (auto it = NDS.JIT.JitBlocks9.find(instrAddr); it != NDS.JIT.JitBlocks9.end())
                 {
                     const JitBlock* info = it->second;
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecInstrs, info->InstrCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecLiteralLoads, info->ExecLiteralLoadCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemITCM, info->ExecMemITCMCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemDTCM, info->ExecMemDTCMCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemMainRAM, info->ExecMemMainCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemSharedWRAM, info->ExecMemSharedCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemIO, info->ExecMemIOCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemVRAM, info->ExecMemVRAMCount);
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecMemOther, info->ExecMemOtherCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecInstrs, info->InstrCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecLiteralLoads, info->ExecLiteralLoadCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemITCM, info->ExecMemITCMCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemDTCM, info->ExecMemDTCMCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemMainRAM, info->ExecMemMainCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemSharedWRAM, info->ExecMemSharedCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemIO, info->ExecMemIOCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemVRAM, info->ExecMemVRAMCount);
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemOther, info->ExecMemOtherCount);
 
                     if (info->IsThumb)
                     {
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbALU, info->ExecALUCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbMul, info->ExecMulCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbSingleLoad, info->ExecSingleLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbSingleStore, info->ExecSingleStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBlockLoad, info->ExecBlockLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBlockStore, info->ExecBlockStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbStackLoad, info->ExecStackLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbStackStore, info->ExecStackStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBranchCond, info->ExecBranchCondCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBranchImm, info->ExecBranchImmCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbBranchReg, info->ExecBranchRegCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbSys, info->ExecSysCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecThumbOther, info->ExecOtherCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbALU, info->ExecALUCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbMul, info->ExecMulCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbSingleLoad, info->ExecSingleLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbSingleStore, info->ExecSingleStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbBlockLoad, info->ExecBlockLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbBlockStore, info->ExecBlockStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbStackLoad, info->ExecStackLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbStackStore, info->ExecStackStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbBranchCond, info->ExecBranchCondCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbBranchImm, info->ExecBranchImmCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbBranchReg, info->ExecBranchRegCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbSys, info->ExecSysCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecThumbOther, info->ExecOtherCount);
                     }
                     else
                     {
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMALU, info->ExecALUCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMMul, info->ExecMulCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSingleLoad, info->ExecSingleLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSingleStore, info->ExecSingleStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBlockLoad, info->ExecBlockLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBlockStore, info->ExecBlockStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackBlockLoad, info->ExecStackBlockLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackBlockStore, info->ExecStackBlockStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackLoad, info->ExecStackLoadCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMStackStore, info->ExecStackStoreCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBranchImm, info->ExecBranchImmCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMBranchReg, info->ExecBranchRegCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMSys, info->ExecSysCount);
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9ExecARMOther, info->ExecOtherCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMALU, info->ExecALUCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMMul, info->ExecMulCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMSingleLoad, info->ExecSingleLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMSingleStore, info->ExecSingleStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMBlockLoad, info->ExecBlockLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMBlockStore, info->ExecBlockStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMStackBlockLoad, info->ExecStackBlockLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMStackBlockStore, info->ExecStackBlockStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMStackLoad, info->ExecStackLoadCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMStackStore, info->ExecStackStoreCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMBranchImm, info->ExecBranchImmCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMBranchReg, info->ExecBranchRegCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMSys, info->ExecSysCount);
+                        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecARMOther, info->ExecOtherCount);
                     }
                 }
+#endif
                 if (StopExecution)
                 {
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsStop);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnsStop);
                     if (IdleLoop)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsIdle);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnsIdle);
                     if (Halted)
-                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsHalt);
+                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnsHalt);
                 }
                 else
                 {
-                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnsNormal);
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnsNormal);
+#if LITEV_PROFILE
                     auto it = NDS.JIT.JitBlocks9.find(instrAddr);
                     if (it != NDS.JIT.JitBlocks9.end())
                     {
                         switch (it->second->Exit)
                         {
                         case JitBlock::ExitEndBlock:
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndBlock);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndBlock);
                             if (it->second->ExitIsBranch)
                             {
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndBranch);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndBranch);
                                 if (it->second->ExitIsCondBranch)
-                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndCondBranch);
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndCondBranch);
 
                                 switch (it->second->ExitBranchFamily)
                                 {
                                 case JitBlock::ExitBranchARMImm:
-                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMImm);
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMImm);
                                     break;
                                 case JitBlock::ExitBranchARMReg:
-                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMReg);
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMReg);
                                     if (CPSR & 0x20)
-                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegThumb);
+                                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMRegThumb);
                                     else
-                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegARM);
+                                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMRegARM);
                                     if (it->second->ExitBranchReg == 14)
-                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegLR);
+                                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMRegLR);
                                     else
-                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegOther);
+                                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMRegOther);
                                     if (it->second->ExitBranchIsLink)
-                                        LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndARMRegLink);
+                                        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMRegLink);
                                     break;
                                 case JitBlock::ExitBranchThumbCond:
-                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndThumbCond);
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbCond);
                                     break;
                                 case JitBlock::ExitBranchThumbImm:
-                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndThumbImm);
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbImm);
                                     break;
                                 case JitBlock::ExitBranchThumbReg:
-                                    LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndThumbReg);
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbReg);
                                     break;
                                 default:
                                     break;
@@ -776,54 +779,55 @@ void ARMv5::Execute()
                             }
                             else
                             {
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnEndOther);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndOther);
                             }
                             break;
                         case JitBlock::ExitMaxBlockSize:
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxBlock);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxBlock);
                             if (it->second->IsThumb)
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxThumb);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxThumb);
                             else
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxARM);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxARM);
                             if (it->second->HasMemoryInstr)
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxWithMemory);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxWithMemory);
                             else
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxNoMemory);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxNoMemory);
                             if (it->second->HasLoadInstr)
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxWithLoad);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxWithLoad);
                             if (it->second->HasStoreInstr)
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxWithStore);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxWithStore);
                             if (it->second->MemRegionMask & (1 << 0))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxITCM);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxITCM);
                             if (it->second->MemRegionMask & (1 << 1))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxDTCM);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxDTCM);
                             if (it->second->MemRegionMask & (1 << 2))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxMainRAM);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxMainRAM);
                             if (it->second->MemRegionMask & (1 << 3))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxSharedWRAM);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxSharedWRAM);
                             if (it->second->MemRegionMask & (1 << 4))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxIO);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxIO);
                             if (it->second->MemRegionMask & (1 << 5))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxVRAM);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxVRAM);
                             if (it->second->MemRegionMask & (1 << 6))
-                                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnMaxOtherMem);
+                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnMaxOtherMem);
                             break;
                         case JitBlock::ExitIRQBoundary:
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnIRQBoundary);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnIRQBoundary);
                             break;
                         case JitBlock::ExitHaltBoundary:
-                            LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitReturnHaltBoundary);
+                            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnHaltBoundary);
                             break;
                         default:
                             break;
                         }
                     }
+#endif
                 }
             }
             else
             {
-                LiteProfile::AddAtomic(LiteProfile::gFrame.ARM9JitCompileCalls);
-                LiteProfile::ScopeTimer timer(LiteProfile::gFrame.ARM9JitCompileNs);
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitCompileCalls);
+                LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitCompileNs);
                 NDS.JIT.CompileBlock(this);
             }
 
