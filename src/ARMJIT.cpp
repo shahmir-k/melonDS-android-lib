@@ -564,6 +564,7 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         if (bytes <= 0x4000 - offset)
         {
 #if LITEV_PROFILE
+            std::atomic<uint64_t>* dtcmBucketNs = nullptr;
             if constexpr (Write)
             {
                 noteDTCMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_1_2,
@@ -571,6 +572,16 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
                     LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_5_8,
                     LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_9_16,
                     LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_17P);
+                if (num <= 2)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_1_2_Ns;
+                else if (num <= 4)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_3_4_Ns;
+                else if (num <= 8)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_5_8_Ns;
+                else if (num <= 16)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_9_16_Ns;
+                else
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_17P_Ns;
             }
             else
             {
@@ -579,7 +590,18 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
                     LiteProfile::gFrame.ARM9SlowBlockReadDTCM_5_8,
                     LiteProfile::gFrame.ARM9SlowBlockReadDTCM_9_16,
                     LiteProfile::gFrame.ARM9SlowBlockReadDTCM_17P);
+                if (num <= 2)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockReadDTCM_1_2_Ns;
+                else if (num <= 4)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockReadDTCM_3_4_Ns;
+                else if (num <= 8)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockReadDTCM_5_8_Ns;
+                else if (num <= 16)
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockReadDTCM_9_16_Ns;
+                else
+                    dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockReadDTCM_17P_Ns;
             }
+            const uint64_t bucketStart = LITE_PROFILE_NOW_NS();
 #endif
             if (num <= 2)
                 CopyBlockWordsTiny2<Write>(cpu->DTCM, offset, data, num);
@@ -587,6 +609,10 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
                 CopyBlockWordsTiny4<Write>(cpu->DTCM, offset, data, num);
             else
                 CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
+#if LITEV_PROFILE
+            if (dtcmBucketNs)
+                LITE_PROFILE_ADD_VALUE(*dtcmBucketNs, LITE_PROFILE_NOW_NS() - bucketStart);
+#endif
             return;
         }
     }
