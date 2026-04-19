@@ -154,6 +154,24 @@ __attribute__((always_inline)) inline void CopyBlockWords(u8* mem, u32 addr, u64
     }
 }
 
+template <bool Write>
+__attribute__((always_inline)) inline void CopyBlockWordsTiny2(u8* mem, u32 addr, u64* data, u32 num)
+{
+    u32* words = reinterpret_cast<u32*>(&mem[addr]);
+    if constexpr (Write)
+    {
+        words[0] = static_cast<u32>(data[0]);
+        if (num == 2)
+            words[1] = static_cast<u32>(data[1]);
+    }
+    else
+    {
+        data[0] = words[0];
+        if (num == 2)
+            data[1] = words[1];
+    }
+}
+
 template <bool Write, u32 num, int region>
 __attribute__((always_inline)) inline bool TryBlockTransferLinear(
     ARMJIT& jit,
@@ -523,7 +541,10 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
                     LiteProfile::gFrame.ARM9SlowBlockReadDTCM_17P);
             }
 #endif
-            CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
+            if (num <= 2)
+                CopyBlockWordsTiny2<Write>(cpu->DTCM, offset, data, num);
+            else
+                CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
             return;
         }
     }
