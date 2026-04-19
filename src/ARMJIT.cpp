@@ -451,6 +451,24 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         }
     };
 
+    auto noteDTCMSizeBucket = [&](std::atomic<uint64_t>& b1_2,
+                                  std::atomic<uint64_t>& b3_4,
+                                  std::atomic<uint64_t>& b5_8,
+                                  std::atomic<uint64_t>& b9_16,
+                                  std::atomic<uint64_t>& b17p)
+    {
+        if (num <= 2)
+            LITE_PROFILE_ADD(b1_2);
+        else if (num <= 4)
+            LITE_PROFILE_ADD(b3_4);
+        else if (num <= 8)
+            LITE_PROFILE_ADD(b5_8);
+        else if (num <= 16)
+            LITE_PROFILE_ADD(b9_16);
+        else
+            LITE_PROFILE_ADD(b17p);
+    };
+
     if constexpr (Write)
     {
         noteRegion(LiteProfile::gFrame.ARM9SlowBlockWriteDTCM,
@@ -487,6 +505,24 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         u32 bytes = num * sizeof(u32);
         if (bytes <= 0x4000 - offset)
         {
+#if LITEV_PROFILE
+            if constexpr (Write)
+            {
+                noteDTCMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_1_2,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_3_4,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_5_8,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_9_16,
+                    LiteProfile::gFrame.ARM9SlowBlockWriteDTCM_17P);
+            }
+            else
+            {
+                noteDTCMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockReadDTCM_1_2,
+                    LiteProfile::gFrame.ARM9SlowBlockReadDTCM_3_4,
+                    LiteProfile::gFrame.ARM9SlowBlockReadDTCM_5_8,
+                    LiteProfile::gFrame.ARM9SlowBlockReadDTCM_9_16,
+                    LiteProfile::gFrame.ARM9SlowBlockReadDTCM_17P);
+            }
+#endif
             CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
             return;
         }

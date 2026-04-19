@@ -131,11 +131,21 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockReadSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowBlockReadIO{0};
     std::atomic<uint64_t> ARM9SlowBlockReadOther{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadDTCM_1_2{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadDTCM_3_4{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadDTCM_5_8{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadDTCM_9_16{0};
+    std::atomic<uint64_t> ARM9SlowBlockReadDTCM_17P{0};
     std::atomic<uint64_t> ARM9SlowBlockWriteDTCM{0};
     std::atomic<uint64_t> ARM9SlowBlockWriteMainRAM{0};
     std::atomic<uint64_t> ARM9SlowBlockWriteSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowBlockWriteIO{0};
     std::atomic<uint64_t> ARM9SlowBlockWriteOther{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteDTCM_1_2{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteDTCM_3_4{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteDTCM_5_8{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteDTCM_9_16{0};
+    std::atomic<uint64_t> ARM9SlowBlockWriteDTCM_17P{0};
     std::atomic<uint64_t> ARM9SlowReadMainRAM{0};
     std::atomic<uint64_t> ARM9SlowReadSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowReadIO{0};
@@ -360,11 +370,21 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockReadSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockReadIO.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockReadOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadDTCM_1_2.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadDTCM_3_4.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadDTCM_5_8.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadDTCM_9_16.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockReadDTCM_17P.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockWriteDTCM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockWriteMainRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockWriteSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockWriteIO.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockWriteOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteDTCM_1_2.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteDTCM_3_4.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteDTCM_5_8.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteDTCM_9_16.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockWriteDTCM_17P.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
@@ -572,11 +592,21 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockReadSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockReadIO.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockReadOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadDTCM_1_2.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadDTCM_3_4.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadDTCM_5_8.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadDTCM_9_16.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockReadDTCM_17P.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockWriteDTCM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockWriteMainRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockWriteSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockWriteIO.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockWriteOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteDTCM_1_2.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteDTCM_3_4.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteDTCM_5_8.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteDTCM_9_16.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockWriteDTCM_17P.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadMainRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowReadIO.store(0, std::memory_order_relaxed);
@@ -824,11 +854,21 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockReadSharedWRAM, gFrame.ARM9SlowBlockReadSharedWRAM);
     MergeCounter(gWindow.ARM9SlowBlockReadIO, gFrame.ARM9SlowBlockReadIO);
     MergeCounter(gWindow.ARM9SlowBlockReadOther, gFrame.ARM9SlowBlockReadOther);
+    MergeCounter(gWindow.ARM9SlowBlockReadDTCM_1_2, gFrame.ARM9SlowBlockReadDTCM_1_2);
+    MergeCounter(gWindow.ARM9SlowBlockReadDTCM_3_4, gFrame.ARM9SlowBlockReadDTCM_3_4);
+    MergeCounter(gWindow.ARM9SlowBlockReadDTCM_5_8, gFrame.ARM9SlowBlockReadDTCM_5_8);
+    MergeCounter(gWindow.ARM9SlowBlockReadDTCM_9_16, gFrame.ARM9SlowBlockReadDTCM_9_16);
+    MergeCounter(gWindow.ARM9SlowBlockReadDTCM_17P, gFrame.ARM9SlowBlockReadDTCM_17P);
     MergeCounter(gWindow.ARM9SlowBlockWriteDTCM, gFrame.ARM9SlowBlockWriteDTCM);
     MergeCounter(gWindow.ARM9SlowBlockWriteMainRAM, gFrame.ARM9SlowBlockWriteMainRAM);
     MergeCounter(gWindow.ARM9SlowBlockWriteSharedWRAM, gFrame.ARM9SlowBlockWriteSharedWRAM);
     MergeCounter(gWindow.ARM9SlowBlockWriteIO, gFrame.ARM9SlowBlockWriteIO);
     MergeCounter(gWindow.ARM9SlowBlockWriteOther, gFrame.ARM9SlowBlockWriteOther);
+    MergeCounter(gWindow.ARM9SlowBlockWriteDTCM_1_2, gFrame.ARM9SlowBlockWriteDTCM_1_2);
+    MergeCounter(gWindow.ARM9SlowBlockWriteDTCM_3_4, gFrame.ARM9SlowBlockWriteDTCM_3_4);
+    MergeCounter(gWindow.ARM9SlowBlockWriteDTCM_5_8, gFrame.ARM9SlowBlockWriteDTCM_5_8);
+    MergeCounter(gWindow.ARM9SlowBlockWriteDTCM_9_16, gFrame.ARM9SlowBlockWriteDTCM_9_16);
+    MergeCounter(gWindow.ARM9SlowBlockWriteDTCM_17P, gFrame.ARM9SlowBlockWriteDTCM_17P);
     MergeCounter(gWindow.ARM9SlowReadMainRAM, gFrame.ARM9SlowReadMainRAM);
     MergeCounter(gWindow.ARM9SlowReadSharedWRAM, gFrame.ARM9SlowReadSharedWRAM);
     MergeCounter(gWindow.ARM9SlowReadIO, gFrame.ARM9SlowReadIO);
@@ -1017,7 +1057,7 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9ExecLiteralLoads));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] arm9_mix_mem itcm=%.1f dtcm=%.1f main=%.1f shared=%.1f io=%.1f vram=%.1f other=%.1f slowblock_r=%.1f slowblock_w=%.1f slowblock_r_dtcm=%.1f slowblock_r_main=%.1f slowblock_r_shared=%.1f slowblock_r_io=%.1f slowblock_r_other=%.1f slowblock_w_dtcm=%.1f slowblock_w_main=%.1f slowblock_w_shared=%.1f slowblock_w_io=%.1f slowblock_w_other=%.1f",
+        "[LITEV_PROFILE] arm9_mix_mem itcm=%.1f dtcm=%.1f main=%.1f shared=%.1f io=%.1f vram=%.1f other=%.1f slowblock_r=%.1f slowblock_w=%.1f slowblock_r_dtcm=%.1f slowblock_r_main=%.1f slowblock_r_shared=%.1f slowblock_r_io=%.1f slowblock_r_other=%.1f slowblock_w_dtcm=%.1f slowblock_w_main=%.1f slowblock_w_shared=%.1f slowblock_w_io=%.1f slowblock_w_other=%.1f dtcm_r_1_2=%.1f dtcm_r_3_4=%.1f dtcm_r_5_8=%.1f dtcm_r_9_16=%.1f dtcm_r_17p=%.1f dtcm_w_1_2=%.1f dtcm_w_3_4=%.1f dtcm_w_5_8=%.1f dtcm_w_9_16=%.1f dtcm_w_17p=%.1f",
         CountPerFrame(gWindow.ARM9ExecMemITCM),
         CountPerFrame(gWindow.ARM9ExecMemDTCM),
         CountPerFrame(gWindow.ARM9ExecMemMainRAM),
@@ -1036,7 +1076,17 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockWriteMainRAM),
         CountPerFrame(gWindow.ARM9SlowBlockWriteSharedWRAM),
         CountPerFrame(gWindow.ARM9SlowBlockWriteIO),
-        CountPerFrame(gWindow.ARM9SlowBlockWriteOther));
+        CountPerFrame(gWindow.ARM9SlowBlockWriteOther),
+        CountPerFrame(gWindow.ARM9SlowBlockReadDTCM_1_2),
+        CountPerFrame(gWindow.ARM9SlowBlockReadDTCM_3_4),
+        CountPerFrame(gWindow.ARM9SlowBlockReadDTCM_5_8),
+        CountPerFrame(gWindow.ARM9SlowBlockReadDTCM_9_16),
+        CountPerFrame(gWindow.ARM9SlowBlockReadDTCM_17P),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteDTCM_1_2),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteDTCM_3_4),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteDTCM_5_8),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteDTCM_9_16),
+        CountPerFrame(gWindow.ARM9SlowBlockWriteDTCM_17P));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] arm9_chain miss_stop=%.1f miss_budget=%.1f miss_target=%.1f miss_hle=%.1f miss_setup=%.1f miss_lookup=%.1f",
