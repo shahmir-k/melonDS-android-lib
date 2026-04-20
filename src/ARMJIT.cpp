@@ -688,6 +688,29 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 #endif
 }
 
+template <bool Write, int ConsoleType, int Tag>
+void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
+{
+#if LITEV_PROFILE
+    switch (Tag)
+    {
+    case SlowBlockProfile_GenericLoad:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        break;
+    case SlowBlockProfile_GenericStore:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreCalls);
+        break;
+    case SlowBlockProfile_FastStackLoad:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadCalls);
+        break;
+    case SlowBlockProfile_FastStore:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStoreCalls);
+        break;
+    }
+#endif
+    SlowBlockTransfer9<Write, ConsoleType>(addr, data, num, cpu);
+}
+
 template <bool Write, int ConsoleType>
 void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
 {
@@ -721,6 +744,10 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     \
     template void SlowBlockTransfer9<false, consoleType>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9<true, consoleType>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoad>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_GenericStore>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_FastStackLoad>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_FastStore>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer7<false, consoleType>(u32 addr, u64* data, u32 num); \
     template void SlowBlockTransfer7<true, consoleType>(u32 addr, u64* data, u32 num); \
 

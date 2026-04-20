@@ -100,7 +100,16 @@ template <typename T, int ConsoleType> void SlowWrite9(u32 addr, ARMv5* cpu, u32
 template <typename T, int ConsoleType> T SlowRead7(u32 addr);
 template <typename T, int ConsoleType> void SlowWrite7(u32 addr, u32 val);
 
+enum SlowBlockProfileTag
+{
+    SlowBlockProfile_GenericLoad = 0,
+    SlowBlockProfile_GenericStore = 1,
+    SlowBlockProfile_FastStackLoad = 2,
+    SlowBlockProfile_FastStore = 3,
+};
+
 template <bool Write, int ConsoleType> void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu);
+template <bool Write, int ConsoleType, int Tag> void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu);
 template <bool Write, int ConsoleType> void SlowBlockTransfer7(u32 addr, u64* data, u32 num);
 
 }
