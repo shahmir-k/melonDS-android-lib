@@ -626,7 +626,13 @@ void ARMv5::Execute()
         {
             u32 instrAddr = R[15] - ((CPSR&0x20)?2:4);
 
-            if (NDS.ARM9LibHLE.TryHandle(*this, instrAddr))
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitHLECheckCalls);
+            bool handledHLE = false;
+            {
+                LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitHLECheckNs);
+                handledHLE = NDS.ARM9LibHLE.TryHandle(*this, instrAddr);
+            }
+            if (handledHLE)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9LibHLEHits);
                 NDS.ARM9Timestamp += Cycles;
@@ -634,12 +640,21 @@ void ARMv5::Execute()
                 continue;
             }
 
-            if ((instrAddr < FastBlockLookupStart || instrAddr >= (FastBlockLookupStart + FastBlockLookupSize))
-                && !NDS.JIT.SetupExecutableRegion(0, instrAddr, FastBlockLookup, FastBlockLookupStart, FastBlockLookupSize))
+            if (instrAddr < FastBlockLookupStart || instrAddr >= (FastBlockLookupStart + FastBlockLookupSize))
             {
-                NDS.ARM9Timestamp = NDS.ARM9Target;
-                Log(LogLevel::Error, "ARMv5 PC in non executable region %08X\n", R[15]);
-                return;
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitSetupRegionCalls);
+                bool setupOK = false;
+                {
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitSetupRegionNs);
+                    setupOK = NDS.JIT.SetupExecutableRegion(0, instrAddr, FastBlockLookup, FastBlockLookupStart, FastBlockLookupSize);
+                }
+                if (!setupOK)
+                {
+                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitSetupRegionFails);
+                    NDS.ARM9Timestamp = NDS.ARM9Target;
+                    Log(LogLevel::Error, "ARMv5 PC in non executable region %08X\n", R[15]);
+                    return;
+                }
             }
 
             JitBlockEntry block = nullptr;
@@ -670,8 +685,12 @@ void ARMv5::Execute()
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
                 LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitDispatchNs);
-                ARM_Dispatch(this, block);
+                {
+                    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitExecuteBodyNs);
+                    ARM_Dispatch(this, block);
+                }
                 LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
+                LITE_PROFILE_SCOPE(postTimer, LiteProfile::gFrame.ARM9JitPostDispatchNs);
 #if LITEV_PROFILE
                 if (auto it = NDS.JIT.JitBlocks9.find(instrAddr); it != NDS.JIT.JitBlocks9.end())
                 {

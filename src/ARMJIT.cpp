@@ -268,56 +268,101 @@ T SlowRead9(u32 addr, ARMv5* cpu)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadMainRAM);
+            const uint64_t mainStart = LITE_PROFILE_NOW_NS();
             val = *(T*)&nds.MainRAM[addr & nds.MainRAMMask];
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowReadMainRAMNs, LITE_PROFILE_NOW_NS() - mainStart);
             break;
+        }
 
         case 0x03000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadSharedWRAM);
+            const uint64_t swramStart = LITE_PROFILE_NOW_NS();
             if (nds.SWRAM_ARM9.Mem)
                 val = *(T*)&nds.SWRAM_ARM9.Mem[addr & nds.SWRAM_ARM9.Mask];
             else
                 val = 0;
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowReadSharedWRAMNs, LITE_PROFILE_NOW_NS() - swramStart);
             break;
+        }
 
         case 0x06000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadVRAM);
+            const uint64_t vramStart = LITE_PROFILE_NOW_NS();
             if constexpr (std::is_same_v<T, u32>)
                 val = nds.ARM9Read32(addr);
             else if constexpr (std::is_same_v<T, u16>)
                 val = nds.ARM9Read16(addr);
             else
                 val = nds.ARM9Read8(addr);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowReadVRAMNs, LITE_PROFILE_NOW_NS() - vramStart);
             break;
+        }
 
         default:
+        {
+            uint64_t ioStart = 0;
+            std::atomic<uint64_t>* ioBucketNs = nullptr;
             if ((addr & 0xFF000000) == 0x04000000)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIO);
+                ioStart = LITE_PROFILE_NOW_NS();
+                ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOOtherNs;
                 switch (addr & 0xFFFFFFF0)
                 {
                 case 0x04000000:
                     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODispStat);
+                    ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIODispStatNs;
                     break;
                 default:
                     if (addr >= 0x040000B0 && addr < 0x040000F0)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODMA);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIODMANs;
+                    }
                     else if (addr >= 0x04000100 && addr < 0x04000110)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOTimer);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOTimerNs;
+                    }
                     else if (addr >= 0x04000130 && addr < 0x04000134)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOKey);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOKeyNs;
+                    }
                     else if (addr >= 0x04000180 && addr < 0x04000190)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOIPC);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOIPCNs;
+                    }
                     else if (addr >= 0x040001A0 && addr < 0x040001B0)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOCart);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOCartNs;
+                    }
                     else if ((addr >= 0x04000204 && addr < 0x04000218) || addr == 0x04000208)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOIRQ);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOIRQNs;
+                    }
                     else if (addr >= 0x04000240 && addr < 0x0400024C)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOVRAMCtl);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOVRAMCtlNs;
+                    }
                     else if (addr >= 0x04000280 && addr < 0x040002C0)
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODivSqrt);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIODivSqrtNs;
+                    }
                     else
+                    {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOOther);
+                        ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOOtherNs;
+                    }
                     break;
                 }
 
@@ -340,7 +385,14 @@ T SlowRead9(u32 addr, ARMv5* cpu)
                 val = nds.ARM9Read16(addr);
             else
                 val = nds.ARM9Read8(addr);
+            if (ioBucketNs)
+            {
+                const uint64_t ioElapsed = LITE_PROFILE_NOW_NS() - ioStart;
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowReadIONs, ioElapsed);
+                LITE_PROFILE_ADD_VALUE(*ioBucketNs, ioElapsed);
+            }
             break;
+        }
         }
     }
 
@@ -392,65 +444,97 @@ void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteMainRAM);
+            const uint64_t mainStart = LITE_PROFILE_NOW_NS();
             nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_MainRAM>(addr);
             *(T*)&nds.MainRAM[addr & nds.MainRAMMask] = val;
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteMainRAMNs, LITE_PROFILE_NOW_NS() - mainStart);
             break;
+        }
 
         case 0x03000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteSharedWRAM);
+            const uint64_t swramStart = LITE_PROFILE_NOW_NS();
             if (nds.SWRAM_ARM9.Mem)
             {
                 nds.JIT.CheckAndInvalidate<0, ARMJIT_Memory::memregion_SharedWRAM>(addr);
                 *(T*)&nds.SWRAM_ARM9.Mem[addr & nds.SWRAM_ARM9.Mask] = val;
             }
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteSharedWRAMNs, LITE_PROFILE_NOW_NS() - swramStart);
             break;
+        }
 
         case 0x04000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteIO);
+            const uint64_t ioStart = LITE_PROFILE_NOW_NS();
             if constexpr (std::is_same_v<T, u32>)
             {
                 if (nds.ARM9FastIOWrite32(addr, val))
+                {
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteIONs, LITE_PROFILE_NOW_NS() - ioStart);
                     return;
+                }
                 nds.ARM9Write32(addr, val);
             }
             else if constexpr (std::is_same_v<T, u16>)
             {
                 if (nds.ARM9FastIOWrite16(addr, val))
+                {
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteIONs, LITE_PROFILE_NOW_NS() - ioStart);
                     return;
+                }
                 nds.ARM9Write16(addr, val);
             }
             else
                 nds.ARM9Write8(addr, val);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteIONs, LITE_PROFILE_NOW_NS() - ioStart);
             break;
+        }
 
         case 0x06000000:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteVRAM);
+            const uint64_t vramStart = LITE_PROFILE_NOW_NS();
             if constexpr (std::is_same_v<T, u32>)
                 nds.ARM9Write32(addr, val);
             else if constexpr (std::is_same_v<T, u16>)
                 nds.ARM9Write16(addr, val);
             else
                 nds.ARM9Write8(addr, val);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteVRAMNs, LITE_PROFILE_NOW_NS() - vramStart);
             break;
+        }
 
         default:
+        {
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowWriteOther);
+            const uint64_t otherStart = LITE_PROFILE_NOW_NS();
             if constexpr (std::is_same_v<T, u32>)
             {
                 if ((addr & 0xFF000000) == 0x04000000 && nds.ARM9FastIOWrite32(addr, val))
+                {
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteOtherNs, LITE_PROFILE_NOW_NS() - otherStart);
                     return;
+                }
                 nds.ARM9Write32(addr, val);
             }
             else if constexpr (std::is_same_v<T, u16>)
             {
                 if ((addr & 0xFF000000) == 0x04000000 && nds.ARM9FastIOWrite16(addr, val))
+                {
+                    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteOtherNs, LITE_PROFILE_NOW_NS() - otherStart);
                     return;
+                }
                 nds.ARM9Write16(addr, val);
             }
             else
                 nds.ARM9Write8(addr, val);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowWriteOtherNs, LITE_PROFILE_NOW_NS() - otherStart);
             break;
+        }
         }
     }
 }
@@ -852,6 +936,7 @@ template <bool Write, int ConsoleType, int Tag>
 void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
     NoteSlowBlockSource<Tag>();
+    const uint64_t sourceStart = LITE_PROFILE_NOW_NS();
 #if LITEV_PROFILE
     constexpr bool kShapeTaggedLoad = !Write
         && (Tag == SlowBlockProfile_GenericLoadNonStackDTCM
@@ -866,6 +951,13 @@ void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
     }
 #endif
     SlowBlockTransfer9<Write, ConsoleType>(addr, data, num, cpu);
+#if LITEV_PROFILE
+    const uint64_t sourceElapsed = LITE_PROFILE_NOW_NS() - sourceStart;
+    if constexpr (!Write)
+        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockGenericLoadNs, sourceElapsed);
+    else
+        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockGenericStoreNs, sourceElapsed);
+#endif
 }
 
 template <bool Write, int ConsoleType, int Tag>
@@ -889,6 +981,7 @@ void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu
         if constexpr (Tag == SlowBlockProfile_FastStackLoad)
         {
             LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadDirectNs, elapsed);
             if (num <= 2)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2);
@@ -913,6 +1006,7 @@ void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu
         else if constexpr (Tag == SlowBlockProfile_FastStore)
         {
             LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreDirectNs, elapsed);
             if (num <= 2)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2);
@@ -944,9 +1038,15 @@ void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMFallbackCalls);
     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMFallbackNs, elapsed);
     if constexpr (Tag == SlowBlockProfile_FastStackLoad)
+    {
         LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
+        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadFallbackNs, elapsed);
+    }
     else if constexpr (Tag == SlowBlockProfile_FastStore)
+    {
         LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
+        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreFallbackNs, elapsed);
+    }
 #endif
 }
 
