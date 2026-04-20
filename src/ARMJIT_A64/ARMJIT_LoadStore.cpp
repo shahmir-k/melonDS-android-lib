@@ -501,7 +501,15 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     const bool fastMemoryEnabled = NDS.JIT.FastMemoryEnabled();
     const bool stackDTCMLoad = Num == 0 && !store && rn == 13 && expectedTarget == ARMJIT_Memory::memregion_DTCM;
-    const bool loadStoreShapeAllowed = store || stackDTCMLoad;
+    const bool narrowMainRAMLoad = Num == 0
+        && !Thumb
+        && !store
+        && expectedTarget == ARMJIT_Memory::memregion_MainRAM
+        && rn != 13
+        && !skipLoadingRn
+        && !decrement
+        && regsCount <= 4;
+    const bool loadStoreShapeAllowed = store || stackDTCMLoad || narrowMainRAMLoad;
     const bool condCompatible = CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget);
 
     bool compileFastPath = fastMemoryEnabled
