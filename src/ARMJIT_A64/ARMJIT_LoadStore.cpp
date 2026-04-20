@@ -746,13 +746,20 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     ADD(X1, SP, dataStackOffset);
     u32 helperWordCount = regsCount;
+    const bool fixedFastDTCMHelper = Num == 0
+        && compileFastPath
+        && expectedTarget == ARMJIT_Memory::memregion_DTCM
+        && regsCount <= 4;
     std::atomic<uint64_t>* callsitePreCounter = nullptr;
     std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
     std::atomic<uint64_t>* callsitePostCounter = nullptr;
 
     if (Num == 0)
     {
-        MOV(X3, RCPU);
+        if (fixedFastDTCMHelper)
+            MOV(X2, RCPU);
+        else
+            MOV(X3, RCPU);
         const bool profiledFastStackLoad = compileFastPath && !store;
         const bool profiledFastStore = compileFastPath && store;
         if (profileCallsite)
@@ -845,13 +852,25 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 }
             }
         }
-        MOVI2R(W2, helperWordCount);
+        if (!fixedFastDTCMHelper)
+            MOVI2R(W2, helperWordCount);
         emitCallsitePhaseEnd(callsitePreCounter, 0);
         emitCallsitePhaseStart(0);
         switch ((u32)store * 2 | NDS.ConsoleType)
         {
         case 0:
-            if (profiledFastStackLoad) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 0, SlowBlockProfile_FastStackLoad>);
+            if (profiledFastStackLoad && fixedFastDTCMHelper)
+            {
+                switch (regsCount)
+                {
+                case 1: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 0, SlowBlockProfile_FastStackLoad, 1>); break;
+                case 2: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 0, SlowBlockProfile_FastStackLoad, 2>); break;
+                case 3: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 0, SlowBlockProfile_FastStackLoad, 3>); break;
+                case 4: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 0, SlowBlockProfile_FastStackLoad, 4>); break;
+                default: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 0, SlowBlockProfile_FastStackLoad>); break;
+                }
+            }
+            else if (profiledFastStackLoad) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 0, SlowBlockProfile_FastStackLoad>);
             else switch (genericLoadTag)
             {
             case SlowBlockProfile_GenericLoadFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadFastmemOff>); break;
@@ -866,7 +885,18 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             }
             break;
         case 1:
-            if (profiledFastStackLoad) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 1, SlowBlockProfile_FastStackLoad>);
+            if (profiledFastStackLoad && fixedFastDTCMHelper)
+            {
+                switch (regsCount)
+                {
+                case 1: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 1, SlowBlockProfile_FastStackLoad, 1>); break;
+                case 2: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 1, SlowBlockProfile_FastStackLoad, 2>); break;
+                case 3: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 1, SlowBlockProfile_FastStackLoad, 3>); break;
+                case 4: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<false, 1, SlowBlockProfile_FastStackLoad, 4>); break;
+                default: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 1, SlowBlockProfile_FastStackLoad>); break;
+                }
+            }
+            else if (profiledFastStackLoad) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 1, SlowBlockProfile_FastStackLoad>);
             else switch (genericLoadTag)
             {
             case SlowBlockProfile_GenericLoadFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadFastmemOff>); break;
@@ -881,7 +911,18 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             }
             break;
         case 2:
-            if (profiledFastStore) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 0, SlowBlockProfile_FastStore>);
+            if (profiledFastStore && fixedFastDTCMHelper)
+            {
+                switch (regsCount)
+                {
+                case 1: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 0, SlowBlockProfile_FastStore, 1>); break;
+                case 2: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 0, SlowBlockProfile_FastStore, 2>); break;
+                case 3: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 0, SlowBlockProfile_FastStore, 3>); break;
+                case 4: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 0, SlowBlockProfile_FastStore, 4>); break;
+                default: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 0, SlowBlockProfile_FastStore>); break;
+                }
+            }
+            else if (profiledFastStore) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 0, SlowBlockProfile_FastStore>);
             else switch (genericStoreTag)
             {
             case SlowBlockProfile_GenericStoreFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStoreFastmemOff>); break;
@@ -891,7 +932,18 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             }
             break;
         case 3:
-            if (profiledFastStore) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 1, SlowBlockProfile_FastStore>);
+            if (profiledFastStore && fixedFastDTCMHelper)
+            {
+                switch (regsCount)
+                {
+                case 1: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 1, SlowBlockProfile_FastStore, 1>); break;
+                case 2: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 1, SlowBlockProfile_FastStore, 2>); break;
+                case 3: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 1, SlowBlockProfile_FastStore, 3>); break;
+                case 4: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMFixedProfiled<true, 1, SlowBlockProfile_FastStore, 4>); break;
+                default: QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 1, SlowBlockProfile_FastStore>); break;
+                }
+            }
+            else if (profiledFastStore) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 1, SlowBlockProfile_FastStore>);
             else switch (genericStoreTag)
             {
             case SlowBlockProfile_GenericStoreFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStoreFastmemOff>); break;
