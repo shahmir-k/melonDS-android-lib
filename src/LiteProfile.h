@@ -139,6 +139,19 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetSharedWRAM{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetIO{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetOther{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeARM{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeThumb{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeSkipBase{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeKeepBase{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeBaseSP{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeBaseOther{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeRegs1_2{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeRegs3_4{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeRegs5P{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeIncPre{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeIncPost{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeDecPre{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadShapeDecPost{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericStoreFastmemOff{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericStoreUsermode{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericStoreCondIncompatible{0};
@@ -423,6 +436,19 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockGenericLoadTargetSharedWRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericLoadTargetIO.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericLoadTargetOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeARM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeThumb.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeSkipBase.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeKeepBase.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeBaseSP.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeBaseOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeRegs1_2.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeRegs3_4.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeRegs5P.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeIncPre.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeIncPost.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeDecPre.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadShapeDecPost.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericStoreFastmemOff.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericStoreUsermode.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericStoreCondIncompatible.store(0, std::memory_order_relaxed);
@@ -690,6 +716,19 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockGenericLoadTargetSharedWRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericLoadTargetIO.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericLoadTargetOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeARM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeThumb.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeSkipBase.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeKeepBase.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeBaseSP.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeBaseOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeRegs1_2.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeRegs3_4.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeRegs5P.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeIncPre.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeIncPost.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeDecPre.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadShapeDecPost.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericStoreFastmemOff.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericStoreUsermode.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericStoreCondIncompatible.store(0, std::memory_order_relaxed);
@@ -997,6 +1036,19 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetSharedWRAM, gFrame.ARM9SlowBlockGenericLoadTargetSharedWRAM);
     MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetIO, gFrame.ARM9SlowBlockGenericLoadTargetIO);
     MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetOther, gFrame.ARM9SlowBlockGenericLoadTargetOther);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeARM, gFrame.ARM9SlowBlockGenericLoadShapeARM);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeThumb, gFrame.ARM9SlowBlockGenericLoadShapeThumb);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeSkipBase, gFrame.ARM9SlowBlockGenericLoadShapeSkipBase);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeKeepBase, gFrame.ARM9SlowBlockGenericLoadShapeKeepBase);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeBaseSP, gFrame.ARM9SlowBlockGenericLoadShapeBaseSP);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeBaseOther, gFrame.ARM9SlowBlockGenericLoadShapeBaseOther);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeRegs1_2, gFrame.ARM9SlowBlockGenericLoadShapeRegs1_2);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeRegs3_4, gFrame.ARM9SlowBlockGenericLoadShapeRegs3_4);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeRegs5P, gFrame.ARM9SlowBlockGenericLoadShapeRegs5P);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeIncPre, gFrame.ARM9SlowBlockGenericLoadShapeIncPre);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeIncPost, gFrame.ARM9SlowBlockGenericLoadShapeIncPost);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeDecPre, gFrame.ARM9SlowBlockGenericLoadShapeDecPre);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadShapeDecPost, gFrame.ARM9SlowBlockGenericLoadShapeDecPost);
     MergeCounter(gWindow.ARM9SlowBlockGenericStoreFastmemOff, gFrame.ARM9SlowBlockGenericStoreFastmemOff);
     MergeCounter(gWindow.ARM9SlowBlockGenericStoreUsermode, gFrame.ARM9SlowBlockGenericStoreUsermode);
     MergeCounter(gWindow.ARM9SlowBlockGenericStoreCondIncompatible, gFrame.ARM9SlowBlockGenericStoreCondIncompatible);
@@ -1309,6 +1361,22 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetSharedWRAM),
         CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetIO),
         CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetOther));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] slowblock_generic_load shape arm=%.1f thumb=%.1f skip_base=%.1f keep_base=%.1f base_sp=%.1f base_other=%.1f regs_1_2=%.1f regs_3_4=%.1f regs_5p=%.1f inc_pre=%.1f inc_post=%.1f dec_pre=%.1f dec_post=%.1f",
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeARM),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeThumb),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeSkipBase),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeKeepBase),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeBaseSP),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeBaseOther),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeRegs1_2),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeRegs3_4),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeRegs5P),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeIncPre),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeIncPost),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeDecPre),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadShapeDecPost));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] slowblock_generic_store why fastmem_off=%.1f usermode=%.1f cond_incompat=%.1f",

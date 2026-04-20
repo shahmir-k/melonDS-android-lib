@@ -684,7 +684,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     PushRegs(false, false, !compileFastPath);
 
     ADD(X1, SP, 0);
-    MOVI2R(W2, regsCount);
+    u32 helperWordCount = regsCount;
 
     if (Num == 0)
     {
@@ -712,6 +712,23 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                     genericLoadTag = SlowBlockProfile_GenericLoadUsermode;
                 else if (!loadStoreShapeAllowed)
                 {
+                    u32 shapeMeta = 0;
+                    if (Thumb)
+                        shapeMeta |= SlowBlockProfileShape_Thumb;
+                    if (skipLoadingRn)
+                        shapeMeta |= SlowBlockProfileShape_SkipBase;
+                    if (rn == 13)
+                        shapeMeta |= SlowBlockProfileShape_BaseSP;
+                    if (regsCount > 4)
+                        shapeMeta |= SlowBlockProfileShape_Regs5P;
+                    else if (regsCount > 2)
+                        shapeMeta |= SlowBlockProfileShape_Regs3_4;
+                    if (decrement)
+                        shapeMeta |= SlowBlockProfileShape_Dec;
+                    if (preinc)
+                        shapeMeta |= SlowBlockProfileShape_Pre;
+                    helperWordCount = regsCount | (shapeMeta << SlowBlockProfileShapeShift);
+
                     switch (expectedTarget)
                     {
                     case ARMJIT_Memory::memregion_DTCM:
@@ -737,6 +754,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 }
             }
         }
+        MOVI2R(W2, helperWordCount);
         switch ((u32)store * 2 | NDS.ConsoleType)
         {
         case 0:
@@ -793,6 +811,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     }
     else
     {
+        MOVI2R(W2, helperWordCount);
         switch ((u32)store * 2 | NDS.ConsoleType)
         {
         case 0: QuickCallFunction(X4, SlowBlockTransfer7<false, 0>); break;

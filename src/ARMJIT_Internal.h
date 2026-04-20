@@ -119,6 +119,19 @@ enum SlowBlockProfileTag
     SlowBlockProfile_GenericStoreCondIncompatible = 14,
 };
 
+enum : u32
+{
+    SlowBlockProfileShape_Thumb = 1 << 0,
+    SlowBlockProfileShape_SkipBase = 1 << 1,
+    SlowBlockProfileShape_BaseSP = 1 << 2,
+    SlowBlockProfileShape_Regs3_4 = 1 << 3,
+    SlowBlockProfileShape_Regs5P = 1 << 4,
+    SlowBlockProfileShape_Dec = 1 << 5,
+    SlowBlockProfileShape_Pre = 1 << 6,
+    SlowBlockProfileShapeShift = 8,
+    SlowBlockProfileNumMask = 0xFF,
+};
+
 template <bool Write, int ConsoleType> void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu);
 template <bool Write, int ConsoleType, int Tag> void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu);
 template <bool Write, int ConsoleType, int Tag> void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu);

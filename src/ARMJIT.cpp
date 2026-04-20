@@ -774,6 +774,48 @@ static inline void NoteSlowBlockSource()
 #endif
 }
 
+#if LITEV_PROFILE
+static inline void NoteSlowBlockGenericLoadShape(u32 meta)
+{
+    if (meta & SlowBlockProfileShape_Thumb)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeThumb);
+    else
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeARM);
+
+    if (meta & SlowBlockProfileShape_SkipBase)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeSkipBase);
+    else
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeKeepBase);
+
+    if (meta & SlowBlockProfileShape_BaseSP)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeBaseSP);
+    else
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeBaseOther);
+
+    if (meta & SlowBlockProfileShape_Regs5P)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeRegs5P);
+    else if (meta & SlowBlockProfileShape_Regs3_4)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeRegs3_4);
+    else
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeRegs1_2);
+
+    if (meta & SlowBlockProfileShape_Dec)
+    {
+        if (meta & SlowBlockProfileShape_Pre)
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeDecPre);
+        else
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeDecPost);
+    }
+    else
+    {
+        if (meta & SlowBlockProfileShape_Pre)
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeIncPre);
+        else
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadShapeIncPost);
+    }
+}
+#endif
+
 template <bool Write, int ConsoleType>
 void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
@@ -790,6 +832,19 @@ template <bool Write, int ConsoleType, int Tag>
 void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
     NoteSlowBlockSource<Tag>();
+#if LITEV_PROFILE
+    constexpr bool kShapeTaggedLoad = !Write
+        && (Tag == SlowBlockProfile_GenericLoadNonStackDTCM
+            || Tag == SlowBlockProfile_GenericLoadNonStackMainRAM
+            || Tag == SlowBlockProfile_GenericLoadNonStackSharedWRAM
+            || Tag == SlowBlockProfile_GenericLoadNonStackIO
+            || Tag == SlowBlockProfile_GenericLoadNonStackOther);
+    if constexpr (kShapeTaggedLoad)
+    {
+        NoteSlowBlockGenericLoadShape(num >> SlowBlockProfileShapeShift);
+        num &= SlowBlockProfileNumMask;
+    }
+#endif
     SlowBlockTransfer9<Write, ConsoleType>(addr, data, num, cpu);
 }
 
