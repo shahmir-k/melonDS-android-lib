@@ -444,15 +444,30 @@ void SlowWrite7(u32 addr, u32 val)
         NDS::Current->ARM7Write8(addr, val);
 }
 
-template <bool Write, int ConsoleType>
-void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
+template <bool Write>
+static inline bool TryDirectDTCMBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
-    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
-    if constexpr (Write)
-        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
+    addr &= ~0x3;
+    if ((addr & cpu->DTCMMask) != cpu->DTCMBase)
+        return false;
+
+    const u32 offset = addr & 0x3FFF;
+    const u32 bytes = num * sizeof(u32);
+    if (bytes > 0x4000 - offset)
+        return false;
+
+    if (num <= 2)
+        CopyBlockWordsTiny2<Write>(cpu->DTCM, offset, data, num);
+    else if (num <= 4)
+        CopyBlockWordsTiny4<Write>(cpu->DTCM, offset, data, num);
     else
-        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
-    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
+        CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
+    return true;
+}
+
+template <bool Write, int ConsoleType>
+static void SlowBlockTransfer9Impl(u32 addr, u64* data, u32 num, ARMv5* cpu)
+{
     addr &= ~0x3;
     auto& nds = cpu->NDS;
     const u32 bytes = num * sizeof(u32);
@@ -688,8 +703,8 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 #endif
 }
 
-template <bool Write, int ConsoleType, int Tag>
-void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
+template <int Tag>
+static inline void NoteSlowBlockSource()
 {
 #if LITEV_PROFILE
     switch (Tag)
@@ -708,7 +723,42 @@ void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
         break;
     }
 #endif
+}
+
+template <bool Write, int ConsoleType>
+void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
+{
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
+    if constexpr (Write)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
+    else
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
+    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
+    SlowBlockTransfer9Impl<Write, ConsoleType>(addr, data, num, cpu);
+}
+
+template <bool Write, int ConsoleType, int Tag>
+void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
+{
+    NoteSlowBlockSource<Tag>();
     SlowBlockTransfer9<Write, ConsoleType>(addr, data, num, cpu);
+}
+
+template <bool Write, int ConsoleType, int Tag>
+void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
+{
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
+    if constexpr (Write)
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
+    else
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
+    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
+    NoteSlowBlockSource<Tag>();
+
+    if (TryDirectDTCMBlockTransfer9<Write>(addr, data, num, cpu))
+        return;
+
+    SlowBlockTransfer9Impl<Write, ConsoleType>(addr, data, num, cpu);
 }
 
 template <bool Write, int ConsoleType>
@@ -748,6 +798,8 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_GenericStore>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_FastStackLoad>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_FastStore>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9FastDTCMProfiled<false, consoleType, SlowBlockProfile_FastStackLoad>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9FastDTCMProfiled<true, consoleType, SlowBlockProfile_FastStore>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer7<false, consoleType>(u32 addr, u64* data, u32 num); \
     template void SlowBlockTransfer7<true, consoleType>(u32 addr, u64* data, u32 num); \
 

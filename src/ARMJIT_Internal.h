@@ -110,6 +110,7 @@ enum SlowBlockProfileTag
 
 template <bool Write, int ConsoleType> void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu);
 template <bool Write, int ConsoleType, int Tag> void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu);
+template <bool Write, int ConsoleType, int Tag> void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu);
 template <bool Write, int ConsoleType> void SlowBlockTransfer7(u32 addr, u64* data, u32 num);
 
 }

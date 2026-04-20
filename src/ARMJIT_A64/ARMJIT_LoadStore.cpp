@@ -689,22 +689,22 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         {
         case 0:
             QuickCallFunction(X4, profiledFastStackLoad
-                ? SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_FastStackLoad>
+                ? SlowBlockTransfer9FastDTCMProfiled<false, 0, SlowBlockProfile_FastStackLoad>
                 : SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoad>);
             break;
         case 1:
             QuickCallFunction(X4, profiledFastStackLoad
-                ? SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_FastStackLoad>
+                ? SlowBlockTransfer9FastDTCMProfiled<false, 1, SlowBlockProfile_FastStackLoad>
                 : SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoad>);
             break;
         case 2:
             QuickCallFunction(X4, profiledFastStore
-                ? SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_FastStore>
+                ? SlowBlockTransfer9FastDTCMProfiled<true, 0, SlowBlockProfile_FastStore>
                 : SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStore>);
             break;
         case 3:
             QuickCallFunction(X4, profiledFastStore
-                ? SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_FastStore>
+                ? SlowBlockTransfer9FastDTCMProfiled<true, 1, SlowBlockProfile_FastStore>
                 : SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStore>);
             break;
         }
