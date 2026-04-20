@@ -139,8 +139,12 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockFastStoreCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericLoadNs{0};
     std::atomic<uint64_t> ARM9SlowBlockGenericStoreNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadTotalNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericStoreTotalNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoadNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStoreNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockFastStackLoadTotalNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockFastStoreTotalNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoadDirectNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoadFallbackNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStoreDirectNs{0};
@@ -540,8 +544,12 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockFastStoreCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericLoadNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockGenericStoreNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadTotalNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericStoreTotalNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoadNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStoreNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFastStackLoadTotalNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFastStoreTotalNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoadDirectNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoadFallbackNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStoreDirectNs.store(0, std::memory_order_relaxed);
@@ -907,8 +915,12 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockFastStoreCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericLoadNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockGenericStoreNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadTotalNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericStoreTotalNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoadNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStoreNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFastStackLoadTotalNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFastStoreTotalNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoadDirectNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoadFallbackNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStoreDirectNs.store(0, std::memory_order_relaxed);
@@ -1321,8 +1333,12 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockFastStoreCalls, gFrame.ARM9SlowBlockFastStoreCalls);
     MergeCounter(gWindow.ARM9SlowBlockGenericLoadNs, gFrame.ARM9SlowBlockGenericLoadNs);
     MergeCounter(gWindow.ARM9SlowBlockGenericStoreNs, gFrame.ARM9SlowBlockGenericStoreNs);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadTotalNs, gFrame.ARM9SlowBlockGenericLoadTotalNs);
+    MergeCounter(gWindow.ARM9SlowBlockGenericStoreTotalNs, gFrame.ARM9SlowBlockGenericStoreTotalNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoadNs, gFrame.ARM9SlowBlockFastStackLoadNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStoreNs, gFrame.ARM9SlowBlockFastStoreNs);
+    MergeCounter(gWindow.ARM9SlowBlockFastStackLoadTotalNs, gFrame.ARM9SlowBlockFastStackLoadTotalNs);
+    MergeCounter(gWindow.ARM9SlowBlockFastStoreTotalNs, gFrame.ARM9SlowBlockFastStoreTotalNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoadDirectNs, gFrame.ARM9SlowBlockFastStackLoadDirectNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoadFallbackNs, gFrame.ARM9SlowBlockFastStackLoadFallbackNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStoreDirectNs, gFrame.ARM9SlowBlockFastStoreDirectNs);
@@ -1733,13 +1749,17 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockFastStoreCalls));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] slowblock_source_ns generic_load=%.3fms generic_store=%.3fms fast_stack=%.3fms direct=%.3fms fallback=%.3fms fast_store=%.3fms direct=%.3fms fallback=%.3fms",
+        "[LITEV_PROFILE] slowblock_source_ns generic_load=%.3fms total=%.3fms generic_store=%.3fms total=%.3fms fast_stack=%.3fms total=%.3fms direct=%.3fms fallback=%.3fms fast_store=%.3fms total=%.3fms direct=%.3fms fallback=%.3fms",
         NsPerFrame(gWindow.ARM9SlowBlockGenericLoadNs),
+        NsPerFrame(gWindow.ARM9SlowBlockGenericLoadTotalNs),
         NsPerFrame(gWindow.ARM9SlowBlockGenericStoreNs),
+        NsPerFrame(gWindow.ARM9SlowBlockGenericStoreTotalNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadNs),
+        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadTotalNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadDirectNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadFallbackNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStoreNs),
+        NsPerFrame(gWindow.ARM9SlowBlockFastStoreTotalNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStoreDirectNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStoreFallbackNs));
 
