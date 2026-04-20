@@ -145,6 +145,18 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoadFallbackNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStoreDirectNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStoreFallbackNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteFastStackPreTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteFastStackWrapTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteFastStackPostTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteFastStorePreTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteFastStoreWrapTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteFastStorePostTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteGenericLoadPreTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteGenericLoadWrapTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteGenericLoadPostTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteGenericStorePreTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteGenericStoreWrapTicks{0};
+    std::atomic<uint64_t> ARM9SlowBlockCallsiteGenericStorePostTicks{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoad_1_2{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoad_3_4{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoad_5_8{0};
@@ -372,6 +384,23 @@ inline uint64_t NowNs()
         Clock::now().time_since_epoch()).count();
 }
 
+inline uint64_t CounterFreqHz()
+{
+    if (!kEnabled)
+        return 1000000000ULL;
+    static uint64_t freq = []() -> uint64_t
+    {
+#if defined(__aarch64__)
+        uint64_t value = 0;
+        asm volatile("mrs %0, cntfrq_el0" : "=r"(value));
+        return value ? value : 1000000000ULL;
+#else
+        return 1000000000ULL;
+#endif
+    }();
+    return freq;
+}
+
 inline void ResetFrame()
 {
     if (!kEnabled)
@@ -497,6 +526,18 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockFastStackLoadFallbackNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStoreDirectNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStoreFallbackNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteFastStackPreTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteFastStackWrapTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteFastStackPostTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteFastStorePreTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteFastStoreWrapTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteFastStorePostTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteGenericLoadPreTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteGenericLoadWrapTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteGenericLoadPostTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteGenericStorePreTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteGenericStoreWrapTicks.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockCallsiteGenericStorePostTicks.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoad_1_2.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoad_3_4.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoad_5_8.store(0, std::memory_order_relaxed);
@@ -832,6 +873,18 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockFastStackLoadFallbackNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStoreDirectNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStoreFallbackNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteFastStackPreTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteFastStackWrapTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteFastStackPostTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteFastStorePreTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteFastStoreWrapTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteFastStorePostTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteGenericLoadPreTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteGenericLoadWrapTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteGenericLoadPostTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteGenericStorePreTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteGenericStoreWrapTicks.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockCallsiteGenericStorePostTicks.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoad_1_2.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoad_3_4.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoad_5_8.store(0, std::memory_order_relaxed);
@@ -1068,6 +1121,13 @@ inline double CountPerFrame(const std::atomic<uint64_t>& counter)
            static_cast<double>(kLogEveryFrames);
 }
 
+inline double TicksPerFrameToMs(const std::atomic<uint64_t>& counter)
+{
+    return (static_cast<double>(counter.load(std::memory_order_relaxed)) /
+            static_cast<double>(kLogEveryFrames) * 1000.0) /
+           static_cast<double>(CounterFreqHz());
+}
+
 inline double Percent(uint64_t num, uint64_t den)
 {
     if (den == 0)
@@ -1207,6 +1267,18 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoadFallbackNs, gFrame.ARM9SlowBlockFastStackLoadFallbackNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStoreDirectNs, gFrame.ARM9SlowBlockFastStoreDirectNs);
     MergeCounter(gWindow.ARM9SlowBlockFastStoreFallbackNs, gFrame.ARM9SlowBlockFastStoreFallbackNs);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteFastStackPreTicks, gFrame.ARM9SlowBlockCallsiteFastStackPreTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteFastStackWrapTicks, gFrame.ARM9SlowBlockCallsiteFastStackWrapTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteFastStackPostTicks, gFrame.ARM9SlowBlockCallsiteFastStackPostTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteFastStorePreTicks, gFrame.ARM9SlowBlockCallsiteFastStorePreTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteFastStoreWrapTicks, gFrame.ARM9SlowBlockCallsiteFastStoreWrapTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteFastStorePostTicks, gFrame.ARM9SlowBlockCallsiteFastStorePostTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteGenericLoadPreTicks, gFrame.ARM9SlowBlockCallsiteGenericLoadPreTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteGenericLoadWrapTicks, gFrame.ARM9SlowBlockCallsiteGenericLoadWrapTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteGenericLoadPostTicks, gFrame.ARM9SlowBlockCallsiteGenericLoadPostTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteGenericStorePreTicks, gFrame.ARM9SlowBlockCallsiteGenericStorePreTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteGenericStoreWrapTicks, gFrame.ARM9SlowBlockCallsiteGenericStoreWrapTicks);
+    MergeCounter(gWindow.ARM9SlowBlockCallsiteGenericStorePostTicks, gFrame.ARM9SlowBlockCallsiteGenericStorePostTicks);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoad_1_2, gFrame.ARM9SlowBlockFastStackLoad_1_2);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoad_3_4, gFrame.ARM9SlowBlockFastStackLoad_3_4);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoad_5_8, gFrame.ARM9SlowBlockFastStackLoad_5_8);
@@ -1590,6 +1662,21 @@ inline void EndFrame()
         NsPerFrame(gWindow.ARM9SlowBlockFastStoreNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStoreDirectNs),
         NsPerFrame(gWindow.ARM9SlowBlockFastStoreFallbackNs));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] slowblock_callsite_ms fast_stack_pre=%.3fms wrap=%.3fms post=%.3fms fast_store_pre=%.3fms wrap=%.3fms post=%.3fms generic_load_pre=%.3fms wrap=%.3fms post=%.3fms generic_store_pre=%.3fms wrap=%.3fms post=%.3fms",
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteFastStackPreTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteFastStackWrapTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteFastStackPostTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteFastStorePreTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteFastStoreWrapTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteFastStorePostTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericLoadPreTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericLoadWrapTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericLoadPostTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericStorePreTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericStoreWrapTicks),
+        TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericStorePostTicks));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] slowblock_fastdtcm fast_stack=%.3fms fast_store=%.3fms direct=%.3fms/%.1f fallback=%.3fms/%.1f",

@@ -534,6 +534,40 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         && loadStoreShapeAllowed
         && condCompatible;
 
+#if LITEV_PROFILE
+    const bool profileCallsite = Num == 0;
+    const int profileScratchBytes = profileCallsite ? 16 : 0;
+    const int dataStackOffset = profileScratchBytes;
+    auto emitCallsitePhaseStart = [&](int startOffset)
+    {
+        if (!profileCallsite)
+            return;
+        CNTVCT(X16);
+        STR(INDEX_UNSIGNED, X16, SP, startOffset);
+    };
+    auto emitCallsitePhaseEnd = [&](std::atomic<uint64_t>* counter, int startOffset)
+    {
+        if (!profileCallsite || !counter)
+            return;
+        CNTVCT(X16);
+        LDR(INDEX_UNSIGNED, X17, SP, startOffset);
+        SUB(X16, X16, X17);
+        STR(INDEX_UNSIGNED, X16, SP, 8);
+        MOVP2R(X16, reinterpret_cast<const void*>(counter));
+        LDR(INDEX_UNSIGNED, X17, X16, 0);
+        LDR(INDEX_UNSIGNED, X16, SP, 8);
+        ADD(X17, X17, X16);
+        MOVP2R(X16, reinterpret_cast<const void*>(counter));
+        STR(INDEX_UNSIGNED, X17, X16, 0);
+    };
+#else
+    constexpr bool profileCallsite = false;
+    constexpr int profileScratchBytes = 0;
+    constexpr int dataStackOffset = 0;
+    auto emitCallsitePhaseStart = [&](int) { };
+    auto emitCallsitePhaseEnd = [&](std::atomic<uint64_t>*, int) { };
+#endif
+
     {
         s32 offset = decrement
             ? -regsCount * 4 + (preinc ? 0 : 4)
@@ -649,7 +683,9 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     int i = 0;
 
-    SUB(SP, SP, ((regsCount + 1) & ~1) * 8);
+    const int stackBytes = ((regsCount + 1) & ~1) * 8 + profileScratchBytes;
+    SUB(SP, SP, stackBytes);
+    emitCallsitePhaseStart(0);
     if (store)
     {
         if (usermode && (regs & BitSet16(0x7f00)))
@@ -671,7 +707,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                     LoadReg(reg, W3);
                 MOVI2R(W1, reg - 8);
                 BL(ReadBanked);
-                STR(INDEX_UNSIGNED, W3, SP, i * 8);
+                STR(INDEX_UNSIGNED, W3, SP, dataStackOffset + i * 8);
             }
             else if (!usermode && nextReg != regs.end())
             {
@@ -687,19 +723,19 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 else
                     LoadReg(*nextReg, W4);
 
-                STP(INDEX_SIGNED, EncodeRegTo64(first), EncodeRegTo64(second), SP, i * 8);
+                STP(INDEX_SIGNED, EncodeRegTo64(first), EncodeRegTo64(second), SP, dataStackOffset + i * 8);
 
                 i++;
                 it++;
             }
             else if (RegCache.LoadedRegs & (1 << reg))
             {
-                STR(INDEX_UNSIGNED, MapReg(reg), SP, i * 8);
+                STR(INDEX_UNSIGNED, MapReg(reg), SP, dataStackOffset + i * 8);
             }
             else
             {
                 LoadReg(reg, W3);
-                STR(INDEX_UNSIGNED, W3, SP, i * 8);
+                STR(INDEX_UNSIGNED, W3, SP, dataStackOffset + i * 8);
             }
             i++;
             it++;
@@ -708,14 +744,44 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     PushRegs(false, false, !compileFastPath);
 
-    ADD(X1, SP, 0);
+    ADD(X1, SP, dataStackOffset);
     u32 helperWordCount = regsCount;
+    std::atomic<uint64_t>* callsitePreCounter = nullptr;
+    std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
+    std::atomic<uint64_t>* callsitePostCounter = nullptr;
 
     if (Num == 0)
     {
         MOV(X3, RCPU);
         const bool profiledFastStackLoad = compileFastPath && !store;
         const bool profiledFastStore = compileFastPath && store;
+        if (profileCallsite)
+        {
+            if (profiledFastStackLoad)
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPostTicks;
+            }
+            else if (profiledFastStore)
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePostTicks;
+            }
+            else if (store)
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePostTicks;
+            }
+            else
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPostTicks;
+            }
+        }
         int genericLoadTag = SlowBlockProfile_GenericLoad;
         int genericStoreTag = SlowBlockProfile_GenericStore;
         if (!compileFastPath)
@@ -780,6 +846,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             }
         }
         MOVI2R(W2, helperWordCount);
+        emitCallsitePhaseEnd(callsitePreCounter, 0);
+        emitCallsitePhaseStart(0);
         switch ((u32)store * 2 | NDS.ConsoleType)
         {
         case 0:
@@ -833,6 +901,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             }
             break;
         }
+        emitCallsitePhaseEnd(callsiteWrapCounter, 0);
+        emitCallsitePhaseStart(0);
     }
     else
     {
@@ -863,7 +933,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
             if (usermode && !regs[15] && reg >= 8 && reg < 15)
             {
-                LDR(INDEX_UNSIGNED, W3, SP, i * 8);
+                LDR(INDEX_UNSIGNED, W3, SP, dataStackOffset + i * 8);
                 MOVI2R(W1, reg - 8);
                 BL(WriteBanked);
                 if (!(reg == rn && skipLoadingRn))
@@ -885,7 +955,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 if (RegCache.LoadedRegs & (1 << *nextReg) && !(*nextReg == rn && skipLoadingRn))
                     second = MapReg(*nextReg);
 
-                LDP(INDEX_SIGNED, EncodeRegTo64(first), EncodeRegTo64(second), SP, i * 8);
+                LDP(INDEX_SIGNED, EncodeRegTo64(first), EncodeRegTo64(second), SP, dataStackOffset + i * 8);
 
                 if (first == W3)
                     SaveReg(reg, W3);
@@ -900,12 +970,12 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 if (!(reg == rn && skipLoadingRn))
                 {
                     ARM64Reg mapped = MapReg(reg);
-                    LDR(INDEX_UNSIGNED, mapped, SP, i * 8);
+                    LDR(INDEX_UNSIGNED, mapped, SP, dataStackOffset + i * 8);
                 }
             }
             else
             {
-                LDR(INDEX_UNSIGNED, W3, SP, i * 8);
+                LDR(INDEX_UNSIGNED, W3, SP, dataStackOffset + i * 8);
                 SaveReg(reg, W3);
             }
 
@@ -913,7 +983,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             i++;
         }
     }
-    ADD(SP, SP, ((regsCount + 1) & ~1) * 8);
+    emitCallsitePhaseEnd(callsitePostCounter, 0);
+    ADD(SP, SP, stackBytes);
 
     if (compileFastPath)
     {
