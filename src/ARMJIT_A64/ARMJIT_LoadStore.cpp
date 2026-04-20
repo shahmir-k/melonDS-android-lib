@@ -685,7 +685,74 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     const int stackBytes = ((regsCount + 1) & ~1) * 8 + profileScratchBytes;
     SUB(SP, SP, stackBytes);
-    emitCallsitePhaseStart(0);
+    u32 helperWordCount = regsCount;
+    const bool fixedFastDTCMHelper = Num == 0
+        && compileFastPath
+        && expectedTarget == ARMJIT_Memory::memregion_DTCM
+        && regsCount <= 4;
+    std::atomic<uint64_t>* callsitePreCounter = nullptr;
+    std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
+    std::atomic<uint64_t>* callsitePostCounter = nullptr;
+    std::atomic<uint64_t>* callsitePackCounter = nullptr;
+    std::atomic<uint64_t>* callsiteSaveCounter = nullptr;
+    std::atomic<uint64_t>* callsiteCallCounter = nullptr;
+    std::atomic<uint64_t>* callsiteRestoreCounter = nullptr;
+    std::atomic<uint64_t>* callsiteUnpackCounter = nullptr;
+    const bool profiledFastStackLoad = compileFastPath && !store;
+    const bool profiledFastStore = compileFastPath && store;
+
+    if (Num == 0)
+    {
+        if (profileCallsite)
+        {
+            if (profiledFastStackLoad)
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPostTicks;
+                callsitePackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPackTicks;
+                callsiteSaveCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackSaveTicks;
+                callsiteCallCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackCallTicks;
+                callsiteRestoreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackRestoreTicks;
+                callsiteUnpackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackUnpackTicks;
+            }
+            else if (profiledFastStore)
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePostTicks;
+                callsitePackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePackTicks;
+                callsiteSaveCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreSaveTicks;
+                callsiteCallCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreCallTicks;
+                callsiteRestoreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreRestoreTicks;
+                callsiteUnpackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreUnpackTicks;
+            }
+            else if (store)
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePostTicks;
+                callsitePackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePackTicks;
+                callsiteSaveCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreSaveTicks;
+                callsiteCallCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreCallTicks;
+                callsiteRestoreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreRestoreTicks;
+                callsiteUnpackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreUnpackTicks;
+            }
+            else
+            {
+                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPreTicks;
+                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadWrapTicks;
+                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPostTicks;
+                callsitePackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPackTicks;
+                callsiteSaveCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadSaveTicks;
+                callsiteCallCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadCallTicks;
+                callsiteRestoreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadRestoreTicks;
+                callsiteUnpackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadUnpackTicks;
+            }
+        }
+        emitCallsitePhaseStart(0);
+    }
+
     if (store)
     {
         if (usermode && (regs & BitSet16(0x7f00)))
@@ -741,54 +808,18 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             it++;
         }
     }
+    emitCallsitePhaseEnd(callsitePackCounter, 0);
+    emitCallsitePhaseStart(0);
 
     PushRegs(false, false, !compileFastPath);
 
     ADD(X1, SP, dataStackOffset);
-    u32 helperWordCount = regsCount;
-    const bool fixedFastDTCMHelper = Num == 0
-        && compileFastPath
-        && expectedTarget == ARMJIT_Memory::memregion_DTCM
-        && regsCount <= 4;
-    std::atomic<uint64_t>* callsitePreCounter = nullptr;
-    std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
-    std::atomic<uint64_t>* callsitePostCounter = nullptr;
-
     if (Num == 0)
     {
         if (fixedFastDTCMHelper)
             MOV(X2, RCPU);
         else
             MOV(X3, RCPU);
-        const bool profiledFastStackLoad = compileFastPath && !store;
-        const bool profiledFastStore = compileFastPath && store;
-        if (profileCallsite)
-        {
-            if (profiledFastStackLoad)
-            {
-                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPreTicks;
-                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackWrapTicks;
-                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStackPostTicks;
-            }
-            else if (profiledFastStore)
-            {
-                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePreTicks;
-                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStoreWrapTicks;
-                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteFastStorePostTicks;
-            }
-            else if (store)
-            {
-                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePreTicks;
-                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStoreWrapTicks;
-                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericStorePostTicks;
-            }
-            else
-            {
-                callsitePreCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPreTicks;
-                callsiteWrapCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadWrapTicks;
-                callsitePostCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadPostTicks;
-            }
-        }
         int genericLoadTag = SlowBlockProfile_GenericLoad;
         int genericStoreTag = SlowBlockProfile_GenericStore;
         if (!compileFastPath)
@@ -854,6 +885,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         }
         if (!fixedFastDTCMHelper)
             MOVI2R(W2, helperWordCount);
+        emitCallsitePhaseEnd(callsiteSaveCounter, 0);
         emitCallsitePhaseEnd(callsitePreCounter, 0);
         emitCallsitePhaseStart(0);
         switch ((u32)store * 2 | NDS.ConsoleType)
@@ -953,12 +985,14 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             }
             break;
         }
+        emitCallsitePhaseEnd(callsiteCallCounter, 0);
         emitCallsitePhaseEnd(callsiteWrapCounter, 0);
         emitCallsitePhaseStart(0);
     }
     else
     {
         MOVI2R(W2, helperWordCount);
+        emitCallsitePhaseEnd(callsiteSaveCounter, 0);
         switch ((u32)store * 2 | NDS.ConsoleType)
         {
         case 0: QuickCallFunction(X4, SlowBlockTransfer7<false, 0>); break;
@@ -966,9 +1000,12 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         case 2: QuickCallFunction(X4, SlowBlockTransfer7<true, 0>); break;
         case 3: QuickCallFunction(X4, SlowBlockTransfer7<true, 1>); break;
         }
+        emitCallsitePhaseEnd(callsiteCallCounter, 0);
     }
 
     PopRegs(false, false);
+    emitCallsitePhaseEnd(callsiteRestoreCounter, 0);
+    emitCallsitePhaseStart(0);
 
     if (!store)
     {
@@ -1035,6 +1072,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             i++;
         }
     }
+    emitCallsitePhaseEnd(callsiteUnpackCounter, 0);
     emitCallsitePhaseEnd(callsitePostCounter, 0);
     ADD(SP, SP, stackBytes);
 
