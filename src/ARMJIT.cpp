@@ -178,19 +178,43 @@ __attribute__((always_inline)) inline void CopyBlockWordsTiny4(u8* mem, u32 addr
     u32* words = reinterpret_cast<u32*>(&mem[addr]);
     if constexpr (Write)
     {
-        words[0] = static_cast<u32>(data[0]);
-        words[1] = static_cast<u32>(data[1]);
-        words[2] = static_cast<u32>(data[2]);
-        if (num == 4)
+        switch (num)
+        {
+        case 4:
             words[3] = static_cast<u32>(data[3]);
+            [[fallthrough]];
+        case 3:
+            words[2] = static_cast<u32>(data[2]);
+            [[fallthrough]];
+        case 2:
+            words[1] = static_cast<u32>(data[1]);
+            [[fallthrough]];
+        case 1:
+            words[0] = static_cast<u32>(data[0]);
+            break;
+        default:
+            break;
+        }
     }
     else
     {
-        data[0] = words[0];
-        data[1] = words[1];
-        data[2] = words[2];
-        if (num == 4)
+        switch (num)
+        {
+        case 4:
             data[3] = words[3];
+            [[fallthrough]];
+        case 3:
+            data[2] = words[2];
+            [[fallthrough]];
+        case 2:
+            data[1] = words[1];
+            [[fallthrough]];
+        case 1:
+            data[0] = words[0];
+            break;
+        default:
+            break;
+        }
     }
 }
 
@@ -456,9 +480,7 @@ static inline bool TryDirectDTCMBlockTransfer9(u32 addr, u64* data, u32 num, ARM
     if (bytes > 0x4000 - offset)
         return false;
 
-    if (num <= 2)
-        CopyBlockWordsTiny2<Write>(cpu->DTCM, offset, data, num);
-    else if (num <= 4)
+    if (num <= 4)
         CopyBlockWordsTiny4<Write>(cpu->DTCM, offset, data, num);
     else
         CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
@@ -624,9 +646,7 @@ static void SlowBlockTransfer9Impl(u32 addr, u64* data, u32 num, ARMv5* cpu)
             LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMSetupNs, LITE_PROFILE_NOW_NS() - dtcmSetupStart);
             const uint64_t bucketStart = LITE_PROFILE_NOW_NS();
 #endif
-            if (num <= 2)
-                CopyBlockWordsTiny2<Write>(cpu->DTCM, offset, data, num);
-            else if (num <= 4)
+            if (num <= 4)
                 CopyBlockWordsTiny4<Write>(cpu->DTCM, offset, data, num);
             else
                 CopyBlockWords<Write>(cpu->DTCM, offset, data, num);
@@ -867,9 +887,53 @@ void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMDirectCalls);
         LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMDirectNs, elapsed);
         if constexpr (Tag == SlowBlockProfile_FastStackLoad)
+        {
             LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
+            if (num <= 2)
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2_Ns, elapsed);
+            }
+            else if (num <= 4)
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_3_4);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_3_4_Ns, elapsed);
+            }
+            else if (num <= 8)
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_5_8);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_5_8_Ns, elapsed);
+            }
+            else
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_9P);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_9P_Ns, elapsed);
+            }
+        }
         else if constexpr (Tag == SlowBlockProfile_FastStore)
+        {
             LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
+            if (num <= 2)
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2_Ns, elapsed);
+            }
+            else if (num <= 4)
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_3_4);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_3_4_Ns, elapsed);
+            }
+            else if (num <= 8)
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_5_8);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_5_8_Ns, elapsed);
+            }
+            else
+            {
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_9P);
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_9P_Ns, elapsed);
+            }
+        }
 #endif
         return;
     }
