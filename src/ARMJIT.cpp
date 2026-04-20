@@ -564,6 +564,8 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         if (bytes <= 0x4000 - offset)
         {
 #if LITEV_PROFILE
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMCalls);
+            const uint64_t dtcmPathStart = LITE_PROFILE_NOW_NS();
             std::atomic<uint64_t>* dtcmBucketNs = nullptr;
             if constexpr (Write)
             {
@@ -612,6 +614,7 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 #if LITEV_PROFILE
             if (dtcmBucketNs)
                 LITE_PROFILE_ADD_VALUE(*dtcmBucketNs, LITE_PROFILE_NOW_NS() - bucketStart);
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMNs, LITE_PROFILE_NOW_NS() - dtcmPathStart);
 #endif
             return;
         }
@@ -621,7 +624,10 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         switch (addr & 0xFF000000)
         {
         case 0x02000000:
+        {
 #if LITEV_PROFILE
+            LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastMainRAMCalls);
+            const uint64_t mainPathStart = LITE_PROFILE_NOW_NS();
             if constexpr (Write)
             {
                 noteMainRAMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_1_2,
@@ -641,8 +647,14 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 #endif
             if (TryBlockTransferLinear<Write, 0, ARMJIT_Memory::memregion_MainRAM>(
                     nds.JIT, nds.MainRAM, nds.MainRAMMask, addr, data, num))
+            {
+#if LITEV_PROFILE
+                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastMainRAMNs, LITE_PROFILE_NOW_NS() - mainPathStart);
+#endif
                 return;
+            }
             break;
+        }
 
         case 0x03000000:
             if (nds.SWRAM_ARM9.Mem
@@ -653,6 +665,10 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
         }
     }
 
+#if LITEV_PROFILE
+    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFallbackLoopCalls);
+    const uint64_t fallbackLoopStart = LITE_PROFILE_NOW_NS();
+#endif
     for (u32 i = 0; i < num; i++)
     {
         if (Write)
@@ -661,6 +677,9 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
             data[i] = SlowRead9<u32, ConsoleType>(addr, cpu);
         addr += 4;
     }
+#if LITEV_PROFILE
+    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFallbackLoopNs, LITE_PROFILE_NOW_NS() - fallbackLoopStart);
+#endif
 }
 
 template <bool Write, int ConsoleType>

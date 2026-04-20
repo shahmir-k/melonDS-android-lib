@@ -126,6 +126,12 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockTransferCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockTransferReads{0};
     std::atomic<uint64_t> ARM9SlowBlockTransferWrites{0};
+    std::atomic<uint64_t> ARM9SlowBlockFastDTCMNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockFastMainRAMNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockFallbackLoopNs{0};
+    std::atomic<uint64_t> ARM9SlowBlockFastDTCMCalls{0};
+    std::atomic<uint64_t> ARM9SlowBlockFastMainRAMCalls{0};
+    std::atomic<uint64_t> ARM9SlowBlockFallbackLoopCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockReadDTCM{0};
     std::atomic<uint64_t> ARM9SlowBlockReadMainRAM{0};
     std::atomic<uint64_t> ARM9SlowBlockReadSharedWRAM{0};
@@ -385,6 +391,12 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockTransferReads.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockTransferWrites.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFastDTCMNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFastMainRAMNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFallbackLoopNs.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFastDTCMCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFastMainRAMCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockFallbackLoopCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockReadDTCM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockReadMainRAM.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockReadSharedWRAM.store(0, std::memory_order_relaxed);
@@ -627,6 +639,12 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockTransferCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockTransferReads.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockTransferWrites.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFastDTCMNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFastMainRAMNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFallbackLoopNs.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFastDTCMCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFastMainRAMCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockFallbackLoopCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockReadDTCM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockReadMainRAM.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockReadSharedWRAM.store(0, std::memory_order_relaxed);
@@ -909,6 +927,12 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockTransferCalls, gFrame.ARM9SlowBlockTransferCalls);
     MergeCounter(gWindow.ARM9SlowBlockTransferReads, gFrame.ARM9SlowBlockTransferReads);
     MergeCounter(gWindow.ARM9SlowBlockTransferWrites, gFrame.ARM9SlowBlockTransferWrites);
+    MergeCounter(gWindow.ARM9SlowBlockFastDTCMNs, gFrame.ARM9SlowBlockFastDTCMNs);
+    MergeCounter(gWindow.ARM9SlowBlockFastMainRAMNs, gFrame.ARM9SlowBlockFastMainRAMNs);
+    MergeCounter(gWindow.ARM9SlowBlockFallbackLoopNs, gFrame.ARM9SlowBlockFallbackLoopNs);
+    MergeCounter(gWindow.ARM9SlowBlockFastDTCMCalls, gFrame.ARM9SlowBlockFastDTCMCalls);
+    MergeCounter(gWindow.ARM9SlowBlockFastMainRAMCalls, gFrame.ARM9SlowBlockFastMainRAMCalls);
+    MergeCounter(gWindow.ARM9SlowBlockFallbackLoopCalls, gFrame.ARM9SlowBlockFallbackLoopCalls);
     MergeCounter(gWindow.ARM9SlowBlockReadDTCM, gFrame.ARM9SlowBlockReadDTCM);
     MergeCounter(gWindow.ARM9SlowBlockReadMainRAM, gFrame.ARM9SlowBlockReadMainRAM);
     MergeCounter(gWindow.ARM9SlowBlockReadSharedWRAM, gFrame.ARM9SlowBlockReadSharedWRAM);
@@ -1190,6 +1214,15 @@ inline void EndFrame()
         NsPerFrame(gWindow.ARM9SlowBlockWriteDTCM_5_8_Ns),
         NsPerFrame(gWindow.ARM9SlowBlockWriteDTCM_9_16_Ns),
         NsPerFrame(gWindow.ARM9SlowBlockWriteDTCM_17P_Ns));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] slowblock_paths dtcm=%.3fms/%.1f main=%.3fms/%.1f fallback=%.3fms/%.1f",
+        NsPerFrame(gWindow.ARM9SlowBlockFastDTCMNs),
+        CountPerFrame(gWindow.ARM9SlowBlockFastDTCMCalls),
+        NsPerFrame(gWindow.ARM9SlowBlockFastMainRAMNs),
+        CountPerFrame(gWindow.ARM9SlowBlockFastMainRAMCalls),
+        NsPerFrame(gWindow.ARM9SlowBlockFallbackLoopNs),
+        CountPerFrame(gWindow.ARM9SlowBlockFallbackLoopCalls));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] arm9_chain miss_stop=%.1f miss_budget=%.1f miss_target=%.1f miss_hle=%.1f miss_setup=%.1f miss_lookup=%.1f",
