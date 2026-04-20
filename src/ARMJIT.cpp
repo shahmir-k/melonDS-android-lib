@@ -721,6 +721,55 @@ static inline void NoteSlowBlockSource()
     case SlowBlockProfile_FastStore:
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStoreCalls);
         break;
+    case SlowBlockProfile_GenericLoadFastmemOff:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadFastmemOff);
+        break;
+    case SlowBlockProfile_GenericLoadUsermode:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadUsermode);
+        break;
+    case SlowBlockProfile_GenericLoadCondIncompatible:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCondIncompatible);
+        break;
+    case SlowBlockProfile_GenericLoadNonStackDTCM:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadNonFastPathShape);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadTargetDTCM);
+        break;
+    case SlowBlockProfile_GenericLoadNonStackMainRAM:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadNonFastPathShape);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadTargetMainRAM);
+        break;
+    case SlowBlockProfile_GenericLoadNonStackSharedWRAM:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadNonFastPathShape);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadTargetSharedWRAM);
+        break;
+    case SlowBlockProfile_GenericLoadNonStackIO:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadNonFastPathShape);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadTargetIO);
+        break;
+    case SlowBlockProfile_GenericLoadNonStackOther:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadNonFastPathShape);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericLoadTargetOther);
+        break;
+    case SlowBlockProfile_GenericStoreFastmemOff:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreFastmemOff);
+        break;
+    case SlowBlockProfile_GenericStoreUsermode:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreUsermode);
+        break;
+    case SlowBlockProfile_GenericStoreCondIncompatible:
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreCalls);
+        LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockGenericStoreCondIncompatible);
+        break;
     }
 #endif
 }
@@ -798,6 +847,17 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_GenericStore>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_FastStackLoad>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_FastStore>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadFastmemOff>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadUsermode>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadCondIncompatible>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadNonStackDTCM>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadNonStackMainRAM>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadNonStackSharedWRAM>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadNonStackIO>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<false, consoleType, SlowBlockProfile_GenericLoadNonStackOther>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_GenericStoreFastmemOff>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_GenericStoreUsermode>(u32, u64*, u32, ARMv5*); \
+    template void SlowBlockTransfer9Profiled<true, consoleType, SlowBlockProfile_GenericStoreCondIncompatible>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9FastDTCMProfiled<false, consoleType, SlowBlockProfile_FastStackLoad>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer9FastDTCMProfiled<true, consoleType, SlowBlockProfile_FastStore>(u32, u64*, u32, ARMv5*); \
     template void SlowBlockTransfer7<false, consoleType>(u32 addr, u64* data, u32 num); \

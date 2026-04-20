@@ -106,6 +106,17 @@ enum SlowBlockProfileTag
     SlowBlockProfile_GenericStore = 1,
     SlowBlockProfile_FastStackLoad = 2,
     SlowBlockProfile_FastStore = 3,
+    SlowBlockProfile_GenericLoadFastmemOff = 4,
+    SlowBlockProfile_GenericLoadUsermode = 5,
+    SlowBlockProfile_GenericLoadCondIncompatible = 6,
+    SlowBlockProfile_GenericLoadNonStackDTCM = 7,
+    SlowBlockProfile_GenericLoadNonStackMainRAM = 8,
+    SlowBlockProfile_GenericLoadNonStackSharedWRAM = 9,
+    SlowBlockProfile_GenericLoadNonStackIO = 10,
+    SlowBlockProfile_GenericLoadNonStackOther = 11,
+    SlowBlockProfile_GenericStoreFastmemOff = 12,
+    SlowBlockProfile_GenericStoreUsermode = 13,
+    SlowBlockProfile_GenericStoreCondIncompatible = 14,
 };
 
 template <bool Write, int ConsoleType> void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu);

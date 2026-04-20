@@ -130,6 +130,18 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9SlowBlockGenericStoreCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStackLoadCalls{0};
     std::atomic<uint64_t> ARM9SlowBlockFastStoreCalls{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadFastmemOff{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadUsermode{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadNonFastPathShape{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadCondIncompatible{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetDTCM{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetMainRAM{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetSharedWRAM{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetIO{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericLoadTargetOther{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericStoreFastmemOff{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericStoreUsermode{0};
+    std::atomic<uint64_t> ARM9SlowBlockGenericStoreCondIncompatible{0};
     std::atomic<uint64_t> ARM9SlowBlockPrePathNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastDTCMSetupNs{0};
     std::atomic<uint64_t> ARM9SlowBlockFastMainRAMSetupNs{0};
@@ -402,6 +414,18 @@ inline void ResetFrame()
     gFrame.ARM9SlowBlockGenericStoreCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStackLoadCalls.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastStoreCalls.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadFastmemOff.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadUsermode.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadNonFastPathShape.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadCondIncompatible.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadTargetDTCM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadTargetMainRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadTargetSharedWRAM.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadTargetIO.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericLoadTargetOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericStoreFastmemOff.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericStoreUsermode.store(0, std::memory_order_relaxed);
+    gFrame.ARM9SlowBlockGenericStoreCondIncompatible.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockPrePathNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastDTCMSetupNs.store(0, std::memory_order_relaxed);
     gFrame.ARM9SlowBlockFastMainRAMSetupNs.store(0, std::memory_order_relaxed);
@@ -657,6 +681,18 @@ inline void ResetWindow()
     gWindow.ARM9SlowBlockGenericStoreCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStackLoadCalls.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastStoreCalls.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadFastmemOff.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadUsermode.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadNonFastPathShape.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadCondIncompatible.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadTargetDTCM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadTargetMainRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadTargetSharedWRAM.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadTargetIO.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericLoadTargetOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericStoreFastmemOff.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericStoreUsermode.store(0, std::memory_order_relaxed);
+    gWindow.ARM9SlowBlockGenericStoreCondIncompatible.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockPrePathNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastDTCMSetupNs.store(0, std::memory_order_relaxed);
     gWindow.ARM9SlowBlockFastMainRAMSetupNs.store(0, std::memory_order_relaxed);
@@ -952,6 +988,18 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9SlowBlockGenericStoreCalls, gFrame.ARM9SlowBlockGenericStoreCalls);
     MergeCounter(gWindow.ARM9SlowBlockFastStackLoadCalls, gFrame.ARM9SlowBlockFastStackLoadCalls);
     MergeCounter(gWindow.ARM9SlowBlockFastStoreCalls, gFrame.ARM9SlowBlockFastStoreCalls);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadFastmemOff, gFrame.ARM9SlowBlockGenericLoadFastmemOff);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadUsermode, gFrame.ARM9SlowBlockGenericLoadUsermode);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadNonFastPathShape, gFrame.ARM9SlowBlockGenericLoadNonFastPathShape);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadCondIncompatible, gFrame.ARM9SlowBlockGenericLoadCondIncompatible);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetDTCM, gFrame.ARM9SlowBlockGenericLoadTargetDTCM);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetMainRAM, gFrame.ARM9SlowBlockGenericLoadTargetMainRAM);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetSharedWRAM, gFrame.ARM9SlowBlockGenericLoadTargetSharedWRAM);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetIO, gFrame.ARM9SlowBlockGenericLoadTargetIO);
+    MergeCounter(gWindow.ARM9SlowBlockGenericLoadTargetOther, gFrame.ARM9SlowBlockGenericLoadTargetOther);
+    MergeCounter(gWindow.ARM9SlowBlockGenericStoreFastmemOff, gFrame.ARM9SlowBlockGenericStoreFastmemOff);
+    MergeCounter(gWindow.ARM9SlowBlockGenericStoreUsermode, gFrame.ARM9SlowBlockGenericStoreUsermode);
+    MergeCounter(gWindow.ARM9SlowBlockGenericStoreCondIncompatible, gFrame.ARM9SlowBlockGenericStoreCondIncompatible);
     MergeCounter(gWindow.ARM9SlowBlockPrePathNs, gFrame.ARM9SlowBlockPrePathNs);
     MergeCounter(gWindow.ARM9SlowBlockFastDTCMSetupNs, gFrame.ARM9SlowBlockFastDTCMSetupNs);
     MergeCounter(gWindow.ARM9SlowBlockFastMainRAMSetupNs, gFrame.ARM9SlowBlockFastMainRAMSetupNs);
@@ -1249,6 +1297,24 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockGenericStoreCalls),
         CountPerFrame(gWindow.ARM9SlowBlockFastStackLoadCalls),
         CountPerFrame(gWindow.ARM9SlowBlockFastStoreCalls));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] slowblock_generic_load why fastmem_off=%.1f usermode=%.1f non_fast_shape=%.1f cond_incompat=%.1f target_dtcm=%.1f target_main=%.1f target_shared=%.1f target_io=%.1f target_other=%.1f",
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadFastmemOff),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadUsermode),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadNonFastPathShape),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadCondIncompatible),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetDTCM),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetMainRAM),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetSharedWRAM),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetIO),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericLoadTargetOther));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] slowblock_generic_store why fastmem_off=%.1f usermode=%.1f cond_incompat=%.1f",
+        CountPerFrame(gWindow.ARM9SlowBlockGenericStoreFastmemOff),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericStoreUsermode),
+        CountPerFrame(gWindow.ARM9SlowBlockGenericStoreCondIncompatible));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] slowblock_overhead pre=%.3fms dtcm_setup=%.3fms main_setup=%.3fms",

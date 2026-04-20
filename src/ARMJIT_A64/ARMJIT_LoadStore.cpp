@@ -21,6 +21,7 @@
 #include "../ARMJIT.h"
 
 #include "../ARMJIT_Memory.h"
+#include "../LiteProfile.h"
 #include "../NDS.h"
 
 using namespace Arm64Gen;
@@ -498,10 +499,15 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         ? NDS.JIT.Memory.ClassifyAddress9(CurInstr.DataRegion)
         : NDS.JIT.Memory.ClassifyAddress7(CurInstr.DataRegion);
 
-    bool compileFastPath = NDS.JIT.FastMemoryEnabled()
+    const bool fastMemoryEnabled = NDS.JIT.FastMemoryEnabled();
+    const bool stackDTCMLoad = Num == 0 && !store && rn == 13 && expectedTarget == ARMJIT_Memory::memregion_DTCM;
+    const bool loadStoreShapeAllowed = store || stackDTCMLoad;
+    const bool condCompatible = CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget);
+
+    bool compileFastPath = fastMemoryEnabled
         && !usermode
-        && (store || (Num == 0 && !store && rn == 13 && expectedTarget == ARMJIT_Memory::memregion_DTCM))
-        && (CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget));
+        && loadStoreShapeAllowed
+        && condCompatible;
 
     {
         s32 offset = decrement
@@ -685,27 +691,103 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         MOV(X3, RCPU);
         const bool profiledFastStackLoad = compileFastPath && !store;
         const bool profiledFastStore = compileFastPath && store;
+        int genericLoadTag = SlowBlockProfile_GenericLoad;
+        int genericStoreTag = SlowBlockProfile_GenericStore;
+        if (!compileFastPath)
+        {
+            if (store)
+            {
+                if (!fastMemoryEnabled)
+                    genericStoreTag = SlowBlockProfile_GenericStoreFastmemOff;
+                else if (usermode)
+                    genericStoreTag = SlowBlockProfile_GenericStoreUsermode;
+                else if (!condCompatible)
+                    genericStoreTag = SlowBlockProfile_GenericStoreCondIncompatible;
+            }
+            else
+            {
+                if (!fastMemoryEnabled)
+                    genericLoadTag = SlowBlockProfile_GenericLoadFastmemOff;
+                else if (usermode)
+                    genericLoadTag = SlowBlockProfile_GenericLoadUsermode;
+                else if (!loadStoreShapeAllowed)
+                {
+                    switch (expectedTarget)
+                    {
+                    case ARMJIT_Memory::memregion_DTCM:
+                        genericLoadTag = SlowBlockProfile_GenericLoadNonStackDTCM;
+                        break;
+                    case ARMJIT_Memory::memregion_MainRAM:
+                        genericLoadTag = SlowBlockProfile_GenericLoadNonStackMainRAM;
+                        break;
+                    case ARMJIT_Memory::memregion_SharedWRAM:
+                        genericLoadTag = SlowBlockProfile_GenericLoadNonStackSharedWRAM;
+                        break;
+                    case ARMJIT_Memory::memregion_IO9:
+                        genericLoadTag = SlowBlockProfile_GenericLoadNonStackIO;
+                        break;
+                    default:
+                        genericLoadTag = SlowBlockProfile_GenericLoadNonStackOther;
+                        break;
+                    }
+                }
+                else if (!condCompatible)
+                {
+                    genericLoadTag = SlowBlockProfile_GenericLoadCondIncompatible;
+                }
+            }
+        }
         switch ((u32)store * 2 | NDS.ConsoleType)
         {
         case 0:
-            QuickCallFunction(X4, profiledFastStackLoad
-                ? SlowBlockTransfer9FastDTCMProfiled<false, 0, SlowBlockProfile_FastStackLoad>
-                : SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoad>);
+            if (profiledFastStackLoad) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 0, SlowBlockProfile_FastStackLoad>);
+            else switch (genericLoadTag)
+            {
+            case SlowBlockProfile_GenericLoadFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadFastmemOff>); break;
+            case SlowBlockProfile_GenericLoadUsermode: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadUsermode>); break;
+            case SlowBlockProfile_GenericLoadCondIncompatible: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadCondIncompatible>); break;
+            case SlowBlockProfile_GenericLoadNonStackDTCM: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadNonStackDTCM>); break;
+            case SlowBlockProfile_GenericLoadNonStackMainRAM: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadNonStackMainRAM>); break;
+            case SlowBlockProfile_GenericLoadNonStackSharedWRAM: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadNonStackSharedWRAM>); break;
+            case SlowBlockProfile_GenericLoadNonStackIO: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadNonStackIO>); break;
+            case SlowBlockProfile_GenericLoadNonStackOther: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoadNonStackOther>); break;
+            default: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 0, SlowBlockProfile_GenericLoad>); break;
+            }
             break;
         case 1:
-            QuickCallFunction(X4, profiledFastStackLoad
-                ? SlowBlockTransfer9FastDTCMProfiled<false, 1, SlowBlockProfile_FastStackLoad>
-                : SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoad>);
+            if (profiledFastStackLoad) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<false, 1, SlowBlockProfile_FastStackLoad>);
+            else switch (genericLoadTag)
+            {
+            case SlowBlockProfile_GenericLoadFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadFastmemOff>); break;
+            case SlowBlockProfile_GenericLoadUsermode: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadUsermode>); break;
+            case SlowBlockProfile_GenericLoadCondIncompatible: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadCondIncompatible>); break;
+            case SlowBlockProfile_GenericLoadNonStackDTCM: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadNonStackDTCM>); break;
+            case SlowBlockProfile_GenericLoadNonStackMainRAM: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadNonStackMainRAM>); break;
+            case SlowBlockProfile_GenericLoadNonStackSharedWRAM: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadNonStackSharedWRAM>); break;
+            case SlowBlockProfile_GenericLoadNonStackIO: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadNonStackIO>); break;
+            case SlowBlockProfile_GenericLoadNonStackOther: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoadNonStackOther>); break;
+            default: QuickCallFunction(X4, SlowBlockTransfer9Profiled<false, 1, SlowBlockProfile_GenericLoad>); break;
+            }
             break;
         case 2:
-            QuickCallFunction(X4, profiledFastStore
-                ? SlowBlockTransfer9FastDTCMProfiled<true, 0, SlowBlockProfile_FastStore>
-                : SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStore>);
+            if (profiledFastStore) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 0, SlowBlockProfile_FastStore>);
+            else switch (genericStoreTag)
+            {
+            case SlowBlockProfile_GenericStoreFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStoreFastmemOff>); break;
+            case SlowBlockProfile_GenericStoreUsermode: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStoreUsermode>); break;
+            case SlowBlockProfile_GenericStoreCondIncompatible: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStoreCondIncompatible>); break;
+            default: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 0, SlowBlockProfile_GenericStore>); break;
+            }
             break;
         case 3:
-            QuickCallFunction(X4, profiledFastStore
-                ? SlowBlockTransfer9FastDTCMProfiled<true, 1, SlowBlockProfile_FastStore>
-                : SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStore>);
+            if (profiledFastStore) QuickCallFunction(X4, SlowBlockTransfer9FastDTCMProfiled<true, 1, SlowBlockProfile_FastStore>);
+            else switch (genericStoreTag)
+            {
+            case SlowBlockProfile_GenericStoreFastmemOff: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStoreFastmemOff>); break;
+            case SlowBlockProfile_GenericStoreUsermode: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStoreUsermode>); break;
+            case SlowBlockProfile_GenericStoreCondIncompatible: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStoreCondIncompatible>); break;
+            default: QuickCallFunction(X4, SlowBlockTransfer9Profiled<true, 1, SlowBlockProfile_GenericStore>); break;
+            }
             break;
         }
     }
