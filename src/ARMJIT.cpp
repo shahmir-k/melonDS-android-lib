@@ -455,8 +455,10 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
     LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
     addr &= ~0x3;
     auto& nds = cpu->NDS;
+    const u32 bytes = num * sizeof(u32);
 
 #if LITEV_PROFILE
+    const uint64_t prePathStart = LITE_PROFILE_NOW_NS();
     auto noteRegion = [&](std::atomic<uint64_t>& dtcm,
                           std::atomic<uint64_t>& main,
                           std::atomic<uint64_t>& shared,
@@ -543,11 +545,12 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
             LiteProfile::gFrame.ARM9SlowBlockReadIO,
             LiteProfile::gFrame.ARM9SlowBlockReadOther);
     }
+
+    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockPrePathNs, LITE_PROFILE_NOW_NS() - prePathStart);
 #endif
 
     if (addr < cpu->ITCMSize)
     {
-        u32 bytes = num * sizeof(u32);
         u32 offset = addr & 0x7FFF;
         if (bytes <= cpu->ITCMSize - addr)
         {
@@ -560,12 +563,12 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
     else if ((addr & cpu->DTCMMask) == cpu->DTCMBase)
     {
         u32 offset = addr & 0x3FFF;
-        u32 bytes = num * sizeof(u32);
         if (bytes <= 0x4000 - offset)
         {
 #if LITEV_PROFILE
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMCalls);
             const uint64_t dtcmPathStart = LITE_PROFILE_NOW_NS();
+            const uint64_t dtcmSetupStart = dtcmPathStart;
             std::atomic<uint64_t>* dtcmBucketNs = nullptr;
             if constexpr (Write)
             {
@@ -603,6 +606,7 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
                 else
                     dtcmBucketNs = &LiteProfile::gFrame.ARM9SlowBlockReadDTCM_17P_Ns;
             }
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMSetupNs, LITE_PROFILE_NOW_NS() - dtcmSetupStart);
             const uint64_t bucketStart = LITE_PROFILE_NOW_NS();
 #endif
             if (num <= 2)
@@ -628,6 +632,7 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
 #if LITEV_PROFILE
             LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastMainRAMCalls);
             const uint64_t mainPathStart = LITE_PROFILE_NOW_NS();
+            const uint64_t mainSetupStart = mainPathStart;
             if constexpr (Write)
             {
                 noteMainRAMSizeBucket(LiteProfile::gFrame.ARM9SlowBlockWriteMainRAM_1_2,
@@ -644,6 +649,7 @@ void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu)
                     LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_9_16,
                     LiteProfile::gFrame.ARM9SlowBlockReadMainRAM_17P);
             }
+            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastMainRAMSetupNs, LITE_PROFILE_NOW_NS() - mainSetupStart);
 #endif
             if (TryBlockTransferLinear<Write, 0, ARMJIT_Memory::memregion_MainRAM>(
                     nds.JIT, nds.MainRAM, nds.MainRAMMask, addr, data, num))
