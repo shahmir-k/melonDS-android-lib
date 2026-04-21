@@ -533,6 +533,10 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         && !usermode
         && loadStoreShapeAllowed
         && condCompatible;
+    const bool fixedFastDTCMHelper = Num == 0
+        && compileFastPath
+        && expectedTarget == ARMJIT_Memory::memregion_DTCM
+        && regsCount <= 4;
 
 #if LITEV_PROFILE
     const bool profileCallsite = Num == 0;
@@ -581,6 +585,8 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             MOV(W0, MapReg(rn));
     }
 
+    bool emittedEarlyInlineFastDTCM = false;
+    FixupBranch earlyInlineFastDTCMDone {};
     u8* patchFunc;
     if (compileFastPath)
     {
@@ -682,6 +688,52 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         MRS(X16, FIELD_NZCV);
         STR(INDEX_UNSIGNED, X16, SP, 0);
         ABI_PushRegisters(BitSet32({W4, W5, W6, W7, W16, W17, W30}));
+
+        if (fixedFastDTCMHelper)
+        {
+            ANDI2R(W6, W0, ~3);
+            LDR(INDEX_UNSIGNED, W5, RCPU, offsetof(ARMv5, DTCMMask));
+            AND(W5, W6, W5);
+            LDR(INDEX_UNSIGNED, W7, RCPU, offsetof(ARMv5, DTCMBase));
+            CMP(W5, W7);
+            FixupBranch fallbackRegion = B(CC_NEQ);
+
+            ANDI2R(W6, W6, 0x3FFF);
+            CMPI2R(W6, 0x4000 - regsCount * sizeof(u32), W5);
+            FixupBranch fallbackBounds = B(CC_HI);
+
+            MOVP2R(X7, static_cast<ARMv5*>(CurCPU)->DTCM);
+            ADD(X7, X7, X6);
+
+            int directWord = 0;
+            for (int reg : regs)
+            {
+                if (store)
+                {
+                    ARM64Reg src = W5;
+                    if (RegCache.LoadedRegs & (1 << reg))
+                        src = MapReg(reg);
+                    else
+                        LoadReg(reg, W5);
+                    STR(INDEX_UNSIGNED, src, X7, directWord * sizeof(u32));
+                }
+                else if (!(reg == rn && skipLoadingRn))
+                {
+                    ARM64Reg dst = W5;
+                    if (RegCache.LoadedRegs & (1 << reg))
+                        dst = MapReg(reg);
+                    LDR(INDEX_UNSIGNED, dst, X7, directWord * sizeof(u32));
+                    if (!(RegCache.LoadedRegs & (1 << reg)))
+                        SaveReg(reg, W5);
+                }
+                directWord++;
+            }
+
+            earlyInlineFastDTCMDone = B();
+            SetJumpTarget(fallbackRegion);
+            SetJumpTarget(fallbackBounds);
+            emittedEarlyInlineFastDTCM = true;
+        }
     }
 
     int i = 0;
@@ -689,10 +741,6 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     const int stackBytes = ((regsCount + 1) & ~1) * 8 + profileScratchBytes;
     SUB(SP, SP, stackBytes);
     u32 helperWordCount = regsCount;
-    const bool fixedFastDTCMHelper = Num == 0
-        && compileFastPath
-        && expectedTarget == ARMJIT_Memory::memregion_DTCM
-        && regsCount <= 4;
 #if LITEV_PROFILE
     std::atomic<uint64_t>* callsitePreCounter = nullptr;
     std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
@@ -1093,6 +1141,9 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     emitCallsitePhaseEnd(callsiteUnpackCounter, 0);
     emitCallsitePhaseEnd(callsitePostCounter, 0);
     ADD(SP, SP, stackBytes);
+
+    if (emittedEarlyInlineFastDTCM)
+        SetJumpTarget(earlyInlineFastDTCMDone);
 
     if (compileFastPath)
     {
