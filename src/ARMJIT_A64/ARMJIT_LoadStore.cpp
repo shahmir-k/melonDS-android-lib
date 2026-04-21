@@ -533,6 +533,9 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         && !usermode
         && loadStoreShapeAllowed
         && condCompatible;
+    const bool inlineFastDTCMBlock = Num == 0
+        && compileFastPath
+        && expectedTarget == ARMJIT_Memory::memregion_DTCM;
     const bool fixedFastDTCMHelper = Num == 0
         && compileFastPath
         && expectedTarget == ARMJIT_Memory::memregion_DTCM
@@ -689,7 +692,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         STR(INDEX_UNSIGNED, X16, SP, 0);
         ABI_PushRegisters(BitSet32({W4, W5, W6, W7, W16, W17, W30}));
 
-        if (fixedFastDTCMHelper)
+        if (inlineFastDTCMBlock)
         {
             ANDI2R(W6, W0, ~3);
             LDR(INDEX_UNSIGNED, W5, RCPU, offsetof(ARMv5, DTCMMask));
