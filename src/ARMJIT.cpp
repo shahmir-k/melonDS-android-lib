@@ -997,73 +997,53 @@ void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
 template <bool Write, int ConsoleType, int Tag>
 void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
 {
-    const uint64_t totalStart = LITE_PROFILE_NOW_NS();
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
     if constexpr (Write)
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
     else
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
-    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
     NoteSlowBlockSource<Tag>();
-    const uint64_t fastPathStart = LITE_PROFILE_NOW_NS();
 
     if (TryDirectDTCMBlockTransfer9<Write>(addr, data, num, cpu))
     {
 #if LITEV_PROFILE
-        const uint64_t totalElapsed = LITE_PROFILE_NOW_NS() - totalStart;
-        const uint64_t elapsed = LITE_PROFILE_NOW_NS() - fastPathStart;
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMDirectCalls);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMDirectNs, elapsed);
         if constexpr (Tag == SlowBlockProfile_FastStackLoad)
         {
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadTotalNs, totalElapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadDirectNs, elapsed);
             if (num <= 2)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2_Ns, elapsed);
             }
             else if (num <= 4)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_3_4);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_3_4_Ns, elapsed);
             }
             else if (num <= 8)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_5_8);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_5_8_Ns, elapsed);
             }
             else
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_9P);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_9P_Ns, elapsed);
             }
         }
         else if constexpr (Tag == SlowBlockProfile_FastStore)
         {
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreTotalNs, totalElapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreDirectNs, elapsed);
             if (num <= 2)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2_Ns, elapsed);
             }
             else if (num <= 4)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_3_4);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_3_4_Ns, elapsed);
             }
             else if (num <= 8)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_5_8);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_5_8_Ns, elapsed);
             }
             else
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_9P);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_9P_Ns, elapsed);
             }
         }
 #endif
@@ -1072,96 +1052,61 @@ void SlowBlockTransfer9FastDTCMProfiled(u32 addr, u64* data, u32 num, ARMv5* cpu
 
     SlowBlockTransfer9Impl<Write, ConsoleType>(addr, data, num, cpu);
 #if LITEV_PROFILE
-    const uint64_t totalElapsed = LITE_PROFILE_NOW_NS() - totalStart;
-    const uint64_t elapsed = LITE_PROFILE_NOW_NS() - fastPathStart;
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMFallbackCalls);
-    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMFallbackNs, elapsed);
-    if constexpr (Tag == SlowBlockProfile_FastStackLoad)
-    {
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadTotalNs, totalElapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadFallbackNs, elapsed);
-    }
-    else if constexpr (Tag == SlowBlockProfile_FastStore)
-    {
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreTotalNs, totalElapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreFallbackNs, elapsed);
-    }
 #endif
 }
 
 template <bool Write, int ConsoleType, int Tag, u32 FixedNum>
 void SlowBlockTransfer9FastDTCMFixedProfiled(u32 addr, u64* data, ARMv5* cpu)
 {
-    const uint64_t totalStart = LITE_PROFILE_NOW_NS();
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferCalls);
     if constexpr (Write)
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferWrites);
     else
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockTransferReads);
-    LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9SlowBlockTransferNs);
     NoteSlowBlockSource<Tag>();
-    const uint64_t fastPathStart = LITE_PROFILE_NOW_NS();
 
     constexpr u32 num = FixedNum;
     if (TryDirectDTCMBlockTransfer9<Write>(addr, data, num, cpu))
     {
 #if LITEV_PROFILE
-        const uint64_t totalElapsed = LITE_PROFILE_NOW_NS() - totalStart;
-        const uint64_t elapsed = LITE_PROFILE_NOW_NS() - fastPathStart;
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMDirectCalls);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMDirectNs, elapsed);
         if constexpr (Tag == SlowBlockProfile_FastStackLoad)
         {
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadTotalNs, totalElapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadDirectNs, elapsed);
             if (num <= 2)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_1_2_Ns, elapsed);
             }
             else if (num <= 4)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_3_4);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_3_4_Ns, elapsed);
             }
             else if (num <= 8)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_5_8);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_5_8_Ns, elapsed);
             }
             else
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_9P);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoad_9P_Ns, elapsed);
             }
         }
         else if constexpr (Tag == SlowBlockProfile_FastStore)
         {
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreTotalNs, totalElapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
-            LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreDirectNs, elapsed);
             if (num <= 2)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_1_2_Ns, elapsed);
             }
             else if (num <= 4)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_3_4);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_3_4_Ns, elapsed);
             }
             else if (num <= 8)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_5_8);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_5_8_Ns, elapsed);
             }
             else
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastStore_9P);
-                LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStore_9P_Ns, elapsed);
             }
         }
 #endif
@@ -1170,22 +1115,7 @@ void SlowBlockTransfer9FastDTCMFixedProfiled(u32 addr, u64* data, ARMv5* cpu)
 
     SlowBlockTransfer9Impl<Write, ConsoleType>(addr, data, num, cpu);
 #if LITEV_PROFILE
-    const uint64_t totalElapsed = LITE_PROFILE_NOW_NS() - totalStart;
-    const uint64_t elapsed = LITE_PROFILE_NOW_NS() - fastPathStart;
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowBlockFastDTCMFallbackCalls);
-    LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastDTCMFallbackNs, elapsed);
-    if constexpr (Tag == SlowBlockProfile_FastStackLoad)
-    {
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadTotalNs, totalElapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadNs, elapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStackLoadFallbackNs, elapsed);
-    }
-    else if constexpr (Tag == SlowBlockProfile_FastStore)
-    {
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreTotalNs, totalElapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreNs, elapsed);
-        LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowBlockFastStoreFallbackNs, elapsed);
-    }
 #endif
 }
 

@@ -1193,11 +1193,21 @@ inline double CountPerFrame(const std::atomic<uint64_t>& counter)
            static_cast<double>(kLogEveryFrames);
 }
 
-inline double TicksPerFrameToMs(const std::atomic<uint64_t>& counter)
+inline uint64_t CounterValue(const std::atomic<uint64_t>& counter)
 {
-    return (static_cast<double>(counter.load(std::memory_order_relaxed)) /
+    return counter.load(std::memory_order_relaxed);
+}
+
+inline double TicksValuePerFrameToMs(uint64_t ticks)
+{
+    return (static_cast<double>(ticks) /
             static_cast<double>(kLogEveryFrames) * 1000.0) /
            static_cast<double>(CounterFreqHz());
+}
+
+inline double TicksPerFrameToMs(const std::atomic<uint64_t>& counter)
+{
+    return TicksValuePerFrameToMs(CounterValue(counter));
 }
 
 inline double Percent(uint64_t num, uint64_t den)
@@ -1598,6 +1608,27 @@ inline void EndFrame()
     const uint64_t textMisses = gWindow.TextBGLineCacheMisses.load(std::memory_order_relaxed);
     const uint64_t spriteBinHits = gWindow.SpriteBinHits.load(std::memory_order_relaxed);
     const uint64_t spriteBinMisses = gWindow.SpriteBinMisses.load(std::memory_order_relaxed);
+    const uint64_t fastStackCallsiteTicks =
+        CounterValue(gWindow.ARM9SlowBlockCallsiteFastStackPreTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteFastStackWrapTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteFastStackPostTicks);
+    const uint64_t fastStoreCallsiteTicks =
+        CounterValue(gWindow.ARM9SlowBlockCallsiteFastStorePreTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteFastStoreWrapTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteFastStorePostTicks);
+    const uint64_t genericLoadCallsiteTicks =
+        CounterValue(gWindow.ARM9SlowBlockCallsiteGenericLoadPreTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteGenericLoadWrapTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteGenericLoadPostTicks);
+    const uint64_t genericStoreCallsiteTicks =
+        CounterValue(gWindow.ARM9SlowBlockCallsiteGenericStorePreTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteGenericStoreWrapTicks) +
+        CounterValue(gWindow.ARM9SlowBlockCallsiteGenericStorePostTicks);
+    const uint64_t arm9SlowBlockCallsiteTicks =
+        fastStackCallsiteTicks +
+        fastStoreCallsiteTicks +
+        genericLoadCallsiteTicks +
+        genericStoreCallsiteTicks;
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] frames=%" PRIu64
@@ -1638,7 +1669,7 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowReadCalls),
         NsPerFrame(gWindow.ARM9SlowWriteNs),
         CountPerFrame(gWindow.ARM9SlowWriteCalls),
-        NsPerFrame(gWindow.ARM9SlowBlockTransferNs),
+        TicksValuePerFrameToMs(arm9SlowBlockCallsiteTicks),
         CountPerFrame(gWindow.ARM9SlowBlockTransferCalls));
 
     Platform::Log(Platform::LogLevel::Info,
@@ -1749,19 +1780,13 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockFastStoreCalls));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] slowblock_source_ns generic_load=%.3fms total=%.3fms generic_store=%.3fms total=%.3fms fast_stack=%.3fms total=%.3fms direct=%.3fms fallback=%.3fms fast_store=%.3fms total=%.3fms direct=%.3fms fallback=%.3fms",
+        "[LITEV_PROFILE] slowblock_source_ns generic_load=%.3fms total=%.3fms generic_store=%.3fms total=%.3fms fast_stack_callsite=%.3fms fast_store_callsite=%.3fms",
         NsPerFrame(gWindow.ARM9SlowBlockGenericLoadNs),
         NsPerFrame(gWindow.ARM9SlowBlockGenericLoadTotalNs),
         NsPerFrame(gWindow.ARM9SlowBlockGenericStoreNs),
         NsPerFrame(gWindow.ARM9SlowBlockGenericStoreTotalNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadTotalNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadDirectNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadFallbackNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStoreNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStoreTotalNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStoreDirectNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStoreFallbackNs));
+        TicksValuePerFrameToMs(fastStackCallsiteTicks),
+        TicksValuePerFrameToMs(fastStoreCallsiteTicks));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] slowblock_callsite_ms fast_stack_pre=%.3fms wrap=%.3fms post=%.3fms fast_store_pre=%.3fms wrap=%.3fms post=%.3fms generic_load_pre=%.3fms wrap=%.3fms post=%.3fms generic_store_pre=%.3fms wrap=%.3fms post=%.3fms",
@@ -1805,12 +1830,10 @@ inline void EndFrame()
         TicksPerFrameToMs(gWindow.ARM9SlowBlockCallsiteGenericStoreUnpackTicks));
 
     Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] slowblock_fastdtcm fast_stack=%.3fms fast_store=%.3fms direct=%.3fms/%.1f fallback=%.3fms/%.1f",
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoadNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStoreNs),
-        NsPerFrame(gWindow.ARM9SlowBlockFastDTCMDirectNs),
+        "[LITEV_PROFILE] slowblock_fastdtcm fast_stack_callsite=%.3fms fast_store_callsite=%.3fms direct_calls=%.1f fallback_calls=%.1f",
+        TicksValuePerFrameToMs(fastStackCallsiteTicks),
+        TicksValuePerFrameToMs(fastStoreCallsiteTicks),
         CountPerFrame(gWindow.ARM9SlowBlockFastDTCMDirectCalls),
-        NsPerFrame(gWindow.ARM9SlowBlockFastDTCMFallbackNs),
         CountPerFrame(gWindow.ARM9SlowBlockFastDTCMFallbackCalls));
 
     Platform::Log(Platform::LogLevel::Info,
@@ -1823,17 +1846,6 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9SlowBlockFastStore_3_4),
         CountPerFrame(gWindow.ARM9SlowBlockFastStore_5_8),
         CountPerFrame(gWindow.ARM9SlowBlockFastStore_9P));
-
-    Platform::Log(Platform::LogLevel::Info,
-        "[LITEV_PROFILE] slowblock_fastdtcm_size_ns stack_1_2=%.3fms stack_3_4=%.3fms stack_5_8=%.3fms stack_9p=%.3fms store_1_2=%.3fms store_3_4=%.3fms store_5_8=%.3fms store_9p=%.3fms",
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoad_1_2_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoad_3_4_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoad_5_8_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStackLoad_9P_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStore_1_2_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStore_3_4_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStore_5_8_Ns),
-        NsPerFrame(gWindow.ARM9SlowBlockFastStore_9P_Ns));
 
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] slowblock_generic_load why fastmem_off=%.1f usermode=%.1f non_fast_shape=%.1f cond_incompat=%.1f target_dtcm=%.1f target_main=%.1f target_shared=%.1f target_io=%.1f target_other=%.1f",
