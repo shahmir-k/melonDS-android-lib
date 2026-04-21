@@ -348,6 +348,88 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
         RET();
     }
 
+    auto emitARM9PatchedDTCMAddress = [&](int size) -> FixupBranch
+    {
+        const int accessSize = 8 << size;
+        if (accessSize == 32)
+            ANDI2R(W5, W0, ~3);
+        else if (accessSize == 16)
+            ANDI2R(W5, W0, ~1);
+        else
+            MOV(W5, W0);
+
+        LDR(INDEX_UNSIGNED, W6, RCPU, offsetof(ARMv5, DTCMMask));
+        AND(W7, W5, W6);
+        LDR(INDEX_UNSIGNED, W6, RCPU, offsetof(ARMv5, DTCMBase));
+        CMP(W7, W6);
+        FixupBranch fallback = B(CC_NEQ);
+
+        ANDI2R(W5, W5, 0x3FFF);
+        MOVI2R(X6, offsetof(ARMv5, DTCM));
+        LDR(X6, RCPU, ArithOption(X6));
+        ADD(X6, X6, X5);
+        return fallback;
+    };
+
+    struct DirectLoadBranches
+    {
+        FixupBranch DTCMDone;
+        FixupBranch MainRAMDone;
+        bool HasMainRAM = false;
+    };
+
+    auto emitARM9PatchedDirectLoad = [&](int size, int consoleType)
+    {
+        const int accessSize = 8 << size;
+
+        if (accessSize == 32)
+            ANDI2R(W17, W0, 0x3);
+
+        FixupBranch fallback = emitARM9PatchedDTCMAddress(size);
+        LDRGeneric(accessSize, false, INDEX_UNSIGNED, W0, X6, 0);
+
+        if (accessSize == 32)
+        {
+            UBFIZ(W17, W17, 3, 2);
+            RORV(W0, W0, W17);
+        }
+
+        FixupBranch dtcmDone = B();
+        SetJumpTarget(fallback);
+
+        if (consoleType != 0)
+            return DirectLoadBranches { dtcmDone, {}, false };
+
+        LSR(W6, W5, 24);
+        CMP(W6, 0x02);
+        FixupBranch slowFallback = B(CC_NEQ);
+        ANDI2R(W5, W5, 0x3FFFFF);
+        // Shared patch thunks are emitted before NDS::MainRAM is assigned.
+        MOVP2R(X6, NDS.JIT.Memory.GetMainRAM());
+        ADD(X6, X6, X5);
+        LDRGeneric(accessSize, false, INDEX_UNSIGNED, W0, X6, 0);
+
+        if (accessSize == 32)
+        {
+            UBFIZ(W17, W17, 3, 2);
+            RORV(W0, W0, W17);
+        }
+
+        FixupBranch mainDone = B();
+        SetJumpTarget(slowFallback);
+        return DirectLoadBranches { dtcmDone, mainDone, true };
+    };
+
+    auto emitARM9PatchedDTCMStore = [&](int size)
+    {
+        const int accessSize = 8 << size;
+        FixupBranch fallback = emitARM9PatchedDTCMAddress(size);
+        STRGeneric(accessSize, INDEX_UNSIGNED, W2, X6, 0);
+        FixupBranch done = B();
+        SetJumpTarget(fallback);
+        return done;
+    };
+
     for (int consoleType = 0; consoleType < 2; consoleType++)
     {
         for (int num = 0; num < 2; num++)
@@ -373,6 +455,13 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                     MRS(X16, FIELD_NZCV);
                     STR(INDEX_UNSIGNED, X16, SP, 0);
                     ABI_PushRegisters(FastmemPatchPreservedRegs);
+                    bool hasDirectDTCMStore = false;
+                    FixupBranch directDTCMStoreDone;
+                    if (num == 0)
+                    {
+                        directDTCMStoreDone = emitARM9PatchedDTCMStore(size);
+                        hasDirectDTCMStore = true;
+                    }
                     if (consoleType == 0)
                     {
                         switch ((8 << size) |  num)
@@ -397,7 +486,9 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                         case 9: QuickCallFunction(X3, SlowWrite7<u8, 1>); break;
                         }
                     }
-                    
+
+                    if (hasDirectDTCMStore)
+                        SetJumpTarget(directDTCMStoreDone);
                     ABI_PopRegisters(FastmemPatchPreservedRegs);
                     LDR(INDEX_UNSIGNED, X16, SP, 0);
                     ADD(SP, SP, 16);
@@ -413,6 +504,13 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                         MRS(X16, FIELD_NZCV);
                         STR(INDEX_UNSIGNED, X16, SP, 0);
                         ABI_PushRegisters(FastmemPatchPreservedRegs);
+                        bool hasDirectDTCMLoad = false;
+                        DirectLoadBranches directLoadBranches {};
+                        if (num == 0)
+                        {
+                            directLoadBranches = emitARM9PatchedDirectLoad(size, consoleType);
+                            hasDirectDTCMLoad = true;
+                        }
                         if (consoleType == 0)
                         {
                             switch ((8 << size) |  num)
@@ -436,6 +534,12 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                             case 8: QuickCallFunction(X3, SlowRead9<u8, 1>); break;
                             case 9: QuickCallFunction(X3, SlowRead7<u8, 1>); break;
                             }
+                        }
+                        if (hasDirectDTCMLoad)
+                        {
+                            SetJumpTarget(directLoadBranches.DTCMDone);
+                            if (directLoadBranches.HasMainRAM)
+                                SetJumpTarget(directLoadBranches.MainRAMDone);
                         }
                         ABI_PopRegisters(FastmemPatchPreservedRegs);
                         LDR(INDEX_UNSIGNED, X16, SP, 0);
