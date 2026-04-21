@@ -56,6 +56,7 @@ template <>
 const int RegisterCache<Compiler, ARM64Reg>::NativeRegsAvailable = 15;
 
 const BitSet32 CallerSavedPushRegs({W8, W9, W10, W11, W12, W13, W14, W15});
+const BitSet32 FastmemPatchPreservedRegs({W4, W5, W6, W7, W8, W9, W10, W11, W12, W13, W14, W15, W16, W17, W30});
 
 void Compiler::MovePC()
 {
@@ -368,7 +369,10 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                     {
                         MOV(W1, rdMapped);
                     }
-                    ABI_PushRegisters(BitSet32({30}) | CallerSavedPushRegs);
+                    SUB(SP, SP, 16);
+                    MRS(X16, FIELD_NZCV);
+                    STR(INDEX_UNSIGNED, X16, SP, 0);
+                    ABI_PushRegisters(FastmemPatchPreservedRegs);
                     if (consoleType == 0)
                     {
                         switch ((8 << size) |  num)
@@ -394,7 +398,10 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                         }
                     }
                     
-                    ABI_PopRegisters(BitSet32({30}) | CallerSavedPushRegs);
+                    ABI_PopRegisters(FastmemPatchPreservedRegs);
+                    LDR(INDEX_UNSIGNED, X16, SP, 0);
+                    ADD(SP, SP, 16);
+                    _MSR(FIELD_NZCV, X16);
                     RET();
 
                     for (int signextend = 0; signextend < 2; signextend++)
@@ -402,7 +409,10 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                         PatchedLoadFuncs[consoleType][num][size][signextend][reg] = GetRXPtr();
                         if (num == 0)
                             MOV(X1, RCPU);
-                        ABI_PushRegisters(BitSet32({30}) | CallerSavedPushRegs);
+                        SUB(SP, SP, 16);
+                        MRS(X16, FIELD_NZCV);
+                        STR(INDEX_UNSIGNED, X16, SP, 0);
+                        ABI_PushRegisters(FastmemPatchPreservedRegs);
                         if (consoleType == 0)
                         {
                             switch ((8 << size) |  num)
@@ -427,7 +437,10 @@ Compiler::Compiler(melonDS::NDS& nds) : Arm64Gen::ARM64XEmitter(), NDS(nds)
                             case 9: QuickCallFunction(X3, SlowRead7<u8, 1>); break;
                             }
                         }
-                        ABI_PopRegisters(BitSet32({30}) | CallerSavedPushRegs);
+                        ABI_PopRegisters(FastmemPatchPreservedRegs);
+                        LDR(INDEX_UNSIGNED, X16, SP, 0);
+                        ADD(SP, SP, 16);
+                        _MSR(FIELD_NZCV, X16);
                         if (size == 32)
                             MOV(rdMapped, W0);
                         else if (signextend)

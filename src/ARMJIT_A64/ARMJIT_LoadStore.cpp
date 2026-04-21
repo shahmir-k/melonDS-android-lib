@@ -678,7 +678,10 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
             LoadStorePatches[loadStoreOffsets[i]] = patch;
         }
 
-        ABI_PushRegisters({30});
+        SUB(SP, SP, 16);
+        MRS(X16, FIELD_NZCV);
+        STR(INDEX_UNSIGNED, X16, SP, 0);
+        ABI_PushRegisters(BitSet32({W4, W5, W6, W7, W16, W17, W30}));
     }
 
     int i = 0;
@@ -690,6 +693,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         && compileFastPath
         && expectedTarget == ARMJIT_Memory::memregion_DTCM
         && regsCount <= 4;
+#if LITEV_PROFILE
     std::atomic<uint64_t>* callsitePreCounter = nullptr;
     std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
     std::atomic<uint64_t>* callsitePostCounter = nullptr;
@@ -698,11 +702,22 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     std::atomic<uint64_t>* callsiteCallCounter = nullptr;
     std::atomic<uint64_t>* callsiteRestoreCounter = nullptr;
     std::atomic<uint64_t>* callsiteUnpackCounter = nullptr;
+#else
+    std::atomic<uint64_t>* callsitePreCounter = nullptr;
+    std::atomic<uint64_t>* callsiteWrapCounter = nullptr;
+    std::atomic<uint64_t>* callsitePostCounter = nullptr;
+    std::atomic<uint64_t>* callsitePackCounter = nullptr;
+    std::atomic<uint64_t>* callsiteSaveCounter = nullptr;
+    std::atomic<uint64_t>* callsiteCallCounter = nullptr;
+    std::atomic<uint64_t>* callsiteRestoreCounter = nullptr;
+    std::atomic<uint64_t>* callsiteUnpackCounter = nullptr;
+#endif
     const bool profiledFastStackLoad = compileFastPath && !store;
     const bool profiledFastStore = compileFastPath && store;
 
     if (Num == 0)
     {
+#if LITEV_PROFILE
         if (profileCallsite)
         {
             if (profiledFastStackLoad)
@@ -750,6 +765,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                 callsiteUnpackCounter = &LiteProfile::gFrame.ARM9SlowBlockCallsiteGenericLoadUnpackTicks;
             }
         }
+#endif
         emitCallsitePhaseStart(0);
     }
 
@@ -841,6 +857,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                     genericLoadTag = SlowBlockProfile_GenericLoadUsermode;
                 else if (!loadStoreShapeAllowed)
                 {
+#if LITEV_PROFILE
                     u32 shapeMeta = 0;
                     if (Thumb)
                         shapeMeta |= SlowBlockProfileShape_Thumb;
@@ -857,6 +874,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
                     if (preinc)
                         shapeMeta |= SlowBlockProfileShape_Pre;
                     helperWordCount = regsCount | (shapeMeta << SlowBlockProfileShapeShift);
+#endif
 
                     switch (expectedTarget)
                     {
@@ -1078,7 +1096,10 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     if (compileFastPath)
     {
-        ABI_PopRegisters({30});
+        ABI_PopRegisters(BitSet32({W4, W5, W6, W7, W16, W17, W30}));
+        LDR(INDEX_UNSIGNED, X16, SP, 0);
+        ADD(SP, SP, 16);
+        _MSR(FIELD_NZCV, X16);
         RET();
 
         FlushIcacheSection(patchFunc, (u8*)GetRXPtr());

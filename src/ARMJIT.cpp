@@ -304,64 +304,88 @@ T SlowRead9(u32 addr, ARMv5* cpu)
 
         default:
         {
+#if LITEV_PROFILE
             uint64_t ioStart = 0;
             std::atomic<uint64_t>* ioBucketNs = nullptr;
+#endif
             if ((addr & 0xFF000000) == 0x04000000)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIO);
+#if LITEV_PROFILE
                 ioStart = LITE_PROFILE_NOW_NS();
                 ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOOtherNs;
+#endif
                 switch (addr & 0xFFFFFFF0)
                 {
                 case 0x04000000:
                     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODispStat);
+#if LITEV_PROFILE
                     ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIODispStatNs;
+#endif
                     break;
                 default:
                     if (addr >= 0x040000B0 && addr < 0x040000F0)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODMA);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIODMANs;
+#endif
                     }
                     else if (addr >= 0x04000100 && addr < 0x04000110)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOTimer);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOTimerNs;
+#endif
                     }
                     else if (addr >= 0x04000130 && addr < 0x04000134)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOKey);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOKeyNs;
+#endif
                     }
                     else if (addr >= 0x04000180 && addr < 0x04000190)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOIPC);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOIPCNs;
+#endif
                     }
                     else if (addr >= 0x040001A0 && addr < 0x040001B0)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOCart);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOCartNs;
+#endif
                     }
                     else if ((addr >= 0x04000204 && addr < 0x04000218) || addr == 0x04000208)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOIRQ);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOIRQNs;
+#endif
                     }
                     else if (addr >= 0x04000240 && addr < 0x0400024C)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOVRAMCtl);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOVRAMCtlNs;
+#endif
                     }
                     else if (addr >= 0x04000280 && addr < 0x040002C0)
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIODivSqrt);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIODivSqrtNs;
+#endif
                     }
                     else
                     {
                         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9SlowReadIOOther);
+#if LITEV_PROFILE
                         ioBucketNs = &LiteProfile::gFrame.ARM9SlowReadIOOtherNs;
+#endif
                     }
                     break;
                 }
@@ -385,12 +409,14 @@ T SlowRead9(u32 addr, ARMv5* cpu)
                 val = nds.ARM9Read16(addr);
             else
                 val = nds.ARM9Read8(addr);
+#if LITEV_PROFILE
             if (ioBucketNs)
             {
                 const uint64_t ioElapsed = LITE_PROFILE_NOW_NS() - ioStart;
                 LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9SlowReadIONs, ioElapsed);
                 LITE_PROFILE_ADD_VALUE(*ioBucketNs, ioElapsed);
             }
+#endif
             break;
         }
         }
@@ -938,7 +964,6 @@ void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
     const uint64_t totalStart = LITE_PROFILE_NOW_NS();
     NoteSlowBlockSource<Tag>();
     const uint64_t sourceStart = LITE_PROFILE_NOW_NS();
-#if LITEV_PROFILE
     constexpr bool kShapeTaggedLoad = !Write
         && (Tag == SlowBlockProfile_GenericLoadNonStackDTCM
             || Tag == SlowBlockProfile_GenericLoadNonStackMainRAM
@@ -947,10 +972,11 @@ void SlowBlockTransfer9Profiled(u32 addr, u64* data, u32 num, ARMv5* cpu)
             || Tag == SlowBlockProfile_GenericLoadNonStackOther);
     if constexpr (kShapeTaggedLoad)
     {
+#if LITEV_PROFILE
         NoteSlowBlockGenericLoadShape(num >> SlowBlockProfileShapeShift);
+#endif
         num &= SlowBlockProfileNumMask;
     }
-#endif
     SlowBlockTransfer9<Write, ConsoleType>(addr, data, num, cpu);
 #if LITEV_PROFILE
     const uint64_t totalElapsed = LITE_PROFILE_NOW_NS() - totalStart;
