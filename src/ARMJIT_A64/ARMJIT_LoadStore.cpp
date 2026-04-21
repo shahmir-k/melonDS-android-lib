@@ -533,9 +533,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         && !usermode
         && loadStoreShapeAllowed
         && condCompatible;
-    const bool inlineFastDTCMBlock = Num == 0
-        && compileFastPath
-        && expectedTarget == ARMJIT_Memory::memregion_DTCM;
+    const bool inlineFastDTCMBlock = Num == 0 && compileFastPath;
     const bool fixedFastDTCMHelper = Num == 0
         && compileFastPath
         && expectedTarget == ARMJIT_Memory::memregion_DTCM
