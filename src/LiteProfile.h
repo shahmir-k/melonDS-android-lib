@@ -12,6 +12,7 @@
 
 #include "Platform.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -400,6 +401,23 @@ inline uint64_t gWindowFrames = 0;
 inline constexpr uint64_t kLogEveryFrames = 30;
 inline constexpr bool kEnabled = true;
 
+struct ARM9ExitSite
+{
+    uint32_t Addr = 0;
+    uint64_t Count = 0;
+    uint64_t GuestCycles = 0;
+    uint64_t Instrs = 0;
+    uint8_t Exit = 0;
+    uint8_t Branch = 0;
+    uint8_t BranchReg = 0xFF;
+    uint8_t Thumb = 0;
+    uint8_t HasMemory = 0;
+    uint8_t MemRegionMask = 0;
+};
+
+inline constexpr size_t kARM9ExitSiteSlots = 32;
+inline ARM9ExitSite gARM9ExitSites[kARM9ExitSiteSlots];
+
 inline uint64_t NowNs()
 {
     if (!kEnabled)
@@ -429,6 +447,86 @@ inline uint64_t CounterFreqHz()
 #endif
     }();
     return freq;
+}
+
+inline void ResetARM9ExitSites()
+{
+    for (auto& site : gARM9ExitSites)
+        site = {};
+}
+
+inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_t branchReg,
+                             uint8_t thumb, uint8_t hasMemory, uint8_t memRegionMask,
+                             uint16_t instrCount, uint64_t guestCycles)
+{
+    ARM9ExitSite* target = nullptr;
+    ARM9ExitSite* empty = nullptr;
+    ARM9ExitSite* minSite = &gARM9ExitSites[0];
+
+    for (auto& site : gARM9ExitSites)
+    {
+        if (site.Count == 0)
+        {
+            if (!empty)
+                empty = &site;
+            continue;
+        }
+        if (site.Addr == addr)
+        {
+            target = &site;
+            break;
+        }
+        if (site.Count < minSite->Count)
+            minSite = &site;
+    }
+
+    if (!target)
+    {
+        target = empty ? empty : minSite;
+        *target = {};
+        target->Addr = addr;
+        target->Exit = exit;
+        target->Branch = branch;
+        target->BranchReg = branchReg;
+        target->Thumb = thumb;
+        target->HasMemory = hasMemory;
+        target->MemRegionMask = memRegionMask;
+    }
+
+    target->Count++;
+    target->GuestCycles += guestCycles;
+    target->Instrs += instrCount;
+    target->Exit = exit;
+    target->Branch = branch;
+    target->BranchReg = branchReg;
+    target->Thumb = thumb;
+    target->HasMemory = hasMemory;
+    target->MemRegionMask = memRegionMask;
+}
+
+inline const char* ARM9ExitName(uint8_t exit)
+{
+    switch (exit)
+    {
+    case 1: return "end";
+    case 2: return "max";
+    case 3: return "irq";
+    case 4: return "halt";
+    default: return "unknown";
+    }
+}
+
+inline const char* ARM9BranchName(uint8_t branch)
+{
+    switch (branch)
+    {
+    case 1: return "arm_imm";
+    case 2: return "arm_reg";
+    case 3: return "thumb_cond";
+    case 4: return "thumb_imm";
+    case 5: return "thumb_reg";
+    default: return "none";
+    }
 }
 
 inline void ResetFrame()
@@ -1954,6 +2052,33 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9JitReturnEndThumbImm),
         CountPerFrame(gWindow.ARM9JitReturnEndThumbReg));
 
+    ARM9ExitSite sortedExitSites[kARM9ExitSiteSlots];
+    for (size_t i = 0; i < kARM9ExitSiteSlots; i++)
+        sortedExitSites[i] = gARM9ExitSites[i];
+    std::sort(std::begin(sortedExitSites), std::end(sortedExitSites),
+        [](const ARM9ExitSite& a, const ARM9ExitSite& b) { return a.Count > b.Count; });
+
+    for (size_t i = 0; i < 8 && sortedExitSites[i].Count; i++)
+    {
+        const ARM9ExitSite& site = sortedExitSites[i];
+        const double countPerFrame = gWindowFrames ? static_cast<double>(site.Count) / static_cast<double>(gWindowFrames) : 0.0;
+        const double cyclesPerFrame = gWindowFrames ? static_cast<double>(site.GuestCycles) / static_cast<double>(gWindowFrames) : 0.0;
+        const double instrsPerHit = site.Count ? static_cast<double>(site.Instrs) / static_cast<double>(site.Count) : 0.0;
+        Platform::Log(Platform::LogLevel::Info,
+            "[LITEV_PROFILE] arm9_exit_hot%zu pc=%08" PRIX32 " count=%.1f cycles=%.1f exit=%s branch=%s reg=%u thumb=%u mem=%u memmask=%02X instr/hit=%.1f",
+            i,
+            site.Addr,
+            countPerFrame,
+            cyclesPerFrame,
+            ARM9ExitName(site.Exit),
+            ARM9BranchName(site.Branch),
+            site.BranchReg,
+            site.Thumb,
+            site.HasMemory,
+            site.MemRegionMask,
+            instrsPerHit);
+    }
+
     Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] caches composed_hit=%.1f%% eligible/frame=%.1f ineligible/frame=%.1f text_hit=%.1f%% spritebin_hit=%.1f%% sprite_skip/frame=%.1f scan_calls/frame=%.1f sprite_calls/frame=%.1f",
         Percent(composedHits, composedHits + composedMisses),
@@ -2090,6 +2215,7 @@ inline void EndFrame()
         NsPerFrame(gWindow.ARM9SlowReadIOOtherNs));
 
     gWindowFrames = 0;
+    ResetARM9ExitSites();
     ResetWindow();
 }
 

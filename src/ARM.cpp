@@ -695,6 +695,15 @@ void ARMv5::Execute()
                 if (auto it = NDS.JIT.JitBlocks9.find(instrAddr); it != NDS.JIT.JitBlocks9.end())
                 {
                     const JitBlock* info = it->second;
+                    LiteProfile::NoteARM9ExitSite(instrAddr,
+                        info->Exit,
+                        info->ExitBranchFamily,
+                        info->ExitBranchReg,
+                        info->IsThumb,
+                        info->HasMemoryInstr,
+                        info->MemRegionMask,
+                        info->InstrCount,
+                        Cycles);
                     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecInstrs, info->InstrCount);
                     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecLiteralLoads, info->ExecLiteralLoadCount);
                     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemITCM, info->ExecMemITCMCount);
