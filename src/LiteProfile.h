@@ -404,8 +404,14 @@ inline uint64_t NowNs()
 {
     if (!kEnabled)
         return 0;
+#if defined(__aarch64__)
+    uint64_t value = 0;
+    asm volatile("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#else
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
         Clock::now().time_since_epoch()).count();
+#endif
 }
 
 inline uint64_t CounterFreqHz()
@@ -1183,8 +1189,9 @@ inline void MergeCounter(std::atomic<uint64_t>& dst, std::atomic<uint64_t>& src)
 
 inline double NsPerFrame(const std::atomic<uint64_t>& counter)
 {
-    return static_cast<double>(counter.load(std::memory_order_relaxed)) /
-           static_cast<double>(kLogEveryFrames) / 1000000.0;
+    return (static_cast<double>(counter.load(std::memory_order_relaxed)) /
+            static_cast<double>(kLogEveryFrames) * 1000.0) /
+           static_cast<double>(CounterFreqHz());
 }
 
 inline double CountPerFrame(const std::atomic<uint64_t>& counter)
