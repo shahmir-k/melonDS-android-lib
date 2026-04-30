@@ -18,7 +18,6 @@
 
 #include "ARMJIT_Compiler.h"
 #include "../NDS.h"
-
 using namespace Arm64Gen;
 
 extern "C" void ARM_Ret();
@@ -361,15 +360,51 @@ void Compiler::Comp_JumpToARM9SameARMDirect(Arm64Gen::ARM64Reg addr)
     ADD(RCycles, RCycles, W1);
 }
 
-void Compiler::Comp_JumpToARM9DynamicSameARM(Arm64Gen::ARM64Reg addr)
+void Compiler::Comp_JumpToARM9DynamicSameARM(Arm64Gen::ARM64Reg addr, bool tryLastJitDirectHit)
 {
     assert(Num == 0);
     assert(!Thumb);
+
+    constexpr size_t kARM9TimestampOffset = offsetof(melonDS::NDS, ARM9Timestamp);
+    constexpr size_t kARM9TargetOffset = offsetof(melonDS::NDS, ARM9Target);
 
     MOV(W0, addr);
     FixupBranch slowPath = TBNZ(W0, 0);
 
     Comp_JumpToARM9SameARMDirect(W0);
+
+    if (tryLastJitDirectHit)
+    {
+        LDR(INDEX_UNSIGNED, W3, RCPU, offsetof(ARM, StopExecution));
+        FixupBranch skipDirectHit = CBNZ(W3);
+
+        CMP(RCycles, 128);
+        FixupBranch overBudgetDirectHit = B(CC_GE);
+
+        LDR(INDEX_UNSIGNED, X4, RCPU, offsetof(ARM, NDS));
+        LDR(INDEX_UNSIGNED, X5, X4, kARM9TimestampOffset);
+        MOV(W6, RCycles);
+        ADD(X5, X5, X6);
+        LDR(INDEX_UNSIGNED, X6, X4, kARM9TargetOffset);
+        CMP(X5, X6);
+        FixupBranch pastTargetDirectHit = B(CC_HS);
+
+        SUBI2R(W3, W0, 4, W4);
+        LDR(INDEX_UNSIGNED, W5, RCPU, offsetof(ARM, LastJitBlockAddr));
+        CMP(W5, W3);
+        FixupBranch targetMissDirectHit = B(CC_NEQ);
+
+        LDR(INDEX_UNSIGNED, X0, RCPU, offsetof(ARM, LastJitBlockEntry));
+        FixupBranch entryMissDirectHit = CBZ(X0);
+        BR(X0);
+
+        SetJumpTarget(skipDirectHit);
+        SetJumpTarget(overBudgetDirectHit);
+        SetJumpTarget(pastTargetDirectHit);
+        SetJumpTarget(targetMissDirectHit);
+        SetJumpTarget(entryMissDirectHit);
+    }
+
     FixupBranch done = B();
     SetJumpTarget(slowPath);
     Comp_JumpTo(W0, true, false);
@@ -408,15 +443,62 @@ void Compiler::A_Comp_BranchXchangeReg()
 
     if (CurInstr.A_Reg(0) == 14)
     {
+        constexpr size_t kARM9TimestampOffset = offsetof(melonDS::NDS, ARM9Timestamp);
+        constexpr size_t kARM9TargetOffset = offsetof(melonDS::NDS, ARM9Target);
+        const bool hotLRLastHitPath =
+            CurInstr.Addr == 0x02044AA4
+            || CurInstr.Addr == 0x02078520;
+
         MOV(W0, rn);
         FixupBranch switchToThumb = TBNZ(W0, 0);
 
-        Comp_JumpTo(W0, false);
+        if (hotLRLastHitPath)
+        {
+            Comp_JumpToARM9SameARMDirect(W0);
 
-        RegCache.PrepareExit();
+            RegCache.PrepareExit();
 
-        if (ConstantCycles)
-            ADD(RCycles, RCycles, ConstantCycles);
+            if (ConstantCycles)
+                ADD(RCycles, RCycles, ConstantCycles);
+
+            LDR(INDEX_UNSIGNED, W3, RCPU, offsetof(ARM, StopExecution));
+            FixupBranch fallbackDirectChain = CBNZ(W3);
+
+            CMP(RCycles, 128);
+            FixupBranch overBudgetDirectChain = B(CC_GE);
+
+            LDR(INDEX_UNSIGNED, X4, RCPU, offsetof(ARM, NDS));
+            LDR(INDEX_UNSIGNED, X5, X4, kARM9TimestampOffset);
+            MOV(W6, RCycles);
+            ADD(X5, X5, X6);
+            LDR(INDEX_UNSIGNED, X6, X4, kARM9TargetOffset);
+            CMP(X5, X6);
+            FixupBranch pastTargetDirectChain = B(CC_HS);
+
+            SUBI2R(W3, W0, 4, W4);
+            LDR(INDEX_UNSIGNED, W5, RCPU, offsetof(ARM, LastJitBlockAddr));
+            CMP(W5, W3);
+            FixupBranch targetMissDirectChain = B(CC_NEQ);
+
+            LDR(INDEX_UNSIGNED, X0, RCPU, offsetof(ARM, LastJitBlockEntry));
+            FixupBranch entryMissDirectChain = CBZ(X0);
+            BR(X0);
+
+            SetJumpTarget(fallbackDirectChain);
+            SetJumpTarget(overBudgetDirectChain);
+            SetJumpTarget(pastTargetDirectChain);
+            SetJumpTarget(targetMissDirectChain);
+            SetJumpTarget(entryMissDirectChain);
+        }
+        else
+        {
+            Comp_JumpTo(W0, false);
+
+            RegCache.PrepareExit();
+
+            if (ConstantCycles)
+                ADD(RCycles, RCycles, ConstantCycles);
+        }
 
         SaveCycles();
         SaveCPSR();

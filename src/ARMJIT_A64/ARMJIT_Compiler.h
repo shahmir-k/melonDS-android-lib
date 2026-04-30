@@ -199,7 +199,7 @@ public:
     Arm64Gen::FixupBranch CheckCondition(u32 cond);
 
     void Comp_JumpToARM9SameARMDirect(Arm64Gen::ARM64Reg addr);
-    void Comp_JumpToARM9DynamicSameARM(Arm64Gen::ARM64Reg addr);
+    void Comp_JumpToARM9DynamicSameARM(Arm64Gen::ARM64Reg addr, bool tryLastJitDirectHit = false);
     void Comp_JumpTo(Arm64Gen::ARM64Reg addr, bool switchThumb, bool restoreCPSR = false);
     void Comp_JumpTo(u32 addr, bool forceNonConstantCycles = false);
 

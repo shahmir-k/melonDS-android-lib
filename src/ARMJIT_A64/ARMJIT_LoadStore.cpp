@@ -1195,7 +1195,16 @@ void Compiler::A_Comp_LDM_STM()
     }
 
     if (directStackPCJump)
-        Comp_JumpToARM9DynamicSameARM(MapReg(15));
+    {
+        const bool hotStackPCLastHitPath =
+            CurInstr.Addr == 0x02036828
+            || CurInstr.Addr == 0x02036834
+            || CurInstr.Addr == 0x02044A5C
+            || CurInstr.Addr == 0x0204B0F8
+            || CurInstr.Addr == 0x02062468
+            || CurInstr.Addr == 0x020665B4;
+        Comp_JumpToARM9DynamicSameARM(MapReg(15), hotStackPCLastHitPath);
+    }
 }
 
 void Compiler::T_Comp_PUSH_POP()
