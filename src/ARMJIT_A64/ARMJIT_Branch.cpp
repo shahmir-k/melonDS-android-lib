@@ -331,6 +331,51 @@ void Compiler::Comp_JumpTo(Arm64Gen::ARM64Reg addr, bool switchThumb, bool resto
     }
 }
 
+void Compiler::Comp_JumpToARM9SameARMDirect(Arm64Gen::ARM64Reg addr)
+{
+    assert(Num == 0);
+    assert(!Thumb);
+
+    IrregularCycles = true;
+
+    // Inline the hot ARM9 same-mode jump state update instead of calling
+    // JumpToFuncs9[0].
+    LSR(W1, addr, 12);
+    ADDI2R(W1, W1, offsetof(ARMv5, MemTimings), W2);
+    LDRB(W1, RCPU, W1);
+
+    LDR(INDEX_UNSIGNED, W2, RCPU, offsetof(ARMv5, ITCMSize));
+    STR(INDEX_UNSIGNED, W1, RCPU, offsetof(ARMv5, RegionCodeCycles));
+
+    CMP(W1, 0xFF);
+    MOVI2R(W3, kCodeCacheTiming);
+    CSEL(W1, W3, W1, CC_EQ);
+    CMP(addr, W2);
+    CSINC(W1, W1, WZR, CC_HS);
+
+    ANDI2R(W0, addr, ~3);
+    ADD(W0, W0, 4);
+    STR(INDEX_UNSIGNED, W0, RCPU, offsetof(ARMv5, R[15]));
+
+    ADD(W1, W1, W1);
+    ADD(RCycles, RCycles, W1);
+}
+
+void Compiler::Comp_JumpToARM9DynamicSameARM(Arm64Gen::ARM64Reg addr)
+{
+    assert(Num == 0);
+    assert(!Thumb);
+
+    MOV(W0, addr);
+    FixupBranch slowPath = TBNZ(W0, 0);
+
+    Comp_JumpToARM9SameARMDirect(W0);
+    FixupBranch done = B();
+    SetJumpTarget(slowPath);
+    Comp_JumpTo(W0, true, false);
+    SetJumpTarget(done);
+}
+
 void Compiler::A_Comp_BranchImm()
 {
     int op = (CurInstr.Instr >> 24) & 1;

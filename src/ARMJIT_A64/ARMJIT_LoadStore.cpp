@@ -466,7 +466,7 @@ void Compiler::T_Comp_MemSPRel()
     Comp_MemAccess(CurInstr.T_Reg(8), 13, Op2(offset), 32, load ? 0 : memop_Store);
 }
 
-s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc, bool decrement, bool usermode, bool skipLoadingRn)
+s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc, bool decrement, bool usermode, bool skipLoadingRn, bool deferJump)
 {
     IrregularCycles = true;
 
@@ -1158,7 +1158,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
         SwapCodeRegion();
     }
 
-    if (!store && regs[15])
+    if (!store && regs[15] && !deferJump)
     {
         ARM64Reg mapped = MapReg(15);
         Comp_JumpTo(mapped, Num == 0, usermode);
@@ -1176,6 +1176,7 @@ void Compiler::A_Comp_LDM_STM()
     bool add = CurInstr.Instr & (1 << 23);
     bool writeback = CurInstr.Instr & (1 << 21);
     bool usermode = CurInstr.Instr & (1 << 22);
+    bool directStackPCJump = Num == 0 && load && regs[15] && !usermode && CurInstr.A_Reg(16) == 13;
 
     ARM64Reg rn = MapReg(CurInstr.A_Reg(16));
 
@@ -1183,7 +1184,7 @@ void Compiler::A_Comp_LDM_STM()
         writeback = Num == 0
             && (!(regs & ~BitSet16(1 << CurInstr.A_Reg(16)))) || (regs & ~BitSet16((2 << CurInstr.A_Reg(16)) - 1));
 
-    s32 offset = Comp_MemAccessBlock(CurInstr.A_Reg(16), regs, !load, pre, !add, usermode, load && writeback);
+    s32 offset = Comp_MemAccessBlock(CurInstr.A_Reg(16), regs, !load, pre, !add, usermode, load && writeback, directStackPCJump);
 
     if (writeback && offset)
     {
@@ -1192,6 +1193,9 @@ void Compiler::A_Comp_LDM_STM()
         else
             SUB(rn, rn, -offset);
     }
+
+    if (directStackPCJump)
+        Comp_JumpToARM9DynamicSameARM(MapReg(15));
 }
 
 void Compiler::T_Comp_PUSH_POP()
