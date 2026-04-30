@@ -2084,6 +2084,10 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
                 case ARMInstrInfo::tk_BLX_REG:
                     block->ExitBranchFamily = JitBlock::ExitBranchThumbReg;
                     break;
+                case ARMInstrInfo::tk_POP:
+                    if (exitInstr.Instr & (1 << 8))
+                        block->ExitBranchFamily = JitBlock::ExitBranchThumbPCStack;
+                    break;
                 default:
                     break;
                 }
@@ -2102,6 +2106,15 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
                     block->ExitBranchFamily = JitBlock::ExitBranchARMReg;
                     block->ExitBranchReg = exitInstr.A_Reg(0);
                     block->ExitBranchIsLink = exitInstr.Info.Kind == ARMInstrInfo::ak_BLX_REG;
+                    break;
+                case ARMInstrInfo::ak_LDM:
+                    if (exitInstr.Instr & (1 << 15))
+                    {
+                        if (exitInstr.A_Reg(16) == 13)
+                            block->ExitBranchFamily = JitBlock::ExitBranchARMPCStack;
+                        else
+                            block->ExitBranchFamily = JitBlock::ExitBranchARMPCOther;
+                    }
                     break;
                 default:
                     break;

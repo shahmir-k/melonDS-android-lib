@@ -801,13 +801,42 @@ void ARMv5::Execute()
                                 case JitBlock::ExitBranchThumbReg:
                                     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbReg);
                                     break;
+                                case JitBlock::ExitBranchARMPCStack:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMPCStack);
+                                    break;
+                                case JitBlock::ExitBranchARMPCOther:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMPCOther);
+                                    break;
+                                case JitBlock::ExitBranchThumbPCStack:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbPCStack);
+                                    break;
+                                case JitBlock::ExitBranchThumbPCOther:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbPCOther);
+                                    break;
                                 default:
                                     break;
                                 }
                             }
                             else
                             {
-                                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndOther);
+                                switch (it->second->ExitBranchFamily)
+                                {
+                                case JitBlock::ExitBranchARMPCStack:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMPCStack);
+                                    break;
+                                case JitBlock::ExitBranchARMPCOther:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndARMPCOther);
+                                    break;
+                                case JitBlock::ExitBranchThumbPCStack:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbPCStack);
+                                    break;
+                                case JitBlock::ExitBranchThumbPCOther:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndThumbPCOther);
+                                    break;
+                                default:
+                                    LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnEndOther);
+                                    break;
+                                }
                             }
                             break;
                         case JitBlock::ExitMaxBlockSize:

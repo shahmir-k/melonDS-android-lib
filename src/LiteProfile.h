@@ -107,6 +107,10 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitReturnEndThumbCond{0};
     std::atomic<uint64_t> ARM9JitReturnEndThumbImm{0};
     std::atomic<uint64_t> ARM9JitReturnEndThumbReg{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMPCStack{0};
+    std::atomic<uint64_t> ARM9JitReturnEndARMPCOther{0};
+    std::atomic<uint64_t> ARM9JitReturnEndThumbPCStack{0};
+    std::atomic<uint64_t> ARM9JitReturnEndThumbPCOther{0};
     std::atomic<uint64_t> ARM9JitReturnMaxBlock{0};
     std::atomic<uint64_t> ARM9JitReturnMaxARM{0};
     std::atomic<uint64_t> ARM9JitReturnMaxThumb{0};
@@ -525,6 +529,10 @@ inline const char* ARM9BranchName(uint8_t branch)
     case 3: return "thumb_cond";
     case 4: return "thumb_imm";
     case 5: return "thumb_reg";
+    case 6: return "arm_pc_stack";
+    case 7: return "arm_pc_other";
+    case 8: return "thumb_pc_stack";
+    case 9: return "thumb_pc_other";
     default: return "none";
     }
 }
@@ -615,6 +623,10 @@ inline void ResetFrame()
     gFrame.ARM9JitReturnEndThumbCond.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnEndThumbImm.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnEndThumbReg.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMPCStack.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndARMPCOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndThumbPCStack.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitReturnEndThumbPCOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnMaxARM.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnMaxThumb.store(0, std::memory_order_relaxed);
@@ -986,6 +998,10 @@ inline void ResetWindow()
     gWindow.ARM9JitReturnEndThumbCond.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnEndThumbImm.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnEndThumbReg.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMPCStack.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndARMPCOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndThumbPCStack.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitReturnEndThumbPCOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnMaxBlock.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnMaxARM.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnMaxThumb.store(0, std::memory_order_relaxed);
@@ -1415,6 +1431,10 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitReturnEndThumbCond, gFrame.ARM9JitReturnEndThumbCond);
     MergeCounter(gWindow.ARM9JitReturnEndThumbImm, gFrame.ARM9JitReturnEndThumbImm);
     MergeCounter(gWindow.ARM9JitReturnEndThumbReg, gFrame.ARM9JitReturnEndThumbReg);
+    MergeCounter(gWindow.ARM9JitReturnEndARMPCStack, gFrame.ARM9JitReturnEndARMPCStack);
+    MergeCounter(gWindow.ARM9JitReturnEndARMPCOther, gFrame.ARM9JitReturnEndARMPCOther);
+    MergeCounter(gWindow.ARM9JitReturnEndThumbPCStack, gFrame.ARM9JitReturnEndThumbPCStack);
+    MergeCounter(gWindow.ARM9JitReturnEndThumbPCOther, gFrame.ARM9JitReturnEndThumbPCOther);
     MergeCounter(gWindow.ARM9JitReturnMaxBlock, gFrame.ARM9JitReturnMaxBlock);
     MergeCounter(gWindow.ARM9JitReturnMaxARM, gFrame.ARM9JitReturnMaxARM);
     MergeCounter(gWindow.ARM9JitReturnMaxThumb, gFrame.ARM9JitReturnMaxThumb);
@@ -2051,6 +2071,13 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9JitReturnEndThumbCond),
         CountPerFrame(gWindow.ARM9JitReturnEndThumbImm),
         CountPerFrame(gWindow.ARM9JitReturnEndThumbReg));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_ret_pcwrite arm_stack=%.1f arm_other=%.1f thumb_stack=%.1f thumb_other=%.1f",
+        CountPerFrame(gWindow.ARM9JitReturnEndARMPCStack),
+        CountPerFrame(gWindow.ARM9JitReturnEndARMPCOther),
+        CountPerFrame(gWindow.ARM9JitReturnEndThumbPCStack),
+        CountPerFrame(gWindow.ARM9JitReturnEndThumbPCOther));
 
     ARM9ExitSite sortedExitSites[kARM9ExitSiteSlots];
     for (size_t i = 0; i < kARM9ExitSiteSlots; i++)

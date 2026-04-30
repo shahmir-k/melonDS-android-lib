@@ -51,6 +51,10 @@ public:
         ExitBranchThumbCond,
         ExitBranchThumbImm,
         ExitBranchThumbReg,
+        ExitBranchARMPCStack,
+        ExitBranchARMPCOther,
+        ExitBranchThumbPCStack,
+        ExitBranchThumbPCOther,
     };
 #endif
 
