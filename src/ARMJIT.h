@@ -105,6 +105,7 @@ struct JitTrace
     JitTraceSideExit SideExit {};
 };
 
+#if LITEV_PROFILE
 struct JitBlockRecipe
 {
     u32 Num = 0;
@@ -126,6 +127,7 @@ struct JitTraceRecipe
     std::vector<u32> Blocks {};
     std::vector<FetchedInstr> Instrs {};
 };
+#endif
 
 class ARMJIT
 {
@@ -178,10 +180,14 @@ public:
     u32 LocaliseCodeAddress(u32 num, u32 addr) const noexcept;
     const JitBlock* FindJitBlock(u32 num, u32 addr) const noexcept;
     const JitTrace* FindLinearTrace(u32 num, u32 startAddr) const noexcept;
+#if LITEV_PROFILE
     const JitBlockRecipe* FindBlockRecipe(u32 num, u32 startAddr) const noexcept;
+#endif
     bool BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTracePlan& out) const noexcept;
     bool BuildLinearTrace(u32 num, u32 startAddr, u32 maxBlocks, JitTrace& out) const noexcept;
+#if LITEV_PROFILE
     bool BuildTraceRecipe(u32 num, u32 startAddr, u32 maxBlocks, JitTraceRecipe& out) const noexcept;
+#endif
     void RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
     void RefreshLinearTrace(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
     void InvalidateLinearTracesForBlock(u32 num, u32 blockAddr) noexcept;
@@ -247,8 +253,10 @@ public:
     std::unordered_map<u32, JitBlock*> JitBlocks7 {};
     std::unordered_map<u32, JitTrace> LinearTraces9 {};
     std::unordered_map<u32, JitTrace> LinearTraces7 {};
+#if LITEV_PROFILE
     std::unordered_map<u32, JitBlockRecipe> BlockRecipes9 {};
     std::unordered_map<u32, JitBlockRecipe> BlockRecipes7 {};
+#endif
 
     std::unordered_map<u32, JitBlock*> RestoreCandidates {};
 
