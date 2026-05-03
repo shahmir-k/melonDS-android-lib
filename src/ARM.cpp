@@ -689,13 +689,37 @@ void ARMv5::Execute()
 #if LITEV_PROFILE
                     LiteProfile::NoteARM9TraceAttempt(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
 #endif
-                    ActiveJitTraceStartAddr = instrAddr;
+                    ActiveJitTraceStartAddr = trace->StartAddr;
                     ActiveJitTraceNextIndex = 1;
+                    ActiveJitTraceBlockCount = static_cast<u8>(std::min<size_t>(
+                        trace->Entries.size(), MaxActiveJitTraceBlocks));
+                    ActiveJitTraceExit = trace->SideExit.Exit;
+                    ActiveJitTraceBranch = trace->SideExit.Branch;
+                    ActiveJitTraceBranchReg = trace->SideExit.BranchReg;
+                    for (u32 i = 0; i < MaxActiveJitTraceBlocks; i++)
+                    {
+                        ActiveJitTraceBlocks[i] = 0;
+                        ActiveJitTraceEntries[i] = nullptr;
+                    }
+                    for (u32 i = 0; i < ActiveJitTraceBlockCount; i++)
+                    {
+                        ActiveJitTraceBlocks[i] = trace->Blocks[i];
+                        ActiveJitTraceEntries[i] = trace->Entries[i];
+                    }
                 }
                 else
                 {
                     ActiveJitTraceStartAddr = UINT32_MAX;
                     ActiveJitTraceNextIndex = 0;
+                    ActiveJitTraceBlockCount = 0;
+                    ActiveJitTraceExit = 0;
+                    ActiveJitTraceBranch = 0;
+                    ActiveJitTraceBranchReg = 0xFF;
+                    for (u32 i = 0; i < MaxActiveJitTraceBlocks; i++)
+                    {
+                        ActiveJitTraceBlocks[i] = 0;
+                        ActiveJitTraceEntries[i] = nullptr;
+                    }
                 }
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
 #if LITEV_PROFILE

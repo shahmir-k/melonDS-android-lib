@@ -56,6 +56,10 @@ static_assert(offsetof(ARM, CPSR) == ARM_CPSR_offset, "");
 static_assert(offsetof(ARM, Cycles) == ARM_Cycles_offset, "");
 static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset, "");
 
+static void ClearActiveTraceCache(ARM* cpu) noexcept;
+static void ActivateTraceCache(ARM* cpu, const JitTrace& trace) noexcept;
+static bool ActiveTraceContainsBlock(const ARM* cpu, u32 blockAddr) noexcept;
+
 extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 {
     constexpr s32 kChainCycleBudget = 128;
@@ -93,22 +97,21 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 
     if (cpu->ActiveJitTraceStartAddr != UINT32_MAX)
     {
-        const JitTrace* trace = nds.JIT.FindLinearTrace(0, cpu->ActiveJitTraceStartAddr);
-        if (!trace
-            || cpu->ActiveJitTraceNextIndex == 0
-            || cpu->ActiveJitTraceNextIndex >= trace->Blocks.size()
-            || cpu->ActiveJitTraceNextIndex >= trace->Entries.size())
+        if (cpu->ActiveJitTraceNextIndex == 0
+            || cpu->ActiveJitTraceNextIndex >= cpu->ActiveJitTraceBlockCount)
         {
-            cpu->ActiveJitTraceStartAddr = UINT32_MAX;
-            cpu->ActiveJitTraceNextIndex = 0;
+            ClearActiveTraceCache(cpu);
         }
-        else if (trace->Blocks[cpu->ActiveJitTraceNextIndex] == instrAddr)
+        else if (cpu->ActiveJitTraceBlocks[cpu->ActiveJitTraceNextIndex] == instrAddr)
         {
-            JitBlockEntry block = trace->Entries[cpu->ActiveJitTraceNextIndex];
+            JitBlockEntry block = cpu->ActiveJitTraceEntries[cpu->ActiveJitTraceNextIndex];
             if (block)
             {
 #if LITEV_PROFILE
-                LiteProfile::NoteARM9TraceHit(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
+                LiteProfile::NoteARM9TraceHit(
+                    cpu->ActiveJitTraceExit,
+                    cpu->ActiveJitTraceBranch,
+                    cpu->ActiveJitTraceBranchReg);
 #endif
                 cpu->LastJitBlockAddr = instrAddr;
                 cpu->LastJitBlockEntry = block;
@@ -117,22 +120,17 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
                 cpu->ProfileJitChainBlocks++;
 #endif
                 cpu->ActiveJitTraceNextIndex++;
-                if (cpu->ActiveJitTraceNextIndex >= trace->Blocks.size())
-                {
-                    cpu->ActiveJitTraceStartAddr = UINT32_MAX;
-                    cpu->ActiveJitTraceNextIndex = 0;
-                }
+                if (cpu->ActiveJitTraceNextIndex >= cpu->ActiveJitTraceBlockCount)
+                    ClearActiveTraceCache(cpu);
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
                 return block;
             }
 
-            cpu->ActiveJitTraceStartAddr = UINT32_MAX;
-            cpu->ActiveJitTraceNextIndex = 0;
+            ClearActiveTraceCache(cpu);
         }
         else
         {
-            cpu->ActiveJitTraceStartAddr = UINT32_MAX;
-            cpu->ActiveJitTraceNextIndex = 0;
+            ClearActiveTraceCache(cpu);
         }
     }
 
@@ -159,13 +157,11 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 #if LITEV_PROFILE
         LiteProfile::NoteARM9TraceAttempt(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
 #endif
-        cpu->ActiveJitTraceStartAddr = instrAddr;
-        cpu->ActiveJitTraceNextIndex = 1;
+        ActivateTraceCache(cpu, *trace);
     }
     else
     {
-        cpu->ActiveJitTraceStartAddr = UINT32_MAX;
-        cpu->ActiveJitTraceNextIndex = 0;
+        ClearActiveTraceCache(cpu);
     }
 #if LITEV_PROFILE
     cpu->ProfileJitCurrentBlockAddr = instrAddr;
@@ -173,6 +169,61 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 #endif
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
     return block;
+}
+
+static void ClearActiveTraceCache(ARM* cpu) noexcept
+{
+    cpu->ActiveJitTraceStartAddr = UINT32_MAX;
+    cpu->ActiveJitTraceNextIndex = 0;
+    cpu->ActiveJitTraceBlockCount = 0;
+    cpu->ActiveJitTraceExit = 0;
+    cpu->ActiveJitTraceBranch = 0;
+    cpu->ActiveJitTraceBranchReg = 0xFF;
+
+    for (u32 i = 0; i < ARM::MaxActiveJitTraceBlocks; i++)
+    {
+        cpu->ActiveJitTraceBlocks[i] = 0;
+        cpu->ActiveJitTraceEntries[i] = nullptr;
+    }
+}
+
+static void ActivateTraceCache(ARM* cpu, const JitTrace& trace) noexcept
+{
+    ClearActiveTraceCache(cpu);
+
+    const u32 blockCount = std::min<u32>(
+        static_cast<u32>(trace.Blocks.size()),
+        static_cast<u32>(ARM::MaxActiveJitTraceBlocks));
+    const u32 entryCount = std::min<u32>(
+        static_cast<u32>(trace.Entries.size()),
+        blockCount);
+
+    if (entryCount <= 1)
+        return;
+
+    cpu->ActiveJitTraceStartAddr = trace.StartAddr;
+    cpu->ActiveJitTraceNextIndex = 1;
+    cpu->ActiveJitTraceBlockCount = static_cast<u8>(entryCount);
+    cpu->ActiveJitTraceExit = trace.SideExit.Exit;
+    cpu->ActiveJitTraceBranch = trace.SideExit.Branch;
+    cpu->ActiveJitTraceBranchReg = trace.SideExit.BranchReg;
+
+    for (u32 i = 0; i < entryCount; i++)
+    {
+        cpu->ActiveJitTraceBlocks[i] = trace.Blocks[i];
+        cpu->ActiveJitTraceEntries[i] = trace.Entries[i];
+    }
+}
+
+static bool ActiveTraceContainsBlock(const ARM* cpu, u32 blockAddr) noexcept
+{
+    for (u32 i = 0; i < cpu->ActiveJitTraceBlockCount; i++)
+    {
+        if (cpu->ActiveJitTraceBlocks[i] == blockAddr)
+            return true;
+    }
+
+    return false;
 }
 
 static u8 ClassifyMemRegionBit(ARM* cpu, u32 dataAddr)
@@ -2672,6 +2723,10 @@ void ARMJIT::RefreshLinearTrace(u32 num, u32 startAddr, u32 maxBlocks) noexcept
 
 void ARMJIT::InvalidateLinearTracesForBlock(u32 num, u32 blockAddr) noexcept
 {
+    ARM* activeCpu = num == 0 ? static_cast<ARM*>(&NDS.ARM9) : static_cast<ARM*>(&NDS.ARM7);
+    if (ActiveTraceContainsBlock(activeCpu, blockAddr))
+        ClearActiveTraceCache(activeCpu);
+
     auto& traces = num == 0 ? LinearTraces9 : LinearTraces7;
     for (auto it = traces.begin(); it != traces.end();)
     {

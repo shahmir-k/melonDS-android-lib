@@ -198,12 +198,20 @@ public:
     MemRegion CodeMem;
 
 #ifdef JIT_ENABLED
+    static constexpr u32 MaxActiveJitTraceBlocks = 8;
+
     u32 FastBlockLookupStart, FastBlockLookupSize;
     u64* FastBlockLookup;
     u32 LastJitBlockAddr;
     JitBlockEntry LastJitBlockEntry;
     u32 ActiveJitTraceStartAddr;
     u8 ActiveJitTraceNextIndex;
+    u8 ActiveJitTraceBlockCount;
+    u8 ActiveJitTraceExit;
+    u8 ActiveJitTraceBranch;
+    u8 ActiveJitTraceBranchReg;
+    u32 ActiveJitTraceBlocks[MaxActiveJitTraceBlocks];
+    JitBlockEntry ActiveJitTraceEntries[MaxActiveJitTraceBlocks];
 #if LITEV_PROFILE
     u32 ProfileJitCurrentBlockAddr;
     u32 ProfileJitChainBlocks;
@@ -215,6 +223,15 @@ public:
         LastJitBlockEntry = nullptr;
         ActiveJitTraceStartAddr = UINT32_MAX;
         ActiveJitTraceNextIndex = 0;
+        ActiveJitTraceBlockCount = 0;
+        ActiveJitTraceExit = 0;
+        ActiveJitTraceBranch = 0;
+        ActiveJitTraceBranchReg = 0xFF;
+        for (u32 i = 0; i < MaxActiveJitTraceBlocks; i++)
+        {
+            ActiveJitTraceBlocks[i] = 0;
+            ActiveJitTraceEntries[i] = nullptr;
+        }
 #if LITEV_PROFILE
         ProfileJitCurrentBlockAddr = UINT32_MAX;
         ProfileJitChainBlocks = 0;
