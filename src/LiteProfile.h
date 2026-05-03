@@ -89,6 +89,30 @@ struct FrameCounters
     std::atomic<uint64_t> ARM9JitChainMissHLE{0};
     std::atomic<uint64_t> ARM9JitChainMissSetup{0};
     std::atomic<uint64_t> ARM9JitChainMissLookup{0};
+    std::atomic<uint64_t> ARM9JitChainBlocks1{0};
+    std::atomic<uint64_t> ARM9JitChainBlocks2{0};
+    std::atomic<uint64_t> ARM9JitChainBlocks3_4{0};
+    std::atomic<uint64_t> ARM9JitChainBlocks5_8{0};
+    std::atomic<uint64_t> ARM9JitChainBlocks9_16{0};
+    std::atomic<uint64_t> ARM9JitChainBlocks17P{0};
+    std::atomic<uint64_t> ARM9JitTraceAttemptARMPCStack{0};
+    std::atomic<uint64_t> ARM9JitTraceAttemptARMRegLR{0};
+    std::atomic<uint64_t> ARM9JitTraceAttemptARMRegOther{0};
+    std::atomic<uint64_t> ARM9JitTraceAttemptARMImm{0};
+    std::atomic<uint64_t> ARM9JitTraceAttemptMax{0};
+    std::atomic<uint64_t> ARM9JitTraceAttemptOther{0};
+    std::atomic<uint64_t> ARM9JitTraceHitARMPCStack{0};
+    std::atomic<uint64_t> ARM9JitTraceHitARMRegLR{0};
+    std::atomic<uint64_t> ARM9JitTraceHitARMRegOther{0};
+    std::atomic<uint64_t> ARM9JitTraceHitARMImm{0};
+    std::atomic<uint64_t> ARM9JitTraceHitMax{0};
+    std::atomic<uint64_t> ARM9JitTraceHitOther{0};
+    std::atomic<uint64_t> ARM9JitCommitARMPCStack{0};
+    std::atomic<uint64_t> ARM9JitCommitARMRegLR{0};
+    std::atomic<uint64_t> ARM9JitCommitARMRegOther{0};
+    std::atomic<uint64_t> ARM9JitCommitARMImm{0};
+    std::atomic<uint64_t> ARM9JitCommitMax{0};
+    std::atomic<uint64_t> ARM9JitCommitOther{0};
     std::atomic<uint64_t> ARM9JitReturnsNormal{0};
     std::atomic<uint64_t> ARM9JitReturnsStop{0};
     std::atomic<uint64_t> ARM9JitReturnsIdle{0};
@@ -417,10 +441,44 @@ struct ARM9ExitSite
     uint8_t Thumb = 0;
     uint8_t HasMemory = 0;
     uint8_t MemRegionMask = 0;
+    uint8_t TracePlanBlocks = 0;
+    uint8_t TracePlanStopReason = 0;
+    uint16_t TracePlanInstrs = 0;
 };
 
 inline constexpr size_t kARM9ExitSiteSlots = 32;
 inline ARM9ExitSite gARM9ExitSites[kARM9ExitSiteSlots];
+
+struct ARM9EdgeSite
+{
+    uint32_t SourceAddr = 0;
+    uint32_t TargetAddr = 0;
+    uint64_t Count = 0;
+    uint64_t Hits = 0;
+    uint64_t MissStop = 0;
+    uint64_t MissBudget = 0;
+    uint64_t MissTarget = 0;
+    uint64_t MissHLE = 0;
+    uint64_t MissSetup = 0;
+    uint64_t MissLookup = 0;
+    uint8_t Exit = 0;
+    uint8_t Branch = 0;
+    uint8_t BranchReg = 0xFF;
+};
+
+enum ARM9EdgeOutcome : uint8_t
+{
+    ARM9EdgeHit = 1,
+    ARM9EdgeMissStop = 2,
+    ARM9EdgeMissBudget = 3,
+    ARM9EdgeMissTarget = 4,
+    ARM9EdgeMissHLE = 5,
+    ARM9EdgeMissSetup = 6,
+    ARM9EdgeMissLookup = 7,
+};
+
+inline constexpr size_t kARM9EdgeSiteSlots = 48;
+inline ARM9EdgeSite gARM9EdgeSites[kARM9EdgeSiteSlots];
 
 inline uint64_t NowNs()
 {
@@ -459,9 +517,164 @@ inline void ResetARM9ExitSites()
         site = {};
 }
 
+inline void ResetARM9EdgeSites()
+{
+    for (auto& site : gARM9EdgeSites)
+        site = {};
+}
+
+enum ARM9TraceClass : uint8_t
+{
+    ARM9TraceOther = 0,
+    ARM9TraceARMPCStack,
+    ARM9TraceARMRegLR,
+    ARM9TraceARMRegOther,
+    ARM9TraceARMImm,
+    ARM9TraceMax,
+};
+
+inline ARM9TraceClass ClassifyARM9Trace(uint8_t exit, uint8_t branch, uint8_t branchReg)
+{
+    switch (branch)
+    {
+    case 6:
+        return ARM9TraceARMPCStack;
+    case 1:
+        return ARM9TraceARMImm;
+    case 2:
+        return branchReg == 14 ? ARM9TraceARMRegLR : ARM9TraceARMRegOther;
+    default:
+        break;
+    }
+
+    if (exit == 2)
+        return ARM9TraceMax;
+    return ARM9TraceOther;
+}
+
+inline const char* ARM9TraceClassName(uint8_t traceClass)
+{
+    switch (traceClass)
+    {
+    case ARM9TraceARMPCStack: return "arm_pc_stack";
+    case ARM9TraceARMRegLR: return "arm_reg_lr";
+    case ARM9TraceARMRegOther: return "arm_reg_other";
+    case ARM9TraceARMImm: return "arm_imm";
+    case ARM9TraceMax: return "max";
+    default: return "other";
+    }
+}
+
+inline void NoteARM9TraceAttempt(uint8_t exit, uint8_t branch, uint8_t branchReg)
+{
+    switch (ClassifyARM9Trace(exit, branch, branchReg))
+    {
+    case ARM9TraceARMPCStack: gFrame.ARM9JitTraceAttemptARMPCStack.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMRegLR: gFrame.ARM9JitTraceAttemptARMRegLR.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMRegOther: gFrame.ARM9JitTraceAttemptARMRegOther.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMImm: gFrame.ARM9JitTraceAttemptARMImm.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceMax: gFrame.ARM9JitTraceAttemptMax.fetch_add(1, std::memory_order_relaxed); break;
+    default: gFrame.ARM9JitTraceAttemptOther.fetch_add(1, std::memory_order_relaxed); break;
+    }
+}
+
+inline void NoteARM9TraceHit(uint8_t exit, uint8_t branch, uint8_t branchReg)
+{
+    switch (ClassifyARM9Trace(exit, branch, branchReg))
+    {
+    case ARM9TraceARMPCStack: gFrame.ARM9JitTraceHitARMPCStack.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMRegLR: gFrame.ARM9JitTraceHitARMRegLR.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMRegOther: gFrame.ARM9JitTraceHitARMRegOther.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMImm: gFrame.ARM9JitTraceHitARMImm.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceMax: gFrame.ARM9JitTraceHitMax.fetch_add(1, std::memory_order_relaxed); break;
+    default: gFrame.ARM9JitTraceHitOther.fetch_add(1, std::memory_order_relaxed); break;
+    }
+}
+
+inline void NoteARM9TraceCommit(uint8_t exit, uint8_t branch, uint8_t branchReg)
+{
+    switch (ClassifyARM9Trace(exit, branch, branchReg))
+    {
+    case ARM9TraceARMPCStack: gFrame.ARM9JitCommitARMPCStack.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMRegLR: gFrame.ARM9JitCommitARMRegLR.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMRegOther: gFrame.ARM9JitCommitARMRegOther.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceARMImm: gFrame.ARM9JitCommitARMImm.fetch_add(1, std::memory_order_relaxed); break;
+    case ARM9TraceMax: gFrame.ARM9JitCommitMax.fetch_add(1, std::memory_order_relaxed); break;
+    default: gFrame.ARM9JitCommitOther.fetch_add(1, std::memory_order_relaxed); break;
+    }
+}
+
+inline void NoteARM9ChainBlocks(uint32_t blocks)
+{
+    if (blocks <= 1)
+        gFrame.ARM9JitChainBlocks1.fetch_add(1, std::memory_order_relaxed);
+    else if (blocks == 2)
+        gFrame.ARM9JitChainBlocks2.fetch_add(1, std::memory_order_relaxed);
+    else if (blocks <= 4)
+        gFrame.ARM9JitChainBlocks3_4.fetch_add(1, std::memory_order_relaxed);
+    else if (blocks <= 8)
+        gFrame.ARM9JitChainBlocks5_8.fetch_add(1, std::memory_order_relaxed);
+    else if (blocks <= 16)
+        gFrame.ARM9JitChainBlocks9_16.fetch_add(1, std::memory_order_relaxed);
+    else
+        gFrame.ARM9JitChainBlocks17P.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t targetAddr, uint8_t exit, uint8_t branch,
+                             uint8_t branchReg, uint8_t outcome)
+{
+    ARM9EdgeSite* target = nullptr;
+    ARM9EdgeSite* empty = nullptr;
+    ARM9EdgeSite* minSite = &gARM9EdgeSites[0];
+
+    for (auto& site : gARM9EdgeSites)
+    {
+        if (site.Count == 0)
+        {
+            if (!empty)
+                empty = &site;
+            continue;
+        }
+        if (site.SourceAddr == sourceAddr && site.TargetAddr == targetAddr)
+        {
+            target = &site;
+            break;
+        }
+        if (site.Count < minSite->Count)
+            minSite = &site;
+    }
+
+    if (!target)
+    {
+        target = empty ? empty : minSite;
+        *target = {};
+        target->SourceAddr = sourceAddr;
+        target->TargetAddr = targetAddr;
+    }
+
+    target->Count++;
+    target->Exit = exit;
+    target->Branch = branch;
+    target->BranchReg = branchReg;
+
+    switch (outcome)
+    {
+    case 1: target->Hits++; break;
+    case 2: target->MissStop++; break;
+    case 3: target->MissBudget++; break;
+    case 4: target->MissTarget++; break;
+    case 5: target->MissHLE++; break;
+    case 6: target->MissSetup++; break;
+    case 7: target->MissLookup++; break;
+    default: break;
+    }
+}
+
 inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_t branchReg,
                              uint8_t thumb, uint8_t hasMemory, uint8_t memRegionMask,
-                             uint16_t instrCount, uint64_t guestCycles)
+                             uint16_t instrCount, uint64_t guestCycles,
+                             uint8_t tracePlanBlocks, uint8_t tracePlanStopReason,
+                             uint16_t tracePlanInstrs)
 {
     ARM9ExitSite* target = nullptr;
     ARM9ExitSite* empty = nullptr;
@@ -495,6 +708,9 @@ inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_
         target->Thumb = thumb;
         target->HasMemory = hasMemory;
         target->MemRegionMask = memRegionMask;
+        target->TracePlanBlocks = tracePlanBlocks;
+        target->TracePlanStopReason = tracePlanStopReason;
+        target->TracePlanInstrs = tracePlanInstrs;
     }
 
     target->Count++;
@@ -506,6 +722,9 @@ inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_
     target->Thumb = thumb;
     target->HasMemory = hasMemory;
     target->MemRegionMask = memRegionMask;
+    target->TracePlanBlocks = tracePlanBlocks;
+    target->TracePlanStopReason = tracePlanStopReason;
+    target->TracePlanInstrs = tracePlanInstrs;
 }
 
 inline const char* ARM9ExitName(uint8_t exit)
@@ -534,6 +753,23 @@ inline const char* ARM9BranchName(uint8_t branch)
     case 8: return "thumb_pc_stack";
     case 9: return "thumb_pc_other";
     default: return "none";
+    }
+}
+
+inline const char* ARM9TracePlanStopName(uint8_t reason)
+{
+    switch (reason)
+    {
+    case 0: return "none";
+    case 1: return "missing_start";
+    case 2: return "max_blocks";
+    case 3: return "dynamic_exit";
+    case 4: return "cond_split";
+    case 5: return "mode_change";
+    case 6: return "missing_succ";
+    case 7: return "loop";
+    case 8: return "nontraceable";
+    default: return "unknown";
     }
 }
 
@@ -605,6 +841,30 @@ inline void ResetFrame()
     gFrame.ARM9JitChainMissHLE.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainMissSetup.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitChainMissLookup.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainBlocks1.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainBlocks2.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainBlocks3_4.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainBlocks5_8.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainBlocks9_16.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitChainBlocks17P.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceAttemptARMPCStack.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceAttemptARMRegLR.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceAttemptARMRegOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceAttemptARMImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceAttemptMax.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceAttemptOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceHitARMPCStack.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceHitARMRegLR.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceHitARMRegOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceHitARMImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceHitMax.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitTraceHitOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCommitARMPCStack.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCommitARMRegLR.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCommitARMRegOther.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCommitARMImm.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCommitMax.store(0, std::memory_order_relaxed);
+    gFrame.ARM9JitCommitOther.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gFrame.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
@@ -980,6 +1240,30 @@ inline void ResetWindow()
     gWindow.ARM9JitChainMissHLE.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainMissSetup.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitChainMissLookup.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainBlocks1.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainBlocks2.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainBlocks3_4.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainBlocks5_8.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainBlocks9_16.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitChainBlocks17P.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceAttemptARMPCStack.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceAttemptARMRegLR.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceAttemptARMRegOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceAttemptARMImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceAttemptMax.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceAttemptOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceHitARMPCStack.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceHitARMRegLR.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceHitARMRegOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceHitARMImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceHitMax.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitTraceHitOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCommitARMPCStack.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCommitARMRegLR.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCommitARMRegOther.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCommitARMImm.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCommitMax.store(0, std::memory_order_relaxed);
+    gWindow.ARM9JitCommitOther.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsNormal.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsStop.store(0, std::memory_order_relaxed);
     gWindow.ARM9JitReturnsIdle.store(0, std::memory_order_relaxed);
@@ -1314,6 +1598,12 @@ inline double CountPerFrame(const std::atomic<uint64_t>& counter)
            static_cast<double>(kLogEveryFrames);
 }
 
+inline double CountPerFrame(uint64_t counter)
+{
+    return static_cast<double>(counter) /
+           static_cast<double>(kLogEveryFrames);
+}
+
 inline uint64_t CounterValue(const std::atomic<uint64_t>& counter)
 {
     return counter.load(std::memory_order_relaxed);
@@ -1413,6 +1703,30 @@ inline void EndFrame()
     MergeCounter(gWindow.ARM9JitChainMissHLE, gFrame.ARM9JitChainMissHLE);
     MergeCounter(gWindow.ARM9JitChainMissSetup, gFrame.ARM9JitChainMissSetup);
     MergeCounter(gWindow.ARM9JitChainMissLookup, gFrame.ARM9JitChainMissLookup);
+    MergeCounter(gWindow.ARM9JitChainBlocks1, gFrame.ARM9JitChainBlocks1);
+    MergeCounter(gWindow.ARM9JitChainBlocks2, gFrame.ARM9JitChainBlocks2);
+    MergeCounter(gWindow.ARM9JitChainBlocks3_4, gFrame.ARM9JitChainBlocks3_4);
+    MergeCounter(gWindow.ARM9JitChainBlocks5_8, gFrame.ARM9JitChainBlocks5_8);
+    MergeCounter(gWindow.ARM9JitChainBlocks9_16, gFrame.ARM9JitChainBlocks9_16);
+    MergeCounter(gWindow.ARM9JitChainBlocks17P, gFrame.ARM9JitChainBlocks17P);
+    MergeCounter(gWindow.ARM9JitTraceAttemptARMPCStack, gFrame.ARM9JitTraceAttemptARMPCStack);
+    MergeCounter(gWindow.ARM9JitTraceAttemptARMRegLR, gFrame.ARM9JitTraceAttemptARMRegLR);
+    MergeCounter(gWindow.ARM9JitTraceAttemptARMRegOther, gFrame.ARM9JitTraceAttemptARMRegOther);
+    MergeCounter(gWindow.ARM9JitTraceAttemptARMImm, gFrame.ARM9JitTraceAttemptARMImm);
+    MergeCounter(gWindow.ARM9JitTraceAttemptMax, gFrame.ARM9JitTraceAttemptMax);
+    MergeCounter(gWindow.ARM9JitTraceAttemptOther, gFrame.ARM9JitTraceAttemptOther);
+    MergeCounter(gWindow.ARM9JitTraceHitARMPCStack, gFrame.ARM9JitTraceHitARMPCStack);
+    MergeCounter(gWindow.ARM9JitTraceHitARMRegLR, gFrame.ARM9JitTraceHitARMRegLR);
+    MergeCounter(gWindow.ARM9JitTraceHitARMRegOther, gFrame.ARM9JitTraceHitARMRegOther);
+    MergeCounter(gWindow.ARM9JitTraceHitARMImm, gFrame.ARM9JitTraceHitARMImm);
+    MergeCounter(gWindow.ARM9JitTraceHitMax, gFrame.ARM9JitTraceHitMax);
+    MergeCounter(gWindow.ARM9JitTraceHitOther, gFrame.ARM9JitTraceHitOther);
+    MergeCounter(gWindow.ARM9JitCommitARMPCStack, gFrame.ARM9JitCommitARMPCStack);
+    MergeCounter(gWindow.ARM9JitCommitARMRegLR, gFrame.ARM9JitCommitARMRegLR);
+    MergeCounter(gWindow.ARM9JitCommitARMRegOther, gFrame.ARM9JitCommitARMRegOther);
+    MergeCounter(gWindow.ARM9JitCommitARMImm, gFrame.ARM9JitCommitARMImm);
+    MergeCounter(gWindow.ARM9JitCommitMax, gFrame.ARM9JitCommitMax);
+    MergeCounter(gWindow.ARM9JitCommitOther, gFrame.ARM9JitCommitOther);
     MergeCounter(gWindow.ARM9JitReturnsNormal, gFrame.ARM9JitReturnsNormal);
     MergeCounter(gWindow.ARM9JitReturnsStop, gFrame.ARM9JitReturnsStop);
     MergeCounter(gWindow.ARM9JitReturnsIdle, gFrame.ARM9JitReturnsIdle);
@@ -2031,6 +2345,24 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9JitChainMissLookup));
 
     Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_chain_blocks len1=%.1f len2=%.1f len3_4=%.1f len5_8=%.1f len9_16=%.1f len17p=%.1f",
+        CountPerFrame(gWindow.ARM9JitChainBlocks1),
+        CountPerFrame(gWindow.ARM9JitChainBlocks2),
+        CountPerFrame(gWindow.ARM9JitChainBlocks3_4),
+        CountPerFrame(gWindow.ARM9JitChainBlocks5_8),
+        CountPerFrame(gWindow.ARM9JitChainBlocks9_16),
+        CountPerFrame(gWindow.ARM9JitChainBlocks17P));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_trace_commit stack_pc=%.1f reg_lr=%.1f reg_other=%.1f arm_imm=%.1f max=%.1f other=%.1f",
+        CountPerFrame(gWindow.ARM9JitCommitARMPCStack),
+        CountPerFrame(gWindow.ARM9JitCommitARMRegLR),
+        CountPerFrame(gWindow.ARM9JitCommitARMRegOther),
+        CountPerFrame(gWindow.ARM9JitCommitARMImm),
+        CountPerFrame(gWindow.ARM9JitCommitMax),
+        CountPerFrame(gWindow.ARM9JitCommitOther));
+
+    Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] arm9_ret normal_end=%.1f end_branch=%.1f end_cond=%.1f end_other=%.1f normal_max=%.1f normal_irq=%.1f normal_halt=%.1f",
         CountPerFrame(gWindow.ARM9JitReturnEndBlock),
         CountPerFrame(gWindow.ARM9JitReturnEndBranch),
@@ -2092,7 +2424,7 @@ inline void EndFrame()
         const double cyclesPerFrame = gWindowFrames ? static_cast<double>(site.GuestCycles) / static_cast<double>(gWindowFrames) : 0.0;
         const double instrsPerHit = site.Count ? static_cast<double>(site.Instrs) / static_cast<double>(site.Count) : 0.0;
         Platform::Log(Platform::LogLevel::Info,
-            "[LITEV_PROFILE] arm9_exit_hot%zu pc=%08" PRIX32 " count=%.1f cycles=%.1f exit=%s branch=%s reg=%u thumb=%u mem=%u memmask=%02X instr/hit=%.1f",
+            "[LITEV_PROFILE] arm9_exit_hot%zu pc=%08" PRIX32 " count=%.1f cycles=%.1f exit=%s branch=%s reg=%u thumb=%u mem=%u memmask=%02X instr/hit=%.1f trace_blocks=%u trace_instr=%u trace_stop=%s",
             i,
             site.Addr,
             countPerFrame,
@@ -2103,7 +2435,10 @@ inline void EndFrame()
             site.Thumb,
             site.HasMemory,
             site.MemRegionMask,
-            instrsPerHit);
+            instrsPerHit,
+            site.TracePlanBlocks,
+            site.TracePlanInstrs,
+            ARM9TracePlanStopName(site.TracePlanStopReason));
     }
 
     Platform::Log(Platform::LogLevel::Info,
@@ -2243,6 +2578,7 @@ inline void EndFrame()
 
     gWindowFrames = 0;
     ResetARM9ExitSites();
+    ResetARM9EdgeSites();
     ResetWindow();
 }
 

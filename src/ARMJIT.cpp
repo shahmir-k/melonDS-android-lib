@@ -62,6 +62,7 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 
     auto* cpu = static_cast<ARMv5*>(cpuBase);
     auto& nds = cpu->NDS;
+    const u32 instrAddr = cpu->R[15] - ((cpu->CPSR & 0x20) ? 2 : 4);
 
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainAttempts);
 
@@ -83,7 +84,6 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
         return nullptr;
     }
 
-    const u32 instrAddr = cpu->R[15] - ((cpu->CPSR & 0x20) ? 2 : 4);
     if (nds.ARM9LibHLE.TryHandle(*cpu, instrAddr))
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9LibHLEHits);
@@ -108,8 +108,33 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 
     cpu->LastJitBlockAddr = instrAddr;
     cpu->LastJitBlockEntry = block;
+#if LITEV_PROFILE
+    cpu->ProfileJitCurrentBlockAddr = instrAddr;
+    cpu->ProfileJitChainBlocks++;
+#endif
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
     return block;
+}
+
+static u8 ClassifyMemRegionBit(ARM* cpu, u32 dataAddr)
+{
+    if (cpu->Num == 0)
+    {
+        ARMv5* cpuv5 = static_cast<ARMv5*>(cpu);
+        if (dataAddr < cpuv5->ITCMSize)
+            return 1 << 0;
+        if ((dataAddr & cpuv5->DTCMMask) == cpuv5->DTCMBase)
+            return 1 << 1;
+    }
+
+    switch (dataAddr >> 24)
+    {
+    case 0x02: return 1 << 2;
+    case 0x03: return 1 << 3;
+    case 0x04: return 1 << 4;
+    case 0x06: return 1 << 5;
+    default:   return 1 << 6;
+    }
 }
 
 
@@ -137,6 +162,33 @@ const u32 CodeRegionSizes[ARMJIT_Memory::memregions_Count] =
     NWRAMSize,
     NWRAMSize,
 };
+
+static bool IsSameModeStaticTarget(bool thumb, const FetchedInstr& instr, u32 target)
+{
+    if (thumb)
+    {
+        switch (instr.Info.Kind)
+        {
+        case ARMInstrInfo::tk_B:
+        case ARMInstrInfo::tk_BL_LONG:
+        case ARMInstrInfo::tk_BCOND:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    switch (instr.Info.Kind)
+    {
+    case ARMInstrInfo::ak_B:
+    case ARMInstrInfo::ak_BL:
+        return true;
+    case ARMInstrInfo::ak_BLX_IMM:
+        return false;
+    default:
+        return (target & 0x1) == 0;
+    }
+}
 
 template <bool Write>
 __attribute__((always_inline)) inline void CopyBlockWords(u8* mem, u32 addr, u64* data, u32 num)
@@ -1553,10 +1605,10 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     bool hasLink = false;
 
     bool hasMemoryInstr = false;
-#if LITEV_PROFILE
     bool hasLoadInstr = false;
     bool hasStoreInstr = false;
     u8 memRegionMask = 0;
+#if LITEV_PROFILE
     u16 execALUCount = 0;
     u16 execMulCount = 0;
     u16 execSingleLoadCount = 0;
@@ -1580,27 +1632,6 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     u16 execMemIOCount = 0;
     u16 execMemVRAMCount = 0;
     u16 execMemOtherCount = 0;
-
-    auto classifyMemRegionBit = [&](u32 dataAddr) -> u8
-    {
-        if (cpu->Num == 0)
-        {
-            ARMv5* cpuv5 = static_cast<ARMv5*>(cpu);
-            if (dataAddr < cpuv5->ITCMSize)
-                return 1 << 0;
-            if ((dataAddr & cpuv5->DTCMMask) == cpuv5->DTCMBase)
-                return 1 << 1;
-        }
-
-        switch (dataAddr >> 24)
-        {
-        case 0x02: return 1 << 2;
-        case 0x03: return 1 << 3;
-        case 0x04: return 1 << 4;
-        case 0x06: return 1 << 5;
-        default:   return 1 << 6;
-        }
-    };
 
     auto noteMemRegion = [&](u8 regionBit)
     {
@@ -1719,6 +1750,18 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         instrs[i].DataCycles = cpu->DataCycles;
         instrs[i].DataRegion = cpu->DataRegion;
+
+        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadMem
+            || instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral)
+            hasLoadInstr = true;
+        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_WriteMem)
+            hasStoreInstr = true;
+        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadMem
+            || instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral
+            || instrs[i].Info.SpecialKind == ARMInstrInfo::special_WriteMem)
+        {
+            memRegionMask |= ClassifyMemRegionBit(cpu, instrs[i].DataRegion);
+        }
 #if LITEV_PROFILE
         const u16 kind = instrs[i].Info.Kind;
         const bool isLiteralLoad = instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral;
@@ -1757,16 +1800,10 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         bool isStackLoad = false;
         bool isStackStore = false;
 
-        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadMem
-            || instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral)
-            hasLoadInstr = true;
-        if (instrs[i].Info.SpecialKind == ARMInstrInfo::special_WriteMem)
-            hasStoreInstr = true;
         if (isMemLoad || isMemStore)
         {
             u32 dataAddr = instrs[i].DataRegion;
-            u8 regionBit = classifyMemRegionBit(dataAddr);
-            memRegionMask |= regionBit;
+            u8 regionBit = ClassifyMemRegionBit(cpu, dataAddr);
             if (!isLiteralLoad)
                 noteMemRegion(regionBit);
         }
@@ -1945,7 +1982,6 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             FloodFillSetFlags(instrs, i - 2, !secondaryFlagReadCond ? instrs[i - 1].Info.ReadFlags : 0xF);
     } while(!instrs[i - 1].Info.EndBlock && i < MaxBlockSize && !cpu->Halted && (!cpu->IRQ || (cpu->CPSR & 0x80)));
 
-#if LITEV_PROFILE
     u8 exitKind = JitBlock::ExitEndBlock;
     bool exitIsBranch = instrs[i - 1].Info.Branches();
     bool exitIsCondBranch = thumb
@@ -1957,7 +1993,6 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         exitKind = JitBlock::ExitMaxBlockSize;
     else if (cpu->IRQ && !(cpu->CPSR & 0x80) && !instrs[i - 1].Info.EndBlock)
         exitKind = JitBlock::ExitIRQBoundary;
-#endif
 
     if (numLiterals)
     {
@@ -2030,6 +2065,127 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         block->StartAddr = blockAddr;
         block->StartAddrLocal = localAddr;
+        block->TraceInstrCount = i;
+        block->TraceExit = exitKind;
+        block->TraceBranch = JitBlock::ExitBranchNone;
+        block->TraceBranchReg = 0xFF;
+        block->TraceBranchIsLink = 0;
+        block->TraceThumb = thumb;
+        block->TraceHasMemory = hasMemoryInstr;
+        block->TraceHasLoad = hasLoadInstr;
+        block->TraceHasStore = hasStoreInstr;
+        block->TraceMemRegionMask = memRegionMask;
+        block->TraceHasConditionalExit = exitIsCondBranch;
+        block->TraceHasDynamicExit = 0;
+        block->TracePrimaryTargetKind = JitBlock::TraceTargetNone;
+        block->TraceSecondaryTargetKind = JitBlock::TraceTargetNone;
+        block->TracePrimaryTargetSameMode = 0;
+        block->TraceSecondaryTargetSameMode = 0;
+        block->TraceExitInstrAddr = instrs[i - 1].Addr;
+        block->TracePrimaryTarget = 0;
+        block->TraceSecondaryTarget = 0;
+
+        const auto& exitInstr = instrs[i - 1];
+        bool traceLink = false;
+        u32 traceCond = 0;
+        u32 traceLinkAddr = 0;
+        u32 traceTarget = 0;
+        const bool traceStaticTarget = DecodeBranch(thumb, exitInstr, traceCond, false, 0, traceLink, traceLinkAddr, traceTarget);
+
+        if (exitKind == JitBlock::ExitMaxBlockSize)
+        {
+            block->TracePrimaryTargetKind = JitBlock::TraceTargetFallthrough;
+            block->TracePrimaryTargetSameMode = 1;
+            block->TracePrimaryTarget = exitInstr.Addr + (thumb ? 2u : 4u);
+        }
+        else if (exitIsBranch)
+        {
+            if (thumb)
+            {
+                switch (exitInstr.Info.Kind)
+                {
+                case ARMInstrInfo::tk_BCOND:
+                    block->TraceBranch = JitBlock::ExitBranchThumbCond;
+                    break;
+                case ARMInstrInfo::tk_B:
+                case ARMInstrInfo::tk_BL_LONG:
+                    block->TraceBranch = JitBlock::ExitBranchThumbImm;
+                    break;
+                case ARMInstrInfo::tk_BX:
+                case ARMInstrInfo::tk_BLX_REG:
+                    block->TraceBranch = JitBlock::ExitBranchThumbReg;
+                    block->TraceHasDynamicExit = 1;
+                    break;
+                case ARMInstrInfo::tk_POP:
+                    if (exitInstr.Instr & (1 << 8))
+                    {
+                        block->TraceBranch = JitBlock::ExitBranchThumbPCStack;
+                        block->TraceHasDynamicExit = 1;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+            else
+            {
+                switch (exitInstr.Info.Kind)
+                {
+                case ARMInstrInfo::ak_B:
+                case ARMInstrInfo::ak_BL:
+                case ARMInstrInfo::ak_BLX_IMM:
+                    block->TraceBranch = JitBlock::ExitBranchARMImm;
+                    break;
+                case ARMInstrInfo::ak_BX:
+                case ARMInstrInfo::ak_BLX_REG:
+                    block->TraceBranch = JitBlock::ExitBranchARMReg;
+                    block->TraceBranchReg = exitInstr.A_Reg(0);
+                    block->TraceBranchIsLink = exitInstr.Info.Kind == ARMInstrInfo::ak_BLX_REG;
+                    block->TraceHasDynamicExit = 1;
+                    break;
+                case ARMInstrInfo::ak_LDM:
+                    if (exitInstr.Instr & (1 << 15))
+                    {
+                        if (exitInstr.A_Reg(16) == 13)
+                            block->TraceBranch = JitBlock::ExitBranchARMPCStack;
+                        else
+                            block->TraceBranch = JitBlock::ExitBranchARMPCOther;
+                        block->TraceHasDynamicExit = 1;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            if (traceStaticTarget)
+            {
+                if (exitIsCondBranch)
+                {
+                    block->TracePrimaryTargetKind = JitBlock::TraceTargetConditionalTaken;
+                    block->TracePrimaryTarget = traceTarget;
+                    block->TracePrimaryTargetSameMode = IsSameModeStaticTarget(thumb, exitInstr, traceTarget);
+                    block->TraceSecondaryTargetKind = JitBlock::TraceTargetConditionalFallthrough;
+                    block->TraceSecondaryTarget = exitInstr.Addr + (thumb ? 2u : 4u);
+                    block->TraceSecondaryTargetSameMode = 1;
+                }
+                else
+                {
+                    block->TracePrimaryTargetKind = JitBlock::TraceTargetStatic;
+                    block->TracePrimaryTarget = traceTarget;
+                    block->TracePrimaryTargetSameMode = IsSameModeStaticTarget(thumb, exitInstr, traceTarget);
+                }
+            }
+            else if (block->TraceBranch == JitBlock::ExitBranchARMReg
+                || block->TraceBranch == JitBlock::ExitBranchThumbReg
+                || block->TraceBranch == JitBlock::ExitBranchARMPCStack
+                || block->TraceBranch == JitBlock::ExitBranchARMPCOther
+                || block->TraceBranch == JitBlock::ExitBranchThumbPCStack
+                || block->TraceBranch == JitBlock::ExitBranchThumbPCOther)
+            {
+                block->TraceHasDynamicExit = 1;
+            }
+        }
 #if LITEV_PROFILE
         block->InstrCount = i;
         block->Exit = exitKind;
@@ -2068,7 +2224,6 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         block->MemRegionMask = memRegionMask;
         if (exitIsBranch)
         {
-            const auto& exitInstr = instrs[i - 1];
             if (thumb)
             {
                 switch (exitInstr.Info.Kind)
@@ -2166,6 +2321,36 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         JitBlocks9[blockAddr] = block;
     else
         JitBlocks7[blockAddr] = block;
+
+    RefreshLinearTracePlanSummary(cpu->Num, blockAddr);
+    auto& traceBlocks = cpu->Num == 0 ? JitBlocks9 : JitBlocks7;
+    TinyVector<u32> pendingTraceStarts;
+    pendingTraceStarts.Add(blockAddr);
+    for (u32 pendingIndex = 0; pendingIndex < pendingTraceStarts.Length; pendingIndex++)
+    {
+        const u32 successorAddr = pendingTraceStarts[pendingIndex];
+        for (const auto& [candidateAddr, candidate] : traceBlocks)
+        {
+            if (candidateAddr == successorAddr)
+                continue;
+            if (!candidate->TracePrimaryTargetSameMode || candidate->TracePrimaryTarget != successorAddr)
+                continue;
+
+            const u8 oldPlanBlocks = candidate->TracePlanBlocks;
+            const u8 oldPlanStopReason = candidate->TracePlanStopReason;
+            const u16 oldPlanInstrs = candidate->TracePlanInstrs;
+
+            RefreshLinearTracePlanSummary(cpu->Num, candidateAddr);
+
+            if ((candidate->TracePlanBlocks != oldPlanBlocks
+                    || candidate->TracePlanStopReason != oldPlanStopReason
+                    || candidate->TracePlanInstrs != oldPlanInstrs)
+                && pendingTraceStarts.Find(candidateAddr) == -1)
+            {
+                pendingTraceStarts.Add(candidateAddr);
+            }
+        }
+    }
 
     u64* entry = &FastBlockLookupRegions[(localAddr >> 27)][(localAddr & 0x7FFFFFF) / 2];
     *entry = ((u64)blockAddr | cpu->Num) << 32;
@@ -2316,6 +2501,126 @@ JitBlockEntry ARMJIT::LookUpBlock(u32 num, u64* entries, u32 offset, u32 addr) n
     Stats.FastLookupMisses.fetch_add(1, std::memory_order_relaxed);
 #endif
     return NULL;
+}
+
+const JitBlock* ARMJIT::FindJitBlock(u32 num, u32 addr) const noexcept
+{
+    const auto& blocks = num == 0 ? JitBlocks9 : JitBlocks7;
+    auto it = blocks.find(addr);
+    return it != blocks.end() ? it->second : nullptr;
+}
+
+void ARMJIT::RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks) noexcept
+{
+    auto& blocks = num == 0 ? JitBlocks9 : JitBlocks7;
+    auto it = blocks.find(startAddr);
+    if (it == blocks.end())
+        return;
+
+    JitTracePlan plan;
+    BuildLinearTracePlan(num, startAddr, maxBlocks, plan);
+
+    JitBlock* block = it->second;
+    block->TracePlanBlocks = static_cast<u8>(std::min<u32>(plan.Blocks.Length, 0xFFu));
+    block->TracePlanStopReason = plan.StopReason;
+    block->TracePlanInstrs = static_cast<u16>(std::min<u32>(plan.TotalInstrs, 0xFFFFu));
+}
+
+bool ARMJIT::BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTracePlan& out) const noexcept
+{
+    out = {};
+    out.Num = num;
+    out.StartAddr = startAddr;
+
+    if (maxBlocks == 0)
+    {
+        out.StopReason = TracePlanStopMaxBlocks;
+        return false;
+    }
+
+    const JitBlock* block = FindJitBlock(num, startAddr);
+    if (!block)
+    {
+        out.StopReason = TracePlanStopMissingStart;
+        return false;
+    }
+
+    out.Thumb = block->TraceThumb;
+
+    for (u32 i = 0; i < maxBlocks; i++)
+    {
+        out.Blocks.Add(block->StartAddr);
+        out.EndAddr = block->StartAddr;
+        out.TotalInstrs += block->TraceInstrCount;
+
+        if (block->TraceExit == JitBlock::ExitIRQBoundary
+            || block->TraceExit == JitBlock::ExitHaltBoundary)
+        {
+            out.StopReason = TracePlanStopNonTraceableExit;
+            return out.Blocks.Length > 1;
+        }
+
+        if (block->TraceHasConditionalExit)
+        {
+            out.StopReason = TracePlanStopConditionalSplit;
+            return out.Blocks.Length > 1;
+        }
+
+        if (block->TraceHasDynamicExit)
+        {
+            out.StopReason = TracePlanStopDynamicExit;
+            return out.Blocks.Length > 1;
+        }
+
+        if (block->TraceBranchIsLink)
+        {
+            out.StopReason = TracePlanStopNonTraceableExit;
+            return out.Blocks.Length > 1;
+        }
+
+        if (block->TracePrimaryTargetKind == JitBlock::TraceTargetNone)
+        {
+            out.StopReason = TracePlanStopNonTraceableExit;
+            return out.Blocks.Length > 1;
+        }
+
+        if (!block->TracePrimaryTargetSameMode)
+        {
+            out.StopReason = TracePlanStopModeChange;
+            return out.Blocks.Length > 1;
+        }
+
+        if (i + 1 >= maxBlocks)
+        {
+            out.StopReason = TracePlanStopMaxBlocks;
+            return out.Blocks.Length > 1;
+        }
+
+        const u32 nextAddr = block->TracePrimaryTarget;
+        if (out.Blocks.Find(nextAddr) != -1)
+        {
+            out.StopReason = TracePlanStopLoop;
+            return out.Blocks.Length > 1;
+        }
+
+        const JitBlock* next = FindJitBlock(num, nextAddr);
+        if (!next)
+        {
+            out.StopReason = TracePlanStopMissingSuccessor;
+            return out.Blocks.Length > 1;
+        }
+
+        if (next->TraceThumb != out.Thumb)
+        {
+            out.StopReason = TracePlanStopModeChange;
+            return out.Blocks.Length > 1;
+        }
+
+        block = next;
+    }
+
+    out.StopReason = TracePlanStopMaxBlocks;
+    return out.Blocks.Length > 1;
 }
 
 void ARMJIT::blockSanityCheck(u32 num, u32 blockAddr, JitBlockEntry entry) noexcept

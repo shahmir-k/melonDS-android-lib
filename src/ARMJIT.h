@@ -46,6 +46,31 @@ namespace melonDS
 class ARM;
 
 class JitBlock;
+
+enum JitTracePlanStopReason : u8
+{
+    TracePlanStopNone = 0,
+    TracePlanStopMissingStart,
+    TracePlanStopMaxBlocks,
+    TracePlanStopDynamicExit,
+    TracePlanStopConditionalSplit,
+    TracePlanStopModeChange,
+    TracePlanStopMissingSuccessor,
+    TracePlanStopLoop,
+    TracePlanStopNonTraceableExit,
+};
+
+struct JitTracePlan
+{
+    u32 Num = 0;
+    u32 StartAddr = 0;
+    u32 EndAddr = 0;
+    u32 TotalInstrs = 0;
+    u8 Thumb = 0;
+    u8 StopReason = TracePlanStopNone;
+    TinyVector<u32> Blocks {};
+};
+
 class ARMJIT
 {
 public:
@@ -95,6 +120,9 @@ public:
     JitBlockEntry LookUpBlock(u32 num, u64* entries, u32 offset, u32 addr) noexcept;
     bool SetupExecutableRegion(u32 num, u32 blockAddr, u64*& entry, u32& start, u32& size) noexcept;
     u32 LocaliseCodeAddress(u32 num, u32 addr) const noexcept;
+    const JitBlock* FindJitBlock(u32 num, u32 addr) const noexcept;
+    bool BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTracePlan& out) const noexcept;
+    void RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
 
     ARMJIT_Memory Memory;
 private:

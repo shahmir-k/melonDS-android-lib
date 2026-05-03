@@ -33,7 +33,6 @@ typedef void (*JitBlockEntry)();
 class JitBlock
 {
 public:
-#if LITEV_PROFILE
     enum ExitKind : u8
     {
         ExitUnknown = 0,
@@ -56,13 +55,43 @@ public:
         ExitBranchThumbPCStack,
         ExitBranchThumbPCOther,
     };
-#endif
+
+    enum TraceTargetKind : u8
+    {
+        TraceTargetNone = 0,
+        TraceTargetStatic,
+        TraceTargetFallthrough,
+        TraceTargetConditionalTaken,
+        TraceTargetConditionalFallthrough,
+    };
 
     JitBlock(u32 num, u32 literalHash, u32 numAddresses, u32 numLiterals)
     {
         Num = num;
         NumAddresses = numAddresses;
         NumLiterals = numLiterals;
+        TraceInstrCount = 0;
+        TraceExit = ExitUnknown;
+        TraceBranch = ExitBranchNone;
+        TraceBranchReg = 0xFF;
+        TraceBranchIsLink = 0;
+        TraceThumb = 0;
+        TraceHasMemory = 0;
+        TraceHasLoad = 0;
+        TraceHasStore = 0;
+        TraceMemRegionMask = 0;
+        TraceHasConditionalExit = 0;
+        TraceHasDynamicExit = 0;
+        TracePrimaryTargetKind = TraceTargetNone;
+        TraceSecondaryTargetKind = TraceTargetNone;
+        TracePrimaryTargetSameMode = 0;
+        TraceSecondaryTargetSameMode = 0;
+        TraceExitInstrAddr = 0;
+        TracePrimaryTarget = 0;
+        TraceSecondaryTarget = 0;
+        TracePlanBlocks = 0;
+        TracePlanStopReason = 0;
+        TracePlanInstrs = 0;
 #if LITEV_PROFILE
         InstrCount = 0;
         Exit = ExitUnknown;
@@ -109,6 +138,28 @@ public:
     u8 Num;
     u16 NumAddresses;
     u16 NumLiterals;
+    u16 TraceInstrCount;
+    u8 TraceExit;
+    u8 TraceBranch;
+    u8 TraceBranchReg;
+    u8 TraceBranchIsLink;
+    u8 TraceThumb;
+    u8 TraceHasMemory;
+    u8 TraceHasLoad;
+    u8 TraceHasStore;
+    u8 TraceMemRegionMask;
+    u8 TraceHasConditionalExit;
+    u8 TraceHasDynamicExit;
+    u8 TracePrimaryTargetKind;
+    u8 TraceSecondaryTargetKind;
+    u8 TracePrimaryTargetSameMode;
+    u8 TraceSecondaryTargetSameMode;
+    u32 TraceExitInstrAddr;
+    u32 TracePrimaryTarget;
+    u32 TraceSecondaryTarget;
+    u8 TracePlanBlocks;
+    u8 TracePlanStopReason;
+    u16 TracePlanInstrs;
 #if LITEV_PROFILE
     u16 InstrCount;
     u8 Exit;

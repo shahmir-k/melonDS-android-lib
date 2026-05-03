@@ -684,6 +684,10 @@ void ARMv5::Execute()
             if (block)
             {
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
+#if LITEV_PROFILE
+                ProfileJitCurrentBlockAddr = instrAddr;
+                ProfileJitChainBlocks = 1;
+#endif
                 LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitDispatchNs);
                 {
                     LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitExecuteBodyNs);
@@ -692,6 +696,8 @@ void ARMv5::Execute()
                 LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
                 LITE_PROFILE_SCOPE(postTimer, LiteProfile::gFrame.ARM9JitPostDispatchNs);
 #if LITEV_PROFILE
+                const u32 finalBlockAddr = ProfileJitCurrentBlockAddr;
+                LiteProfile::NoteARM9ChainBlocks(ProfileJitChainBlocks);
                 if (auto it = NDS.JIT.JitBlocks9.find(instrAddr); it != NDS.JIT.JitBlocks9.end())
                 {
                     const JitBlock* info = it->second;
@@ -703,7 +709,10 @@ void ARMv5::Execute()
                         info->HasMemoryInstr,
                         info->MemRegionMask,
                         info->InstrCount,
-                        Cycles);
+                        Cycles,
+                        info->TracePlanBlocks,
+                        info->TracePlanStopReason,
+                        info->TracePlanInstrs);
                     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecInstrs, info->InstrCount);
                     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecLiteralLoads, info->ExecLiteralLoadCount);
                     LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9ExecMemITCM, info->ExecMemITCMCount);
@@ -761,6 +770,11 @@ void ARMv5::Execute()
                 {
                     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitReturnsNormal);
 #if LITEV_PROFILE
+                    if (auto finalIt = NDS.JIT.JitBlocks9.find(finalBlockAddr); finalIt != NDS.JIT.JitBlocks9.end())
+                    {
+                        const JitBlock* finalInfo = finalIt->second;
+                        LiteProfile::NoteARM9TraceCommit(finalInfo->Exit, finalInfo->ExitBranchFamily, finalInfo->ExitBranchReg);
+                    }
                     auto it = NDS.JIT.JitBlocks9.find(instrAddr);
                     if (it != NDS.JIT.JitBlocks9.end())
                     {

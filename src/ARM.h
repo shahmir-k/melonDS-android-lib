@@ -26,6 +26,10 @@
 #include "MemRegion.h"
 #include "MemConstants.h"
 
+#ifndef LITEV_PROFILE
+#define LITEV_PROFILE 0
+#endif
+
 #ifdef LITEV_ARM7_PROFILE
 #include <atomic>
 #include <cstdint>
@@ -198,11 +202,19 @@ public:
     u64* FastBlockLookup;
     u32 LastJitBlockAddr;
     JitBlockEntry LastJitBlockEntry;
+#if LITEV_PROFILE
+    u32 ProfileJitCurrentBlockAddr;
+    u32 ProfileJitChainBlocks;
+#endif
 
     void ClearJitCache() noexcept
     {
         LastJitBlockAddr = UINT32_MAX;
         LastJitBlockEntry = nullptr;
+#if LITEV_PROFILE
+        ProfileJitCurrentBlockAddr = UINT32_MAX;
+        ProfileJitChainBlocks = 0;
+#endif
     }
 #endif
 
