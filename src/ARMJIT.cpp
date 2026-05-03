@@ -1616,6 +1616,28 @@ const JitTrace* ARMJIT::FindLinearTrace(u32 num, u32 startAddr) const noexcept
     return it != traces.end() ? &it->second : nullptr;
 }
 
+const JitBlockRecipe* ARMJIT::FindBlockRecipe(u32 num, u32 startAddr) const noexcept
+{
+    const auto& recipes = num == 0 ? BlockRecipes9 : BlockRecipes7;
+    auto it = recipes.find(startAddr);
+    return it != recipes.end() ? &it->second : nullptr;
+}
+
+static bool IsTraceRecipeEligible(const JitBlock& block) noexcept
+{
+    return block.Num == 0
+        && !block.TraceThumb
+        && block.TraceExit == JitBlock::ExitMaxBlockSize
+        && block.TraceBranch == JitBlock::ExitBranchNone
+        && block.TracePrimaryTargetSameMode
+        && block.TracePlanBlocks >= 3;
+}
+
+static bool ShouldPersistTraceRecipe(const JitBlock& block) noexcept
+{
+    return IsTraceRecipeEligible(block);
+}
+
 void ARMJIT::SetJITArgs(JITArgs args) noexcept
 {
     args.FastMemory = args.FastMemory && ARMJIT_Memory::IsFastMemSupported();
@@ -1688,6 +1710,10 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
 
         // some memory has been remapped
         InvalidateLinearTracesForBlock(cpu->Num, existingBlockIt->second->StartAddr);
+        if (cpu->Num == 0)
+            BlockRecipes9.erase(existingBlockIt->second->StartAddr);
+        else
+            BlockRecipes7.erase(existingBlockIt->second->StartAddr);
         RetireJitBlock(existingBlockIt->second);
         map.erase(existingBlockIt);
     }
@@ -2441,6 +2467,22 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     else
         JitBlocks7[blockAddr] = block;
 
+    auto& recipes = cpu->Num == 0 ? BlockRecipes9 : BlockRecipes7;
+    if (ShouldPersistTraceRecipe(*block))
+    {
+        JitBlockRecipe recipe {};
+        recipe.Num = cpu->Num;
+        recipe.StartAddr = blockAddr;
+        recipe.Thumb = thumb;
+        recipe.HasMemInstr = hasMemoryInstr;
+        recipe.Instrs.assign(instrs, instrs + i);
+        recipes[blockAddr] = std::move(recipe);
+    }
+    else
+    {
+        recipes.erase(blockAddr);
+    }
+
     RefreshLinearTracePlanSummary(cpu->Num, blockAddr);
     RefreshLinearTrace(cpu->Num, blockAddr);
     auto& traceBlocks = cpu->Num == 0 ? JitBlocks9 : JitBlocks7;
@@ -2559,6 +2601,10 @@ void ARMJIT::InvalidateByAddr(u32 localAddr) noexcept
 
         FastBlockLookupRegions[block->StartAddrLocal >> 27][(block->StartAddrLocal & 0x7FFFFFF) / 2] = (u64)UINT32_MAX << 32;
         InvalidateLinearTracesForBlock(block->Num, block->StartAddr);
+        if (block->Num == 0)
+            BlockRecipes9.erase(block->StartAddr);
+        else
+            BlockRecipes7.erase(block->StartAddr);
         if (block->Num == 0)
             JitBlocks9.erase(block->StartAddr);
         else
@@ -2708,6 +2754,46 @@ bool ARMJIT::BuildLinearTrace(u32 num, u32 startAddr, u32 maxBlocks, JitTrace& o
     out.SideExit.SecondaryTargetKind = exitBlock->TraceSecondaryTargetKind;
     out.SideExit.PrimaryTargetSameMode = exitBlock->TracePrimaryTargetSameMode;
     out.SideExit.SecondaryTargetSameMode = exitBlock->TraceSecondaryTargetSameMode;
+    return true;
+}
+
+bool ARMJIT::BuildTraceRecipe(u32 num, u32 startAddr, u32 maxBlocks, JitTraceRecipe& out) const noexcept
+{
+    JitTracePlan plan;
+    if (!BuildLinearTracePlan(num, startAddr, maxBlocks, plan) || plan.Blocks.size() <= 1)
+    {
+        out = {};
+        out.Num = num;
+        out.StartAddr = startAddr;
+        out.StopReason = plan.StopReason;
+        return false;
+    }
+
+    out = {};
+    out.Num = num;
+    out.StartAddr = startAddr;
+    out.EndAddr = plan.EndAddr;
+    out.TotalInstrs = plan.TotalInstrs;
+    out.Thumb = plan.Thumb;
+    out.StopReason = plan.StopReason;
+    out.Blocks = plan.Blocks;
+
+    for (u32 blockAddr : out.Blocks)
+    {
+        const JitBlockRecipe* recipe = FindBlockRecipe(num, blockAddr);
+        if (!recipe)
+        {
+            out = {};
+            out.Num = num;
+            out.StartAddr = startAddr;
+            out.StopReason = TracePlanStopMissingSuccessor;
+            return false;
+        }
+
+        out.HasMemInstr |= recipe->HasMemInstr;
+        out.Instrs.insert(out.Instrs.end(), recipe->Instrs.begin(), recipe->Instrs.end());
+    }
+
     return true;
 }
 
@@ -2928,6 +3014,8 @@ void ARMJIT::ResetBlockCache() noexcept
     JitBlocks7.clear();
     LinearTraces9.clear();
     LinearTraces7.clear();
+    BlockRecipes9.clear();
+    BlockRecipes7.clear();
 
     JITCompiler.Reset();
 }

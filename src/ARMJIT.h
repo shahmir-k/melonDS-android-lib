@@ -40,6 +40,7 @@
     #include <pthread.h>
 #endif
 
+#include "ARMJIT_Internal.h"
 #include "ARMJIT_Compiler.h"
 
 namespace melonDS
@@ -104,6 +105,28 @@ struct JitTrace
     JitTraceSideExit SideExit {};
 };
 
+struct JitBlockRecipe
+{
+    u32 Num = 0;
+    u32 StartAddr = 0;
+    u8 Thumb = 0;
+    u8 HasMemInstr = 0;
+    std::vector<FetchedInstr> Instrs {};
+};
+
+struct JitTraceRecipe
+{
+    u32 Num = 0;
+    u32 StartAddr = 0;
+    u32 EndAddr = 0;
+    u32 TotalInstrs = 0;
+    u8 Thumb = 0;
+    u8 HasMemInstr = 0;
+    u8 StopReason = TracePlanStopNone;
+    std::vector<u32> Blocks {};
+    std::vector<FetchedInstr> Instrs {};
+};
+
 class ARMJIT
 {
 public:
@@ -155,8 +178,10 @@ public:
     u32 LocaliseCodeAddress(u32 num, u32 addr) const noexcept;
     const JitBlock* FindJitBlock(u32 num, u32 addr) const noexcept;
     const JitTrace* FindLinearTrace(u32 num, u32 startAddr) const noexcept;
+    const JitBlockRecipe* FindBlockRecipe(u32 num, u32 startAddr) const noexcept;
     bool BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTracePlan& out) const noexcept;
     bool BuildLinearTrace(u32 num, u32 startAddr, u32 maxBlocks, JitTrace& out) const noexcept;
+    bool BuildTraceRecipe(u32 num, u32 startAddr, u32 maxBlocks, JitTraceRecipe& out) const noexcept;
     void RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
     void RefreshLinearTrace(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
     void InvalidateLinearTracesForBlock(u32 num, u32 blockAddr) noexcept;
@@ -222,6 +247,8 @@ public:
     std::unordered_map<u32, JitBlock*> JitBlocks7 {};
     std::unordered_map<u32, JitTrace> LinearTraces9 {};
     std::unordered_map<u32, JitTrace> LinearTraces7 {};
+    std::unordered_map<u32, JitBlockRecipe> BlockRecipes9 {};
+    std::unordered_map<u32, JitBlockRecipe> BlockRecipes7 {};
 
     std::unordered_map<u32, JitBlock*> RestoreCandidates {};
 
