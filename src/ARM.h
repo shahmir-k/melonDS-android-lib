@@ -202,6 +202,8 @@ public:
     u64* FastBlockLookup;
     u32 LastJitBlockAddr;
     JitBlockEntry LastJitBlockEntry;
+    u32 ActiveJitTraceStartAddr;
+    u8 ActiveJitTraceNextIndex;
 #if LITEV_PROFILE
     u32 ProfileJitCurrentBlockAddr;
     u32 ProfileJitChainBlocks;
@@ -211,6 +213,8 @@ public:
     {
         LastJitBlockAddr = UINT32_MAX;
         LastJitBlockEntry = nullptr;
+        ActiveJitTraceStartAddr = UINT32_MAX;
+        ActiveJitTraceNextIndex = 0;
 #if LITEV_PROFILE
         ProfileJitCurrentBlockAddr = UINT32_MAX;
         ProfileJitChainBlocks = 0;

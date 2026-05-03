@@ -91,6 +91,51 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
         return nullptr;
     }
 
+    if (cpu->ActiveJitTraceStartAddr != UINT32_MAX)
+    {
+        const JitTrace* trace = nds.JIT.FindLinearTrace(0, cpu->ActiveJitTraceStartAddr);
+        if (!trace
+            || cpu->ActiveJitTraceNextIndex == 0
+            || cpu->ActiveJitTraceNextIndex >= trace->Blocks.size()
+            || cpu->ActiveJitTraceNextIndex >= trace->Entries.size())
+        {
+            cpu->ActiveJitTraceStartAddr = UINT32_MAX;
+            cpu->ActiveJitTraceNextIndex = 0;
+        }
+        else if (trace->Blocks[cpu->ActiveJitTraceNextIndex] == instrAddr)
+        {
+            JitBlockEntry block = trace->Entries[cpu->ActiveJitTraceNextIndex];
+            if (block)
+            {
+#if LITEV_PROFILE
+                LiteProfile::NoteARM9TraceHit(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
+#endif
+                cpu->LastJitBlockAddr = instrAddr;
+                cpu->LastJitBlockEntry = block;
+#if LITEV_PROFILE
+                cpu->ProfileJitCurrentBlockAddr = instrAddr;
+                cpu->ProfileJitChainBlocks++;
+#endif
+                cpu->ActiveJitTraceNextIndex++;
+                if (cpu->ActiveJitTraceNextIndex >= trace->Blocks.size())
+                {
+                    cpu->ActiveJitTraceStartAddr = UINT32_MAX;
+                    cpu->ActiveJitTraceNextIndex = 0;
+                }
+                LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
+                return block;
+            }
+
+            cpu->ActiveJitTraceStartAddr = UINT32_MAX;
+            cpu->ActiveJitTraceNextIndex = 0;
+        }
+        else
+        {
+            cpu->ActiveJitTraceStartAddr = UINT32_MAX;
+            cpu->ActiveJitTraceNextIndex = 0;
+        }
+    }
+
     if ((instrAddr < cpu->FastBlockLookupStart || instrAddr >= (cpu->FastBlockLookupStart + cpu->FastBlockLookupSize))
         && !nds.JIT.SetupExecutableRegion(0, instrAddr, cpu->FastBlockLookup, cpu->FastBlockLookupStart, cpu->FastBlockLookupSize))
     {
@@ -108,6 +153,20 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 
     cpu->LastJitBlockAddr = instrAddr;
     cpu->LastJitBlockEntry = block;
+    if (const JitTrace* trace = nds.JIT.FindLinearTrace(0, instrAddr);
+        trace && trace->Blocks.size() > 1 && trace->Entries.size() == trace->Blocks.size())
+    {
+#if LITEV_PROFILE
+        LiteProfile::NoteARM9TraceAttempt(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
+#endif
+        cpu->ActiveJitTraceStartAddr = instrAddr;
+        cpu->ActiveJitTraceNextIndex = 1;
+    }
+    else
+    {
+        cpu->ActiveJitTraceStartAddr = UINT32_MAX;
+        cpu->ActiveJitTraceNextIndex = 0;
+    }
 #if LITEV_PROFILE
     cpu->ProfileJitCurrentBlockAddr = instrAddr;
     cpu->ProfileJitChainBlocks++;
@@ -1499,6 +1558,13 @@ void ARMJIT::RetireJitBlock(JitBlock* block) noexcept
     }
 }
 
+const JitTrace* ARMJIT::FindLinearTrace(u32 num, u32 startAddr) const noexcept
+{
+    const auto& traces = num == 0 ? LinearTraces9 : LinearTraces7;
+    auto it = traces.find(startAddr);
+    return it != traces.end() ? &it->second : nullptr;
+}
+
 void ARMJIT::SetJITArgs(JITArgs args) noexcept
 {
     args.FastMemory = args.FastMemory && ARMJIT_Memory::IsFastMemSupported();
@@ -1570,6 +1636,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         }
 
         // some memory has been remapped
+        InvalidateLinearTracesForBlock(cpu->Num, existingBlockIt->second->StartAddr);
         RetireJitBlock(existingBlockIt->second);
         map.erase(existingBlockIt);
     }
@@ -1762,6 +1829,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         {
             memRegionMask |= ClassifyMemRegionBit(cpu, instrs[i].DataRegion);
         }
+
 #if LITEV_PROFILE
         const u16 kind = instrs[i].Info.Kind;
         const bool isLiteralLoad = instrs[i].Info.SpecialKind == ARMInstrInfo::special_LoadLiteral;
@@ -2323,6 +2391,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         JitBlocks7[blockAddr] = block;
 
     RefreshLinearTracePlanSummary(cpu->Num, blockAddr);
+    RefreshLinearTrace(cpu->Num, blockAddr);
     auto& traceBlocks = cpu->Num == 0 ? JitBlocks9 : JitBlocks7;
     TinyVector<u32> pendingTraceStarts;
     pendingTraceStarts.Add(blockAddr);
@@ -2341,6 +2410,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             const u16 oldPlanInstrs = candidate->TracePlanInstrs;
 
             RefreshLinearTracePlanSummary(cpu->Num, candidateAddr);
+            RefreshLinearTrace(cpu->Num, candidateAddr);
 
             if ((candidate->TracePlanBlocks != oldPlanBlocks
                     || candidate->TracePlanStopReason != oldPlanStopReason
@@ -2437,6 +2507,7 @@ void ARMJIT::InvalidateByAddr(u32 localAddr) noexcept
         }
 
         FastBlockLookupRegions[block->StartAddrLocal >> 27][(block->StartAddrLocal & 0x7FFFFFF) / 2] = (u64)UINT32_MAX << 32;
+        InvalidateLinearTracesForBlock(block->Num, block->StartAddr);
         if (block->Num == 0)
             JitBlocks9.erase(block->StartAddr);
         else
@@ -2521,9 +2592,102 @@ void ARMJIT::RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks
     BuildLinearTracePlan(num, startAddr, maxBlocks, plan);
 
     JitBlock* block = it->second;
-    block->TracePlanBlocks = static_cast<u8>(std::min<u32>(plan.Blocks.Length, 0xFFu));
+    block->TracePlanBlocks = static_cast<u8>(std::min<size_t>(plan.Blocks.size(), 0xFFu));
     block->TracePlanStopReason = plan.StopReason;
     block->TracePlanInstrs = static_cast<u16>(std::min<u32>(plan.TotalInstrs, 0xFFFFu));
+}
+
+bool ARMJIT::BuildLinearTrace(u32 num, u32 startAddr, u32 maxBlocks, JitTrace& out) const noexcept
+{
+    JitTracePlan plan;
+    if (!BuildLinearTracePlan(num, startAddr, maxBlocks, plan) || plan.Blocks.size() <= 1)
+    {
+        out = {};
+        out.Num = num;
+        out.StartAddr = startAddr;
+        out.StopReason = plan.StopReason;
+        return false;
+    }
+
+    const JitBlock* exitBlock = FindJitBlock(num, plan.EndAddr);
+    if (!exitBlock)
+    {
+        out = {};
+        out.Num = num;
+        out.StartAddr = startAddr;
+        out.StopReason = TracePlanStopMissingSuccessor;
+        return false;
+    }
+
+    out = {};
+    out.Num = num;
+    out.StartAddr = startAddr;
+    out.EndAddr = plan.EndAddr;
+    out.TotalInstrs = plan.TotalInstrs;
+    out.Thumb = plan.Thumb;
+    out.StopReason = plan.StopReason;
+    out.Blocks = plan.Blocks;
+    out.Entries.clear();
+    out.Entries.reserve(out.Blocks.size());
+    for (u32 blockAddr : out.Blocks)
+    {
+        const JitBlock* traceBlock = FindJitBlock(num, blockAddr);
+        if (!traceBlock || !traceBlock->EntryPoint)
+        {
+            out = {};
+            out.Num = num;
+            out.StartAddr = startAddr;
+            out.StopReason = TracePlanStopMissingSuccessor;
+            return false;
+        }
+        out.Entries.push_back(traceBlock->EntryPoint);
+    }
+    out.SideExit.SourceAddr = exitBlock->StartAddr;
+    out.SideExit.ExitInstrAddr = exitBlock->TraceExitInstrAddr;
+    out.SideExit.PrimaryTarget = exitBlock->TracePrimaryTarget;
+    out.SideExit.SecondaryTarget = exitBlock->TraceSecondaryTarget;
+    out.SideExit.Exit = exitBlock->TraceExit;
+    out.SideExit.Branch = exitBlock->TraceBranch;
+    out.SideExit.BranchReg = exitBlock->TraceBranchReg;
+    out.SideExit.Thumb = exitBlock->TraceThumb;
+    out.SideExit.HasMemory = exitBlock->TraceHasMemory;
+    out.SideExit.HasDynamicExit = exitBlock->TraceHasDynamicExit;
+    out.SideExit.HasConditionalExit = exitBlock->TraceHasConditionalExit;
+    out.SideExit.PrimaryTargetKind = exitBlock->TracePrimaryTargetKind;
+    out.SideExit.SecondaryTargetKind = exitBlock->TraceSecondaryTargetKind;
+    out.SideExit.PrimaryTargetSameMode = exitBlock->TracePrimaryTargetSameMode;
+    out.SideExit.SecondaryTargetSameMode = exitBlock->TraceSecondaryTargetSameMode;
+    return true;
+}
+
+void ARMJIT::RefreshLinearTrace(u32 num, u32 startAddr, u32 maxBlocks) noexcept
+{
+    auto& traces = num == 0 ? LinearTraces9 : LinearTraces7;
+    JitTrace trace;
+    if (BuildLinearTrace(num, startAddr, maxBlocks, trace))
+        traces[startAddr] = std::move(trace);
+    else
+        traces.erase(startAddr);
+}
+
+void ARMJIT::InvalidateLinearTracesForBlock(u32 num, u32 blockAddr) noexcept
+{
+    auto& traces = num == 0 ? LinearTraces9 : LinearTraces7;
+    for (auto it = traces.begin(); it != traces.end();)
+    {
+        const JitTrace& trace = it->second;
+        if (trace.StartAddr == blockAddr
+            || trace.EndAddr == blockAddr
+            || trace.SideExit.SourceAddr == blockAddr
+            || std::find(trace.Blocks.begin(), trace.Blocks.end(), blockAddr) != trace.Blocks.end())
+        {
+            it = traces.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 bool ARMJIT::BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTracePlan& out) const noexcept
@@ -2549,7 +2713,7 @@ bool ARMJIT::BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTrac
 
     for (u32 i = 0; i < maxBlocks; i++)
     {
-        out.Blocks.Add(block->StartAddr);
+        out.Blocks.push_back(block->StartAddr);
         out.EndAddr = block->StartAddr;
         out.TotalInstrs += block->TraceInstrCount;
 
@@ -2557,70 +2721,70 @@ bool ARMJIT::BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTrac
             || block->TraceExit == JitBlock::ExitHaltBoundary)
         {
             out.StopReason = TracePlanStopNonTraceableExit;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (block->TraceHasConditionalExit)
         {
             out.StopReason = TracePlanStopConditionalSplit;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (block->TraceHasDynamicExit)
         {
             out.StopReason = TracePlanStopDynamicExit;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (block->TraceBranchIsLink)
         {
             out.StopReason = TracePlanStopNonTraceableExit;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (block->TracePrimaryTargetKind == JitBlock::TraceTargetNone)
         {
             out.StopReason = TracePlanStopNonTraceableExit;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (!block->TracePrimaryTargetSameMode)
         {
             out.StopReason = TracePlanStopModeChange;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (i + 1 >= maxBlocks)
         {
             out.StopReason = TracePlanStopMaxBlocks;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         const u32 nextAddr = block->TracePrimaryTarget;
-        if (out.Blocks.Find(nextAddr) != -1)
+        if (std::find(out.Blocks.begin(), out.Blocks.end(), nextAddr) != out.Blocks.end())
         {
             out.StopReason = TracePlanStopLoop;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         const JitBlock* next = FindJitBlock(num, nextAddr);
         if (!next)
         {
             out.StopReason = TracePlanStopMissingSuccessor;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         if (next->TraceThumb != out.Thumb)
         {
             out.StopReason = TracePlanStopModeChange;
-            return out.Blocks.Length > 1;
+            return out.Blocks.size() > 1;
         }
 
         block = next;
     }
 
     out.StopReason = TracePlanStopMaxBlocks;
-    return out.Blocks.Length > 1;
+    return out.Blocks.size() > 1;
 }
 
 void ARMJIT::blockSanityCheck(u32 num, u32 blockAddr, JitBlockEntry entry) noexcept
@@ -2707,6 +2871,8 @@ void ARMJIT::ResetBlockCache() noexcept
     }
     JitBlocks9.clear();
     JitBlocks7.clear();
+    LinearTraces9.clear();
+    LinearTraces7.clear();
 
     JITCompiler.Reset();
 }

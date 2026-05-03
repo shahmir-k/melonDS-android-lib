@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <optional>
 #include <memory>
+#include <vector>
 #include "types.h"
 #include "MemConstants.h"
 #include "Args.h"
@@ -68,7 +69,39 @@ struct JitTracePlan
     u32 TotalInstrs = 0;
     u8 Thumb = 0;
     u8 StopReason = TracePlanStopNone;
-    TinyVector<u32> Blocks {};
+    std::vector<u32> Blocks {};
+};
+
+struct JitTraceSideExit
+{
+    u32 SourceAddr = 0;
+    u32 ExitInstrAddr = 0;
+    u32 PrimaryTarget = 0;
+    u32 SecondaryTarget = 0;
+    u8 Exit = JitBlock::ExitUnknown;
+    u8 Branch = JitBlock::ExitBranchNone;
+    u8 BranchReg = 0xFF;
+    u8 Thumb = 0;
+    u8 HasMemory = 0;
+    u8 HasDynamicExit = 0;
+    u8 HasConditionalExit = 0;
+    u8 PrimaryTargetKind = JitBlock::TraceTargetNone;
+    u8 SecondaryTargetKind = JitBlock::TraceTargetNone;
+    u8 PrimaryTargetSameMode = 0;
+    u8 SecondaryTargetSameMode = 0;
+};
+
+struct JitTrace
+{
+    u32 Num = 0;
+    u32 StartAddr = 0;
+    u32 EndAddr = 0;
+    u32 TotalInstrs = 0;
+    u8 Thumb = 0;
+    u8 StopReason = TracePlanStopNone;
+    std::vector<u32> Blocks {};
+    std::vector<JitBlockEntry> Entries {};
+    JitTraceSideExit SideExit {};
 };
 
 class ARMJIT
@@ -121,8 +154,12 @@ public:
     bool SetupExecutableRegion(u32 num, u32 blockAddr, u64*& entry, u32& start, u32& size) noexcept;
     u32 LocaliseCodeAddress(u32 num, u32 addr) const noexcept;
     const JitBlock* FindJitBlock(u32 num, u32 addr) const noexcept;
+    const JitTrace* FindLinearTrace(u32 num, u32 startAddr) const noexcept;
     bool BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTracePlan& out) const noexcept;
+    bool BuildLinearTrace(u32 num, u32 startAddr, u32 maxBlocks, JitTrace& out) const noexcept;
     void RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
+    void RefreshLinearTrace(u32 num, u32 startAddr, u32 maxBlocks = 8) noexcept;
+    void InvalidateLinearTracesForBlock(u32 num, u32 blockAddr) noexcept;
 
     ARMJIT_Memory Memory;
 private:
@@ -183,6 +220,8 @@ public:
     Compiler JITCompiler;
     std::unordered_map<u32, JitBlock*> JitBlocks9 {};
     std::unordered_map<u32, JitBlock*> JitBlocks7 {};
+    std::unordered_map<u32, JitTrace> LinearTraces9 {};
+    std::unordered_map<u32, JitTrace> LinearTraces7 {};
 
     std::unordered_map<u32, JitBlock*> RestoreCandidates {};
 

@@ -432,6 +432,7 @@ inline constexpr bool kEnabled = true;
 struct ARM9ExitSite
 {
     uint32_t Addr = 0;
+    uint32_t ExitInstrAddr = 0;
     uint64_t Count = 0;
     uint64_t GuestCycles = 0;
     uint64_t Instrs = 0;
@@ -672,7 +673,7 @@ inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t targetAddr, uint8_t e
 
 inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_t branchReg,
                              uint8_t thumb, uint8_t hasMemory, uint8_t memRegionMask,
-                             uint16_t instrCount, uint64_t guestCycles,
+                             uint16_t instrCount, uint32_t exitInstrAddr, uint64_t guestCycles,
                              uint8_t tracePlanBlocks, uint8_t tracePlanStopReason,
                              uint16_t tracePlanInstrs)
 {
@@ -708,6 +709,7 @@ inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_
         target->Thumb = thumb;
         target->HasMemory = hasMemory;
         target->MemRegionMask = memRegionMask;
+        target->ExitInstrAddr = exitInstrAddr;
         target->TracePlanBlocks = tracePlanBlocks;
         target->TracePlanStopReason = tracePlanStopReason;
         target->TracePlanInstrs = tracePlanInstrs;
@@ -722,6 +724,7 @@ inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_
     target->Thumb = thumb;
     target->HasMemory = hasMemory;
     target->MemRegionMask = memRegionMask;
+    target->ExitInstrAddr = exitInstrAddr;
     target->TracePlanBlocks = tracePlanBlocks;
     target->TracePlanStopReason = tracePlanStopReason;
     target->TracePlanInstrs = tracePlanInstrs;
@@ -2354,6 +2357,24 @@ inline void EndFrame()
         CountPerFrame(gWindow.ARM9JitChainBlocks17P));
 
     Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_trace_attempt stack_pc=%.1f reg_lr=%.1f reg_other=%.1f arm_imm=%.1f max=%.1f other=%.1f",
+        CountPerFrame(gWindow.ARM9JitTraceAttemptARMPCStack),
+        CountPerFrame(gWindow.ARM9JitTraceAttemptARMRegLR),
+        CountPerFrame(gWindow.ARM9JitTraceAttemptARMRegOther),
+        CountPerFrame(gWindow.ARM9JitTraceAttemptARMImm),
+        CountPerFrame(gWindow.ARM9JitTraceAttemptMax),
+        CountPerFrame(gWindow.ARM9JitTraceAttemptOther));
+
+    Platform::Log(Platform::LogLevel::Info,
+        "[LITEV_PROFILE] arm9_trace_hit stack_pc=%.1f reg_lr=%.1f reg_other=%.1f arm_imm=%.1f max=%.1f other=%.1f",
+        CountPerFrame(gWindow.ARM9JitTraceHitARMPCStack),
+        CountPerFrame(gWindow.ARM9JitTraceHitARMRegLR),
+        CountPerFrame(gWindow.ARM9JitTraceHitARMRegOther),
+        CountPerFrame(gWindow.ARM9JitTraceHitARMImm),
+        CountPerFrame(gWindow.ARM9JitTraceHitMax),
+        CountPerFrame(gWindow.ARM9JitTraceHitOther));
+
+    Platform::Log(Platform::LogLevel::Info,
         "[LITEV_PROFILE] arm9_trace_commit stack_pc=%.1f reg_lr=%.1f reg_other=%.1f arm_imm=%.1f max=%.1f other=%.1f",
         CountPerFrame(gWindow.ARM9JitCommitARMPCStack),
         CountPerFrame(gWindow.ARM9JitCommitARMRegLR),
@@ -2424,9 +2445,10 @@ inline void EndFrame()
         const double cyclesPerFrame = gWindowFrames ? static_cast<double>(site.GuestCycles) / static_cast<double>(gWindowFrames) : 0.0;
         const double instrsPerHit = site.Count ? static_cast<double>(site.Instrs) / static_cast<double>(site.Count) : 0.0;
         Platform::Log(Platform::LogLevel::Info,
-            "[LITEV_PROFILE] arm9_exit_hot%zu pc=%08" PRIX32 " count=%.1f cycles=%.1f exit=%s branch=%s reg=%u thumb=%u mem=%u memmask=%02X instr/hit=%.1f trace_blocks=%u trace_instr=%u trace_stop=%s",
+            "[LITEV_PROFILE] arm9_exit_hot%zu pc=%08" PRIX32 " exit_pc=%08" PRIX32 " count=%.1f cycles=%.1f exit=%s branch=%s reg=%u thumb=%u mem=%u memmask=%02X instr/hit=%.1f trace_blocks=%u trace_instr=%u trace_stop=%s",
             i,
             site.Addr,
+            site.ExitInstrAddr,
             countPerFrame,
             cyclesPerFrame,
             ARM9ExitName(site.Exit),

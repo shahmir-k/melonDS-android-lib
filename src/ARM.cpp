@@ -683,6 +683,20 @@ void ARMv5::Execute()
             }
             if (block)
             {
+                if (const JitTrace* trace = NDS.JIT.FindLinearTrace(0, instrAddr);
+                    trace && trace->Blocks.size() > 1 && trace->Entries.size() == trace->Blocks.size())
+                {
+#if LITEV_PROFILE
+                    LiteProfile::NoteARM9TraceAttempt(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
+#endif
+                    ActiveJitTraceStartAddr = instrAddr;
+                    ActiveJitTraceNextIndex = 1;
+                }
+                else
+                {
+                    ActiveJitTraceStartAddr = UINT32_MAX;
+                    ActiveJitTraceNextIndex = 0;
+                }
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
 #if LITEV_PROFILE
                 ProfileJitCurrentBlockAddr = instrAddr;
@@ -698,10 +712,10 @@ void ARMv5::Execute()
 #if LITEV_PROFILE
                 const u32 finalBlockAddr = ProfileJitCurrentBlockAddr;
                 LiteProfile::NoteARM9ChainBlocks(ProfileJitChainBlocks);
-                if (auto it = NDS.JIT.JitBlocks9.find(instrAddr); it != NDS.JIT.JitBlocks9.end())
+                if (auto it = NDS.JIT.JitBlocks9.find(finalBlockAddr); it != NDS.JIT.JitBlocks9.end())
                 {
                     const JitBlock* info = it->second;
-                    LiteProfile::NoteARM9ExitSite(instrAddr,
+                    LiteProfile::NoteARM9ExitSite(finalBlockAddr,
                         info->Exit,
                         info->ExitBranchFamily,
                         info->ExitBranchReg,
@@ -709,6 +723,7 @@ void ARMv5::Execute()
                         info->HasMemoryInstr,
                         info->MemRegionMask,
                         info->InstrCount,
+                        info->TraceExitInstrAddr,
                         Cycles,
                         info->TracePlanBlocks,
                         info->TracePlanStopReason,
