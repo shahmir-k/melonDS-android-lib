@@ -203,6 +203,36 @@ public:
     u32 LastJitBlockAddr;
     JitBlockEntry LastJitBlockEntry;
 #if LITEV_PROFILE
+    struct ProfileJitBlockSite
+    {
+        u32 Addr = UINT32_MAX;
+        u32 ExitInstrAddr = 0;
+        u16 TracePlanInstrs = 0;
+        u8 Exit = 0;
+        u8 Branch = 0;
+        u8 BranchReg = 0xFF;
+        u8 Thumb = 0;
+        u8 HasMemory = 0;
+        u8 MemRegionMask = 0;
+        u8 TracePlanBlocks = 0;
+        u8 TracePlanStopReason = 0;
+
+        void Clear() noexcept
+        {
+            Addr = UINT32_MAX;
+            ExitInstrAddr = 0;
+            TracePlanInstrs = 0;
+            Exit = 0;
+            Branch = 0;
+            BranchReg = 0xFF;
+            Thumb = 0;
+            HasMemory = 0;
+            MemRegionMask = 0;
+            TracePlanBlocks = 0;
+            TracePlanStopReason = 0;
+        }
+    };
+
     static constexpr u32 MaxActiveJitTraceBlocks = 8;
     u32 ActiveJitTraceStartAddr;
     u8 ActiveJitTraceNextIndex;
@@ -212,7 +242,8 @@ public:
     u8 ActiveJitTraceBranchReg;
     u32 ActiveJitTraceBlocks[MaxActiveJitTraceBlocks];
     JitBlockEntry ActiveJitTraceEntries[MaxActiveJitTraceBlocks];
-    u32 ProfileJitCurrentBlockAddr;
+    ProfileJitBlockSite ActiveJitTraceSites[MaxActiveJitTraceBlocks];
+    ProfileJitBlockSite ProfileJitCurrentBlock;
     u32 ProfileJitChainBlocks;
 #endif
 
@@ -231,8 +262,9 @@ public:
         {
             ActiveJitTraceBlocks[i] = 0;
             ActiveJitTraceEntries[i] = nullptr;
+            ActiveJitTraceSites[i].Clear();
         }
-        ProfileJitCurrentBlockAddr = UINT32_MAX;
+        ProfileJitCurrentBlock.Clear();
         ProfileJitChainBlocks = 0;
 #endif
     }

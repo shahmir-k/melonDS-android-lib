@@ -60,6 +60,12 @@ static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset, "");
 static void ClearActiveTraceCache(ARM* cpu) noexcept;
 static void ActivateTraceCache(ARM* cpu, const JitTrace& trace) noexcept;
 static bool ActiveTraceContainsBlock(const ARM* cpu, u32 blockAddr) noexcept;
+static void CopyProfileJitBlockSite(ARM::ProfileJitBlockSite& dst, const JitBlock* block) noexcept;
+static void SetProfileJitCurrentBlock(ARM* cpu, const JitBlock* block) noexcept;
+static void SetProfileJitCurrentBlock(ARM* cpu, const ARM::ProfileJitBlockSite& site) noexcept;
+static void NoteARM9EdgeOutcome(const ARM::ProfileJitBlockSite& sourceSite, u32 targetAddr,
+    LiteProfile::ARM9EdgeOutcome outcome, bool traceTargetMismatch = false,
+    bool traceEntryMissing = false) noexcept;
 #endif
 
 extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
@@ -69,24 +75,38 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     auto* cpu = static_cast<ARMv5*>(cpuBase);
     auto& nds = cpu->NDS;
     const u32 instrAddr = cpu->R[15] - ((cpu->CPSR & 0x20) ? 2 : 4);
+#if LITEV_PROFILE
+    const ARM::ProfileJitBlockSite sourceSite = cpu->ProfileJitCurrentBlock;
+    bool traceTargetMismatch = false;
+    bool traceEntryMissing = false;
+#endif
 
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainAttempts);
 
     if (cpu->StopExecution || cpu->Halted || cpu->IdleLoop)
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissStop);
+#if LITEV_PROFILE
+        NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeMissStop);
+#endif
         return nullptr;
     }
 
     if (cpu->Cycles >= kChainCycleBudget)
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissBudget);
+#if LITEV_PROFILE
+        NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeMissBudget);
+#endif
         return nullptr;
     }
 
     if (nds.ARM9Timestamp + cpu->Cycles >= nds.ARM9Target)
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissTarget);
+#if LITEV_PROFILE
+        NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeMissTarget);
+#endif
         return nullptr;
     }
 
@@ -94,6 +114,9 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9LibHLEHits);
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissHLE);
+#if LITEV_PROFILE
+        NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeMissHLE);
+#endif
         return nullptr;
     }
 
@@ -119,20 +142,25 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
                 cpu->LastJitBlockAddr = instrAddr;
                 cpu->LastJitBlockEntry = block;
 #if LITEV_PROFILE
-                cpu->ProfileJitCurrentBlockAddr = instrAddr;
+                SetProfileJitCurrentBlock(cpu, cpu->ActiveJitTraceSites[cpu->ActiveJitTraceNextIndex]);
                 cpu->ProfileJitChainBlocks++;
 #endif
                 cpu->ActiveJitTraceNextIndex++;
                 if (cpu->ActiveJitTraceNextIndex >= cpu->ActiveJitTraceBlockCount)
                     ClearActiveTraceCache(cpu);
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
+#if LITEV_PROFILE
+                NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeHit);
+#endif
                 return block;
             }
 
+            traceEntryMissing = true;
             ClearActiveTraceCache(cpu);
         }
         else
         {
+            traceTargetMismatch = true;
             ClearActiveTraceCache(cpu);
         }
     }
@@ -142,6 +170,10 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
         && !nds.JIT.SetupExecutableRegion(0, instrAddr, cpu->FastBlockLookup, cpu->FastBlockLookupStart, cpu->FastBlockLookupSize))
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissSetup);
+#if LITEV_PROFILE
+        NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeMissSetup,
+            traceTargetMismatch, traceEntryMissing);
+#endif
         return nullptr;
     }
 
@@ -150,6 +182,10 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     if (!block)
     {
         LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainMissLookup);
+#if LITEV_PROFILE
+        NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeMissLookup,
+            traceTargetMismatch, traceEntryMissing);
+#endif
         return nullptr;
     }
 
@@ -166,12 +202,17 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     {
         ClearActiveTraceCache(cpu);
     }
-#endif
-#if LITEV_PROFILE
-    cpu->ProfileJitCurrentBlockAddr = instrAddr;
+    if (const JitBlock* blockInfo = nds.JIT.FindJitBlock(0, instrAddr))
+        SetProfileJitCurrentBlock(cpu, blockInfo);
+    else
+        cpu->ProfileJitCurrentBlock.Clear();
     cpu->ProfileJitChainBlocks++;
 #endif
     LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitChainHits);
+#if LITEV_PROFILE
+    NoteARM9EdgeOutcome(sourceSite, instrAddr, LiteProfile::ARM9EdgeHit,
+        traceTargetMismatch, traceEntryMissing);
+#endif
     return block;
 }
 
@@ -189,6 +230,7 @@ static void ClearActiveTraceCache(ARM* cpu) noexcept
     {
         cpu->ActiveJitTraceBlocks[i] = 0;
         cpu->ActiveJitTraceEntries[i] = nullptr;
+        cpu->ActiveJitTraceSites[i].Clear();
     }
 }
 
@@ -217,6 +259,8 @@ static void ActivateTraceCache(ARM* cpu, const JitTrace& trace) noexcept
     {
         cpu->ActiveJitTraceBlocks[i] = trace.Blocks[i];
         cpu->ActiveJitTraceEntries[i] = trace.Entries[i];
+        if (const JitBlock* block = cpu->NDS.JIT.FindJitBlock(0, trace.Blocks[i]))
+            CopyProfileJitBlockSite(cpu->ActiveJitTraceSites[i], block);
     }
 }
 
@@ -229,6 +273,56 @@ static bool ActiveTraceContainsBlock(const ARM* cpu, u32 blockAddr) noexcept
     }
 
     return false;
+}
+
+static void CopyProfileJitBlockSite(ARM::ProfileJitBlockSite& dst, const JitBlock* block) noexcept
+{
+    dst.Addr = block->StartAddr;
+    dst.ExitInstrAddr = block->TraceExitInstrAddr;
+    dst.TracePlanInstrs = block->TracePlanInstrs;
+    dst.Exit = block->TraceExit;
+    dst.Branch = block->TraceBranch;
+    dst.BranchReg = block->TraceBranchReg;
+    dst.Thumb = block->TraceThumb;
+    dst.HasMemory = block->TraceHasMemory;
+    dst.MemRegionMask = block->TraceMemRegionMask;
+    dst.TracePlanBlocks = block->TracePlanBlocks;
+    dst.TracePlanStopReason = block->TracePlanStopReason;
+}
+
+static void SetProfileJitCurrentBlock(ARM* cpu, const JitBlock* block) noexcept
+{
+    CopyProfileJitBlockSite(cpu->ProfileJitCurrentBlock, block);
+}
+
+static void SetProfileJitCurrentBlock(ARM* cpu, const ARM::ProfileJitBlockSite& site) noexcept
+{
+    cpu->ProfileJitCurrentBlock = site;
+}
+
+static void NoteARM9EdgeOutcome(const ARM::ProfileJitBlockSite& sourceSite, u32 targetAddr,
+    LiteProfile::ARM9EdgeOutcome outcome, bool traceTargetMismatch,
+    bool traceEntryMissing) noexcept
+{
+    if (sourceSite.Addr == UINT32_MAX)
+        return;
+
+    LiteProfile::NoteARM9EdgeSite(
+        sourceSite.Addr,
+        sourceSite.ExitInstrAddr,
+        targetAddr,
+        sourceSite.Exit,
+        sourceSite.Branch,
+        sourceSite.BranchReg,
+        sourceSite.Thumb,
+        sourceSite.HasMemory,
+        sourceSite.MemRegionMask,
+        sourceSite.TracePlanBlocks,
+        sourceSite.TracePlanStopReason,
+        sourceSite.TracePlanInstrs,
+        outcome,
+        traceTargetMismatch,
+        traceEntryMissing);
 }
 #endif
 

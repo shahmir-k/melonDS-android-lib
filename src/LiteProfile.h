@@ -453,6 +453,7 @@ inline ARM9ExitSite gARM9ExitSites[kARM9ExitSiteSlots];
 struct ARM9EdgeSite
 {
     uint32_t SourceAddr = 0;
+    uint32_t SourceExitInstrAddr = 0;
     uint32_t TargetAddr = 0;
     uint64_t Count = 0;
     uint64_t Hits = 0;
@@ -462,9 +463,17 @@ struct ARM9EdgeSite
     uint64_t MissHLE = 0;
     uint64_t MissSetup = 0;
     uint64_t MissLookup = 0;
+    uint64_t TraceTargetMismatch = 0;
+    uint64_t TraceEntryMissing = 0;
     uint8_t Exit = 0;
     uint8_t Branch = 0;
     uint8_t BranchReg = 0xFF;
+    uint8_t Thumb = 0;
+    uint8_t HasMemory = 0;
+    uint8_t MemRegionMask = 0;
+    uint8_t TracePlanBlocks = 0;
+    uint8_t TracePlanStopReason = 0;
+    uint16_t TracePlanInstrs = 0;
 };
 
 enum ARM9EdgeOutcome : uint8_t
@@ -478,7 +487,9 @@ enum ARM9EdgeOutcome : uint8_t
     ARM9EdgeMissLookup = 7,
 };
 
-inline constexpr size_t kARM9EdgeSiteSlots = 48;
+inline constexpr size_t kARM9EdgeSiteSetWays = 4;
+inline constexpr size_t kARM9EdgeSiteSetCount = 16;
+inline constexpr size_t kARM9EdgeSiteSlots = kARM9EdgeSiteSetWays * kARM9EdgeSiteSetCount;
 inline ARM9EdgeSite gARM9EdgeSites[kARM9EdgeSiteSlots];
 
 inline uint64_t NowNs()
@@ -621,15 +632,22 @@ inline void NoteARM9ChainBlocks(uint32_t blocks)
         gFrame.ARM9JitChainBlocks17P.fetch_add(1, std::memory_order_relaxed);
 }
 
-inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t targetAddr, uint8_t exit, uint8_t branch,
-                             uint8_t branchReg, uint8_t outcome)
+inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t sourceExitInstrAddr, uint32_t targetAddr,
+                             uint8_t exit, uint8_t branch, uint8_t branchReg, uint8_t thumb,
+                             uint8_t hasMemory, uint8_t memRegionMask, uint8_t tracePlanBlocks,
+                             uint8_t tracePlanStopReason, uint16_t tracePlanInstrs, uint8_t outcome,
+                             bool traceTargetMismatch = false, bool traceEntryMissing = false)
 {
+    uint32_t hash = sourceAddr * 0x9E3779B1u;
+    hash ^= targetAddr + 0x85EBCA6Bu + (hash << 6) + (hash >> 2);
+    ARM9EdgeSite* set = &gARM9EdgeSites[(hash & (kARM9EdgeSiteSetCount - 1)) * kARM9EdgeSiteSetWays];
     ARM9EdgeSite* target = nullptr;
     ARM9EdgeSite* empty = nullptr;
-    ARM9EdgeSite* minSite = &gARM9EdgeSites[0];
+    ARM9EdgeSite* minSite = &set[0];
 
-    for (auto& site : gARM9EdgeSites)
+    for (size_t i = 0; i < kARM9EdgeSiteSetWays; i++)
     {
+        ARM9EdgeSite& site = set[i];
         if (site.Count == 0)
         {
             if (!empty)
@@ -650,6 +668,7 @@ inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t targetAddr, uint8_t e
         target = empty ? empty : minSite;
         *target = {};
         target->SourceAddr = sourceAddr;
+        target->SourceExitInstrAddr = sourceExitInstrAddr;
         target->TargetAddr = targetAddr;
     }
 
@@ -657,6 +676,13 @@ inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t targetAddr, uint8_t e
     target->Exit = exit;
     target->Branch = branch;
     target->BranchReg = branchReg;
+    target->SourceExitInstrAddr = sourceExitInstrAddr;
+    target->Thumb = thumb;
+    target->HasMemory = hasMemory;
+    target->MemRegionMask = memRegionMask;
+    target->TracePlanBlocks = tracePlanBlocks;
+    target->TracePlanStopReason = tracePlanStopReason;
+    target->TracePlanInstrs = tracePlanInstrs;
 
     switch (outcome)
     {
@@ -669,6 +695,11 @@ inline void NoteARM9EdgeSite(uint32_t sourceAddr, uint32_t targetAddr, uint8_t e
     case 7: target->MissLookup++; break;
     default: break;
     }
+
+    if (traceTargetMismatch)
+        target->TraceTargetMismatch++;
+    if (traceEntryMissing)
+        target->TraceEntryMissing++;
 }
 
 inline void NoteARM9ExitSite(uint32_t addr, uint8_t exit, uint8_t branch, uint8_t branchReg,
@@ -2458,6 +2489,43 @@ inline void EndFrame()
             site.HasMemory,
             site.MemRegionMask,
             instrsPerHit,
+            site.TracePlanBlocks,
+            site.TracePlanInstrs,
+            ARM9TracePlanStopName(site.TracePlanStopReason));
+    }
+
+    ARM9EdgeSite sortedEdgeSites[kARM9EdgeSiteSlots];
+    for (size_t i = 0; i < kARM9EdgeSiteSlots; i++)
+        sortedEdgeSites[i] = gARM9EdgeSites[i];
+    std::sort(std::begin(sortedEdgeSites), std::end(sortedEdgeSites),
+        [](const ARM9EdgeSite& a, const ARM9EdgeSite& b) { return a.Count > b.Count; });
+
+    for (size_t i = 0; i < 8 && sortedEdgeSites[i].Count; i++)
+    {
+        const ARM9EdgeSite& site = sortedEdgeSites[i];
+        const double countPerFrame = gWindowFrames ? static_cast<double>(site.Count) / static_cast<double>(gWindowFrames) : 0.0;
+        Platform::Log(Platform::LogLevel::Info,
+            "[LITEV_PROFILE] arm9_edge_hot%zu src=%08" PRIX32 " exit_pc=%08" PRIX32 " target=%08" PRIX32 " count=%.1f hits=%.1f miss_stop=%.1f miss_budget=%.1f miss_target=%.1f miss_hle=%.1f miss_setup=%.1f miss_lookup=%.1f trace_mismatch=%.1f trace_entry=%.1f exit=%s branch=%s reg=%u thumb=%u mem=%u memmask=%02X trace_blocks=%u trace_instr=%u trace_stop=%s",
+            i,
+            site.SourceAddr,
+            site.SourceExitInstrAddr,
+            site.TargetAddr,
+            countPerFrame,
+            CountPerFrame(site.Hits),
+            CountPerFrame(site.MissStop),
+            CountPerFrame(site.MissBudget),
+            CountPerFrame(site.MissTarget),
+            CountPerFrame(site.MissHLE),
+            CountPerFrame(site.MissSetup),
+            CountPerFrame(site.MissLookup),
+            CountPerFrame(site.TraceTargetMismatch),
+            CountPerFrame(site.TraceEntryMissing),
+            ARM9ExitName(site.Exit),
+            ARM9BranchName(site.Branch),
+            site.BranchReg,
+            site.Thumb,
+            site.HasMemory,
+            site.MemRegionMask,
             site.TracePlanBlocks,
             site.TracePlanInstrs,
             ARM9TracePlanStopName(site.TracePlanStopReason));

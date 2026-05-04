@@ -699,11 +699,26 @@ void ARMv5::Execute()
                     {
                         ActiveJitTraceBlocks[i] = 0;
                         ActiveJitTraceEntries[i] = nullptr;
+                        ActiveJitTraceSites[i].Clear();
                     }
                     for (u32 i = 0; i < ActiveJitTraceBlockCount; i++)
                     {
                         ActiveJitTraceBlocks[i] = trace->Blocks[i];
                         ActiveJitTraceEntries[i] = trace->Entries[i];
+                        if (const JitBlock* traceBlock = NDS.JIT.FindJitBlock(0, trace->Blocks[i]))
+                        {
+                            ActiveJitTraceSites[i].Addr = traceBlock->StartAddr;
+                            ActiveJitTraceSites[i].ExitInstrAddr = traceBlock->TraceExitInstrAddr;
+                            ActiveJitTraceSites[i].TracePlanInstrs = traceBlock->TracePlanInstrs;
+                            ActiveJitTraceSites[i].Exit = traceBlock->TraceExit;
+                            ActiveJitTraceSites[i].Branch = traceBlock->TraceBranch;
+                            ActiveJitTraceSites[i].BranchReg = traceBlock->TraceBranchReg;
+                            ActiveJitTraceSites[i].Thumb = traceBlock->TraceThumb;
+                            ActiveJitTraceSites[i].HasMemory = traceBlock->TraceHasMemory;
+                            ActiveJitTraceSites[i].MemRegionMask = traceBlock->TraceMemRegionMask;
+                            ActiveJitTraceSites[i].TracePlanBlocks = traceBlock->TracePlanBlocks;
+                            ActiveJitTraceSites[i].TracePlanStopReason = traceBlock->TracePlanStopReason;
+                        }
                     }
                 }
                 else
@@ -718,12 +733,30 @@ void ARMv5::Execute()
                     {
                         ActiveJitTraceBlocks[i] = 0;
                         ActiveJitTraceEntries[i] = nullptr;
+                        ActiveJitTraceSites[i].Clear();
                     }
                 }
 #endif
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
 #if LITEV_PROFILE
-                ProfileJitCurrentBlockAddr = instrAddr;
+                if (const JitBlock* blockInfo = NDS.JIT.FindJitBlock(0, instrAddr))
+                {
+                    ProfileJitCurrentBlock.Addr = blockInfo->StartAddr;
+                    ProfileJitCurrentBlock.ExitInstrAddr = blockInfo->TraceExitInstrAddr;
+                    ProfileJitCurrentBlock.TracePlanInstrs = blockInfo->TracePlanInstrs;
+                    ProfileJitCurrentBlock.Exit = blockInfo->TraceExit;
+                    ProfileJitCurrentBlock.Branch = blockInfo->TraceBranch;
+                    ProfileJitCurrentBlock.BranchReg = blockInfo->TraceBranchReg;
+                    ProfileJitCurrentBlock.Thumb = blockInfo->TraceThumb;
+                    ProfileJitCurrentBlock.HasMemory = blockInfo->TraceHasMemory;
+                    ProfileJitCurrentBlock.MemRegionMask = blockInfo->TraceMemRegionMask;
+                    ProfileJitCurrentBlock.TracePlanBlocks = blockInfo->TracePlanBlocks;
+                    ProfileJitCurrentBlock.TracePlanStopReason = blockInfo->TracePlanStopReason;
+                }
+                else
+                {
+                    ProfileJitCurrentBlock.Clear();
+                }
                 ProfileJitChainBlocks = 1;
 #endif
                 LITE_PROFILE_SCOPE(timer, LiteProfile::gFrame.ARM9JitDispatchNs);
@@ -734,7 +767,7 @@ void ARMv5::Execute()
                 LITE_PROFILE_ADD_VALUE(LiteProfile::gFrame.ARM9JitGuestCycles, Cycles);
                 LITE_PROFILE_SCOPE(postTimer, LiteProfile::gFrame.ARM9JitPostDispatchNs);
 #if LITEV_PROFILE
-                const u32 finalBlockAddr = ProfileJitCurrentBlockAddr;
+                const u32 finalBlockAddr = ProfileJitCurrentBlock.Addr;
                 LiteProfile::NoteARM9ChainBlocks(ProfileJitChainBlocks);
                 if (auto it = NDS.JIT.JitBlocks9.find(finalBlockAddr); it != NDS.JIT.JitBlocks9.end())
                 {
