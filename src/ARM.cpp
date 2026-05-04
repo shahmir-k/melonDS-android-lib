@@ -683,12 +683,11 @@ void ARMv5::Execute()
             }
             if (block)
             {
+#if LITEV_PROFILE
                 if (const JitTrace* trace = NDS.JIT.FindLinearTrace(0, instrAddr);
                     trace && trace->Blocks.size() > 1 && trace->Entries.size() == trace->Blocks.size())
                 {
-#if LITEV_PROFILE
                     LiteProfile::NoteARM9TraceAttempt(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
-#endif
                     ActiveJitTraceStartAddr = trace->StartAddr;
                     ActiveJitTraceNextIndex = 1;
                     ActiveJitTraceBlockCount = static_cast<u8>(std::min<size_t>(
@@ -721,6 +720,7 @@ void ARMv5::Execute()
                         ActiveJitTraceEntries[i] = nullptr;
                     }
                 }
+#endif
                 LITE_PROFILE_ADD(LiteProfile::gFrame.ARM9JitDispatchCalls);
 #if LITEV_PROFILE
                 ProfileJitCurrentBlockAddr = instrAddr;

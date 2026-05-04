@@ -56,9 +56,11 @@ static_assert(offsetof(ARM, CPSR) == ARM_CPSR_offset, "");
 static_assert(offsetof(ARM, Cycles) == ARM_Cycles_offset, "");
 static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset, "");
 
+#if LITEV_PROFILE
 static void ClearActiveTraceCache(ARM* cpu) noexcept;
 static void ActivateTraceCache(ARM* cpu, const JitTrace& trace) noexcept;
 static bool ActiveTraceContainsBlock(const ARM* cpu, u32 blockAddr) noexcept;
+#endif
 
 extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 {
@@ -95,6 +97,7 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
         return nullptr;
     }
 
+#if LITEV_PROFILE
     if (cpu->ActiveJitTraceStartAddr != UINT32_MAX)
     {
         if (cpu->ActiveJitTraceNextIndex == 0
@@ -133,6 +136,7 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
             ClearActiveTraceCache(cpu);
         }
     }
+#endif
 
     if ((instrAddr < cpu->FastBlockLookupStart || instrAddr >= (cpu->FastBlockLookupStart + cpu->FastBlockLookupSize))
         && !nds.JIT.SetupExecutableRegion(0, instrAddr, cpu->FastBlockLookup, cpu->FastBlockLookupStart, cpu->FastBlockLookupSize))
@@ -151,18 +155,18 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
 
     cpu->LastJitBlockAddr = instrAddr;
     cpu->LastJitBlockEntry = block;
+#if LITEV_PROFILE
     if (const JitTrace* trace = nds.JIT.FindLinearTrace(0, instrAddr);
         trace && trace->Blocks.size() > 1 && trace->Entries.size() == trace->Blocks.size())
     {
-#if LITEV_PROFILE
         LiteProfile::NoteARM9TraceAttempt(trace->SideExit.Exit, trace->SideExit.Branch, trace->SideExit.BranchReg);
-#endif
         ActivateTraceCache(cpu, *trace);
     }
     else
     {
         ClearActiveTraceCache(cpu);
     }
+#endif
 #if LITEV_PROFILE
     cpu->ProfileJitCurrentBlockAddr = instrAddr;
     cpu->ProfileJitChainBlocks++;
@@ -171,6 +175,7 @@ extern "C" JitBlockEntry ARM9_ContinueBlock(ARM* cpuBase)
     return block;
 }
 
+#if LITEV_PROFILE
 static void ClearActiveTraceCache(ARM* cpu) noexcept
 {
     cpu->ActiveJitTraceStartAddr = UINT32_MAX;
@@ -225,6 +230,7 @@ static bool ActiveTraceContainsBlock(const ARM* cpu, u32 blockAddr) noexcept
 
     return false;
 }
+#endif
 
 static u8 ClassifyMemRegionBit(ARM* cpu, u32 dataAddr)
 {
@@ -1609,6 +1615,7 @@ void ARMJIT::RetireJitBlock(JitBlock* block) noexcept
     }
 }
 
+#if LITEV_PROFILE
 const JitTrace* ARMJIT::FindLinearTrace(u32 num, u32 startAddr) const noexcept
 {
     const auto& traces = num == 0 ? LinearTraces9 : LinearTraces7;
@@ -1616,7 +1623,6 @@ const JitTrace* ARMJIT::FindLinearTrace(u32 num, u32 startAddr) const noexcept
     return it != traces.end() ? &it->second : nullptr;
 }
 
-#if LITEV_PROFILE
 const JitBlockRecipe* ARMJIT::FindBlockRecipe(u32 num, u32 startAddr) const noexcept
 {
     const auto& recipes = num == 0 ? BlockRecipes9 : BlockRecipes7;
@@ -1711,8 +1717,8 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         }
 
         // some memory has been remapped
-        InvalidateLinearTracesForBlock(cpu->Num, existingBlockIt->second->StartAddr);
 #if LITEV_PROFILE
+        InvalidateLinearTracesForBlock(cpu->Num, existingBlockIt->second->StartAddr);
         if (cpu->Num == 0)
             BlockRecipes9.erase(existingBlockIt->second->StartAddr);
         else
@@ -2489,6 +2495,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
     }
 #endif
 
+#if LITEV_PROFILE
     RefreshLinearTracePlanSummary(cpu->Num, blockAddr);
     RefreshLinearTrace(cpu->Num, blockAddr);
     auto& traceBlocks = cpu->Num == 0 ? JitBlocks9 : JitBlocks7;
@@ -2520,6 +2527,7 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
             }
         }
     }
+#endif
 
     u64* entry = &FastBlockLookupRegions[(localAddr >> 27)][(localAddr & 0x7FFFFFF) / 2];
     *entry = ((u64)blockAddr | cpu->Num) << 32;
@@ -2606,8 +2614,8 @@ void ARMJIT::InvalidateByAddr(u32 localAddr) noexcept
         }
 
         FastBlockLookupRegions[block->StartAddrLocal >> 27][(block->StartAddrLocal & 0x7FFFFFF) / 2] = (u64)UINT32_MAX << 32;
-        InvalidateLinearTracesForBlock(block->Num, block->StartAddr);
 #if LITEV_PROFILE
+        InvalidateLinearTracesForBlock(block->Num, block->StartAddr);
         if (block->Num == 0)
             BlockRecipes9.erase(block->StartAddr);
         else
@@ -2686,6 +2694,7 @@ const JitBlock* ARMJIT::FindJitBlock(u32 num, u32 addr) const noexcept
     return it != blocks.end() ? it->second : nullptr;
 }
 
+#if LITEV_PROFILE
 void ARMJIT::RefreshLinearTracePlanSummary(u32 num, u32 startAddr, u32 maxBlocks) noexcept
 {
     auto& blocks = num == 0 ? JitBlocks9 : JitBlocks7;
@@ -2937,6 +2946,7 @@ bool ARMJIT::BuildLinearTracePlan(u32 num, u32 startAddr, u32 maxBlocks, JitTrac
     out.StopReason = TracePlanStopMaxBlocks;
     return out.Blocks.size() > 1;
 }
+#endif
 
 void ARMJIT::blockSanityCheck(u32 num, u32 blockAddr, JitBlockEntry entry) noexcept
 {
@@ -3022,9 +3032,9 @@ void ARMJIT::ResetBlockCache() noexcept
     }
     JitBlocks9.clear();
     JitBlocks7.clear();
+#if LITEV_PROFILE
     LinearTraces9.clear();
     LinearTraces7.clear();
-#if LITEV_PROFILE
     BlockRecipes9.clear();
     BlockRecipes7.clear();
 #endif
