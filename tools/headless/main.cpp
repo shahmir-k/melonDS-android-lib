@@ -57,6 +57,7 @@ struct Options
     int fbDumpFrame = -1;               // frame index to dump, -1 => none
     std::string fbDumpPath;
     AudioInterpolation interp = AudioInterpolation::None;
+    int frameskip = 0;                  // LITEV_AGGRESSIVE_SKIP target (0 = off)
 };
 
 [[noreturn]] void Usage(const char* argv0, int code)
@@ -71,6 +72,7 @@ struct Options
         "  --fb-hash-every N         print xxhash of both framebuffers every N frames\n"
         "  --fb-dump-ppm <f>:<path>  dump both framebuffers at frame f as PPM (side by side)\n"
         "  --audio-interp <mode>     SPU interpolation: none|linear|cosine|cubic|gaussian (default none)\n"
+        "  --frameskip N             skip N of every N+1 frames' rasterization (LITEV_AGGRESSIVE_SKIP build)\n"
         "  --profile-json <path>     write per-run totals as JSON\n"
         "  --data-dir <path>         local firmware/save directory (default ./headless-data)\n",
         argv0);
@@ -116,6 +118,7 @@ bool ParseArgs(int argc, char** argv, Options& o)
             else if (m == "gaussian") o.interp = AudioInterpolation::SNESGaussian;
             else { fprintf(stderr, "error: --audio-interp must be none|linear|cosine|cubic|gaussian\n"); return false; }
         }
+        else if (a == "--frameskip") o.frameskip = std::atoi(next("--frameskip").c_str());
         else if (a == "--profile-json") o.profileJson = next("--profile-json");
         else if (a == "--data-dir") o.dataDir = next("--data-dir");
         else if (a == "--help" || a == "-h") Usage(argv[0], 0);
@@ -246,6 +249,16 @@ int main(int argc, char** argv)
     }
 
     nds->SetKeyMask(0xFFFF); // no buttons pressed (active-low)
+
+    if (opt.frameskip > 0)
+    {
+#ifdef LITEV_AGGRESSIVE_SKIP
+        nds->GPU.SetFrameskipTarget(opt.frameskip);
+        fprintf(stderr, "frameskip: rendering 1 of every %d frames\n", opt.frameskip + 1);
+#else
+        fprintf(stderr, "warning: --frameskip ignored (build lacks LITEV_AGGRESSIVE_SKIP)\n");
+#endif
+    }
 
     fprintf(stderr, "liteDS-headless: rom=%s mode=%s frames=%d jit=%s\n",
             opt.rom.c_str(), opt.jit ? "jit" : "interp", opt.frames,
