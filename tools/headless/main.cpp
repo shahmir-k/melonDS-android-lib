@@ -71,6 +71,20 @@ struct Options
     int frameskip = 0;                  // LITEV_AGGRESSIVE_SKIP target (0 = off)
 
     std::string inputScript;            // --input-script: scripted button input
+
+    // --bench-window <start>:<end>: measure avg FPS ONLY over frames [start,end]
+    // (inclusive), while the total run still executes all --frames frames. Lets a
+    // benchmark isolate a steady-state gameplay window from the boot/menu ramp.
+    int benchWindowStart = -1;          // -1 => no window (overall FPS only)
+    int benchWindowEnd   = -1;
+
+    // --dump-savestate <frame>:<path>: after running frame <frame>, write a full
+    // core savestate to <path>. Lets a scripted menu run bake an in-race start
+    // state once, so benchmark runs can load it and measure gameplay immediately
+    // (script-once / savestate-many). Savestates embed copyrighted RAM contents,
+    // so they are LOCAL-ONLY (gitignored) and regenerated from the input script.
+    int dumpSavestateFrame = -1;
+    std::string dumpSavestatePath;
 };
 
 [[noreturn]] void Usage(const char* argv0, int code)
@@ -80,6 +94,7 @@ struct Options
         "Usage: %s --rom <path> [options]\n"
         "  --rom <path>              DS ROM to run (required)\n"
         "  --savestate <path>        load a savestate after boot (optional)\n"
+        "  --dump-savestate <f>:<p>  write a core savestate to <p> after running frame f\n"
         "  --frames N                number of frames to run (default 300)\n"
         "  --mode jit|interp         execution mode (default jit)\n"
         "  --fastmem on|off          JIT fast-memory path (default on; no-op where unsupported)\n"
@@ -87,6 +102,7 @@ struct Options
         "  --fb-dump-ppm <f>:<path>  dump both framebuffers at frame f as PPM (side by side)\n"
         "  --audio-interp <mode>     SPU interpolation: none|linear|cosine|cubic|gaussian (default none)\n"
         "  --frameskip N             skip N of every N+1 frames' rasterization (LITEV_AGGRESSIVE_SKIP build)\n"
+        "  --bench-window <s>:<e>    report avg FPS over frames [s,e] inclusive only (still runs all frames)\n"
         "  --profile-json <path>     write per-run totals as JSON\n"
         "  --data-dir <path>         local firmware/save directory (default ./headless-data)\n"
         "  --fixed-rtc <unix-ts>     fixed RTC epoch for determinism (default 946684800)\n"
@@ -115,6 +131,14 @@ bool ParseArgs(int argc, char** argv, Options& o)
 
         if (a == "--rom") o.rom = next("--rom");
         else if (a == "--savestate") o.savestate = next("--savestate");
+        else if (a == "--dump-savestate")
+        {
+            std::string spec = next("--dump-savestate");
+            auto colon = spec.find(':');
+            if (colon == std::string::npos) { fprintf(stderr, "error: --dump-savestate needs <frame>:<path>\n"); return false; }
+            o.dumpSavestateFrame = std::atoi(spec.substr(0, colon).c_str());
+            o.dumpSavestatePath = spec.substr(colon + 1);
+        }
         else if (a == "--frames") o.frames = std::atoi(next("--frames").c_str());
         else if (a == "--mode")
         {
@@ -154,6 +178,14 @@ bool ParseArgs(int argc, char** argv, Options& o)
         else if (a == "--data-dir") o.dataDir = next("--data-dir");
         else if (a == "--fixed-rtc") o.fixedRtc = std::atoll(next("--fixed-rtc").c_str());
         else if (a == "--input-script") o.inputScript = next("--input-script");
+        else if (a == "--bench-window")
+        {
+            std::string spec = next("--bench-window");
+            auto colon = spec.find(':');
+            if (colon == std::string::npos) { fprintf(stderr, "error: --bench-window needs <start>:<end>\n"); return false; }
+            o.benchWindowStart = std::atoi(spec.substr(0, colon).c_str());
+            o.benchWindowEnd   = std::atoi(spec.substr(colon + 1).c_str());
+        }
         else if (a == "--record-trace") { o.mode = RunMode::RecordTrace; o.tracePath = next("--record-trace"); }
         else if (a == "--verify-trace") { o.mode = RunMode::VerifyTrace; o.tracePath = next("--verify-trace"); }
         else if (a == "--verify-interp-converge") o.mode = RunMode::VerifyInterpConverge;
@@ -163,6 +195,17 @@ bool ParseArgs(int argc, char** argv, Options& o)
 
     if (o.rom.empty()) { fprintf(stderr, "error: --rom is required\n"); return false; }
     if (o.frames <= 0) { fprintf(stderr, "error: --frames must be positive\n"); return false; }
+    if (o.benchWindowStart >= 0 || o.benchWindowEnd >= 0)
+    {
+        if (o.benchWindowStart < 0 || o.benchWindowEnd < 0
+            || o.benchWindowStart > o.benchWindowEnd
+            || o.benchWindowEnd >= o.frames)
+        {
+            fprintf(stderr, "error: --bench-window needs 0 <= start <= end < frames (got %d:%d, frames=%d)\n",
+                    o.benchWindowStart, o.benchWindowEnd, o.frames);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -209,6 +252,30 @@ bool DumpPPM(const std::string& path, const u32* top, const u32* bottom)
     writeScreen(top);
     writeScreen(bottom);
     fclose(f);
+    return true;
+}
+
+// Write a full core savestate to `path` using the same in-memory Savestate API
+// as the Qt frontend (default 32 MB save buffer -> DoSavestate -> flush bytes).
+bool SaveSavestate(NDS& nds, const std::string& path)
+{
+    Savestate state; // default ctor: save mode, DEFAULT_SIZE buffer
+    if (state.Error) { fprintf(stderr, "error: savestate alloc failed\n"); return false; }
+    if (!nds.DoSavestate(&state) || state.Error)
+    {
+        fprintf(stderr, "error: DoSavestate failed while dumping\n");
+        return false;
+    }
+    FILE* f = fopen(path.c_str(), "wb");
+    if (!f) { fprintf(stderr, "error: cannot open savestate '%s' for write\n", path.c_str()); return false; }
+    size_t wr = fwrite(state.Buffer(), 1, state.Length(), f);
+    fclose(f);
+    if (wr != state.Length())
+    {
+        fprintf(stderr, "error: short write to savestate '%s'\n", path.c_str());
+        return false;
+    }
+    fprintf(stderr, "dumped savestate (%u bytes) to %s\n", state.Length(), path.c_str());
     return true;
 }
 
@@ -382,6 +449,12 @@ int main(int argc, char** argv)
 
     auto wallStart = std::chrono::steady_clock::now();
 
+    // --bench-window: measured span within the full run. windowStart is stamped
+    // just before frame benchWindowStart's RunFrame; windowEnd just after frame
+    // benchWindowEnd's RunFrame. The window covers [start,end] inclusive.
+    const bool haveWindow = opt.benchWindowStart >= 0;
+    std::chrono::steady_clock::time_point windowStart{}, windowEnd{};
+
 #if LITEV_PROFILE
     // Run totals: g_Frame is reset every frame, so accumulate each frame's counters
     // into totals here to observe whole-run behaviour (esp. the Unit 4 link counters).
@@ -399,8 +472,20 @@ int main(int argc, char** argv)
         if (inputScript.Loaded())
             nds->SetKeyMask(inputScript.KeyMaskForFrame(frame));
 
+        if (haveWindow && frame == opt.benchWindowStart)
+            windowStart = std::chrono::steady_clock::now();
+
         LITE_PROFILE_RESET_FRAME();
         nds->RunFrame();
+
+        if (haveWindow && frame == opt.benchWindowEnd)
+            windowEnd = std::chrono::steady_clock::now();
+
+        if (opt.dumpSavestateFrame == frame && !opt.dumpSavestatePath.empty())
+        {
+            if (!SaveSavestate(*nds, opt.dumpSavestatePath))
+                fprintf(stderr, "warning: savestate dump failed at frame %d\n", frame);
+        }
 
 #if LITEV_PROFILE
         {
@@ -474,6 +559,16 @@ int main(int argc, char** argv)
     double wallSec = std::chrono::duration<double>(wallEnd - wallStart).count();
     double avgFps = wallSec > 0 ? opt.frames / wallSec : 0.0;
 
+    // --bench-window: FPS over frames [start,end] inclusive only.
+    int    windowFrames = 0;
+    double windowSec = 0.0, windowFps = 0.0;
+    if (haveWindow)
+    {
+        windowFrames = opt.benchWindowEnd - opt.benchWindowStart + 1;
+        windowSec = std::chrono::duration<double>(windowEnd - windowStart).count();
+        windowFps = windowSec > 0 ? windowFrames / windowSec : 0.0;
+    }
+
     u64 audioHash = XXH3_64bits_digest(audioHashState);
     XXH3_freeState(audioHashState);
 
@@ -482,6 +577,13 @@ int main(int argc, char** argv)
     printf("frames:      %d\n", opt.frames);
     printf("wall_time_s: %.4f\n", wallSec);
     printf("avg_fps:     %.2f\n", avgFps);
+    if (haveWindow)
+    {
+        printf("window:      %d:%d\n", opt.benchWindowStart, opt.benchWindowEnd);
+        printf("window_frames: %d\n", windowFrames);
+        printf("window_wall_s: %.4f\n", windowSec);
+        printf("window_fps:  %.2f\n", windowFps);
+    }
     printf("final_top:   %016llx\n", (unsigned long long)lastTopHash);
     printf("final_bot:   %016llx\n", (unsigned long long)lastBotHash);
     printf("fb_changing: %s\n", anyChange ? "yes" : "no");
@@ -539,6 +641,11 @@ int main(int argc, char** argv)
                 "  \"frames\": %d,\n"
                 "  \"wall_time_s\": %.6f,\n"
                 "  \"avg_fps\": %.4f,\n"
+                "  \"window_start\": %d,\n"
+                "  \"window_end\": %d,\n"
+                "  \"window_frames\": %d,\n"
+                "  \"window_wall_s\": %.6f,\n"
+                "  \"window_fps\": %.4f,\n"
                 "  \"final_top_hash\": \"%016llx\",\n"
                 "  \"final_bottom_hash\": \"%016llx\",\n"
                 "  \"framebuffer_changing\": %s,\n"
@@ -566,6 +673,11 @@ int main(int argc, char** argv)
                 opt.frames,
                 wallSec,
                 avgFps,
+                opt.benchWindowStart,
+                opt.benchWindowEnd,
+                windowFrames,
+                windowSec,
+                windowFps,
                 (unsigned long long)lastTopHash,
                 (unsigned long long)lastBotHash,
                 anyChange ? "true" : "false",
