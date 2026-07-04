@@ -23,8 +23,10 @@
 #include "../ARMJIT.h"
 #include "../NDS.h"
 #include "../ARMJIT_Global.h"
+#include "../ARMJIT_x64/ARMJIT_Offsets.h"
 
 #include <stdlib.h>
+#include <cstddef>
 
 using namespace Arm64Gen;
 
@@ -32,6 +34,23 @@ extern "C" void ARM_Ret();
 
 namespace melonDS
 {
+
+// liteDS-v2 Unit 2: prove the hand-maintained ARMJIT_Offsets.h values against the
+// real ARM struct layout. These offsets are baked as immediates in the A64
+// linkage/dispatch code, so a silent layout shift (e.g. a field inserted before
+// CPSR) must fail the build, not the emulation. The layout is host-arch-
+// independent, but the assert is kept under the A64 guard to mirror where the
+// offsets are consumed.
+#ifdef __aarch64__
+static_assert(offsetof(ARM, Cycles) == ARM_Cycles_offset,
+    "ARM_Cycles_offset out of sync with ARM::Cycles");
+static_assert(offsetof(ARM, StopExecution) == ARM_StopExecution_offset,
+    "ARM_StopExecution_offset out of sync with ARM::StopExecution");
+static_assert(offsetof(ARM, CPSR) == ARM_CPSR_offset,
+    "ARM_CPSR_offset out of sync with ARM::CPSR");
+static_assert(offsetof(ARM, CyclesBudget) == ARM_CyclesBudget_offset,
+    "ARM_CyclesBudget_offset out of sync with ARM::CyclesBudget");
+#endif
 
 /*
 
