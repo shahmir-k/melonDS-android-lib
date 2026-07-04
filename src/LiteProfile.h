@@ -45,6 +45,14 @@ struct FrameCounters
     std::atomic<uint64_t> DispatcherMisses{0};
     std::atomic<uint64_t> CppReentries{0};
 
+    // Unit 4 direct-linking bookkeeping counters (C++-side; the per-hop asm
+    // LinkedHops counter is intentionally not implemented — see the unit report).
+    std::atomic<uint64_t> LinksPatched{0};   // outgoing sites patched site->target
+    std::atomic<uint64_t> LinksUnlinked{0};  // sites rewritten target->dispatcher
+    std::atomic<uint64_t> PendingPeak{0};    // high-water mark of pending-link maps
+    std::atomic<uint64_t> LinkSitesEmitted{0};   // eligible exit sites (got a link slot)
+    std::atomic<uint64_t> DispatchOnlyExits{0};  // ineligible exit sites (plain dispatcher)
+
     // Time-in-JIT vs time-in-C++ (nanoseconds within the frame)
     std::atomic<uint64_t> TimeInJitNs{0};
     std::atomic<uint64_t> TimeInCppNs{0};
@@ -60,6 +68,11 @@ struct FrameCounters
         DispatcherHits.store(0, std::memory_order_relaxed);
         DispatcherMisses.store(0, std::memory_order_relaxed);
         CppReentries.store(0, std::memory_order_relaxed);
+        LinksPatched.store(0, std::memory_order_relaxed);
+        LinksUnlinked.store(0, std::memory_order_relaxed);
+        PendingPeak.store(0, std::memory_order_relaxed);
+        LinkSitesEmitted.store(0, std::memory_order_relaxed);
+        DispatchOnlyExits.store(0, std::memory_order_relaxed);
         TimeInJitNs.store(0, std::memory_order_relaxed);
         TimeInCppNs.store(0, std::memory_order_relaxed);
     }
