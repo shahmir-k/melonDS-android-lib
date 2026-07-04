@@ -34,10 +34,13 @@
 
 #include "PlatformHeadless.h"
 #include "LiteProfile.h"
+#include "VerifyTrace.h"
 
 using namespace melonDS;
 
 namespace {
+
+enum class RunMode { Benchmark, RecordTrace, VerifyTrace, VerifyInterpConverge };
 
 // Native DS screen dimensions; the software renderer writes 256x192 u32 per screen.
 constexpr int kScreenW = 256;
@@ -55,6 +58,11 @@ struct Options
     int fbHashEvery = 0;                // 0 => only final hash
     int fbDumpFrame = -1;               // frame index to dump, -1 => none
     std::string fbDumpPath;
+
+    // Unit 1 trace/verify modes.
+    RunMode mode = RunMode::Benchmark;
+    std::string tracePath;
+    long long fixedRtc = liteds::kDefaultRtcEpoch;
 };
 
 [[noreturn]] void Usage(const char* argv0, int code)
@@ -69,7 +77,13 @@ struct Options
         "  --fb-hash-every N         print xxhash of both framebuffers every N frames\n"
         "  --fb-dump-ppm <f>:<path>  dump both framebuffers at frame f as PPM (side by side)\n"
         "  --profile-json <path>     write per-run totals as JSON\n"
-        "  --data-dir <path>         local firmware/save directory (default ./headless-data)\n",
+        "  --data-dir <path>         local firmware/save directory (default ./headless-data)\n"
+        "  --fixed-rtc <unix-ts>     fixed RTC epoch for determinism (default 946684800)\n"
+        "\n"
+        "  Unit 1 oracle modes (mutually exclusive; run --frames frames):\n"
+        "  --record-trace <path>     record a per-frame binary state trace to <path>\n"
+        "  --verify-trace <path>     replay and compare against a golden trace <path>\n"
+        "  --verify-interp-converge  run JIT + interp side by side, report convergence\n",
         argv0);
     exit(code);
 }
@@ -105,6 +119,10 @@ bool ParseArgs(int argc, char** argv, Options& o)
         }
         else if (a == "--profile-json") o.profileJson = next("--profile-json");
         else if (a == "--data-dir") o.dataDir = next("--data-dir");
+        else if (a == "--fixed-rtc") o.fixedRtc = std::atoll(next("--fixed-rtc").c_str());
+        else if (a == "--record-trace") { o.mode = RunMode::RecordTrace; o.tracePath = next("--record-trace"); }
+        else if (a == "--verify-trace") { o.mode = RunMode::VerifyTrace; o.tracePath = next("--verify-trace"); }
+        else if (a == "--verify-interp-converge") o.mode = RunMode::VerifyInterpConverge;
         else if (a == "--help" || a == "-h") Usage(argv[0], 0);
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); return false; }
     }
@@ -184,6 +202,28 @@ int main(int argc, char** argv)
         Usage(argv[0], 2);
 
     HeadlessHost::SetDataDir(opt.dataDir);
+
+    // --- Unit 1 oracle modes -------------------------------------------------
+    if (opt.mode != RunMode::Benchmark)
+    {
+        liteds::TraceRunConfig cfg;
+        cfg.rom = opt.rom;
+        cfg.dataDir = opt.dataDir;
+        cfg.jit = opt.jit;
+        cfg.fixedRtcEpoch = opt.fixedRtc;
+
+        switch (opt.mode)
+        {
+        case RunMode::RecordTrace:
+            return liteds::RecordTrace(cfg, opt.frames, opt.tracePath);
+        case RunMode::VerifyTrace:
+            return liteds::VerifyTrace(cfg, opt.tracePath);
+        case RunMode::VerifyInterpConverge:
+            return liteds::VerifyInterpConverge(cfg, opt.frames);
+        default:
+            break;
+        }
+    }
 
     // --- Load ROM ---
     u32 romlen = 0;

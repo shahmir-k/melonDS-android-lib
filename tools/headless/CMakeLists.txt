@@ -5,6 +5,7 @@
 add_executable(liteDS-headless
     main.cpp
     PlatformHeadless.cpp
+    VerifyTrace.cpp
 )
 
 target_link_libraries(liteDS-headless PRIVATE core)
