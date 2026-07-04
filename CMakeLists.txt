@@ -108,11 +108,33 @@ option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 # liteDS-v2 additions (all default OFF -> upstream-identical build with no flags).
 option(LITEV_HEADLESS "Build the liteDS-headless benchmark harness" OFF)
 option(LITEV_PROFILE "Enable LiteProfile frame-breakdown counters" OFF)
+if (LITEV_PROFILE)
+    # Reach the core too (not just the headless harness) so in-core call sites
+    # (e.g. the Unit 3 dispatcher re-entry counters in ARM.cpp) are compiled in.
+    add_compile_definitions(LITEV_PROFILE=1)
+endif()
 # Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
 # implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
 option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)
 if (LITEV_SHADOW_ASSERT)
     add_compile_definitions(LITEV_SHADOW_ASSERT=1)
+endif()
+
+# Unit 3: AArch64-only emitted JIT dispatcher. When ON, JIT block exits jump to a
+# generated dispatcher stub that does the fast block lookup inline and branches
+# straight into the next block, staying in JIT context for the whole slice; it
+# only returns to C++ (ARM_Ret) on budget-expiry, StopExecution, region miss, or
+# lookup miss. Default OFF -> the build is bit-identical to the shadow-budget
+# tree. The x64 JIT ALWAYS keeps the unmodified upstream C++ dispatch loop; this
+# option therefore requires an AArch64 target and errors at configure time on x86.
+option(LITEV_JIT_DISPATCH "AArch64 emitted JIT block dispatcher (chained block exits)" OFF)
+if (LITEV_JIT_DISPATCH)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_DISPATCH=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_DISPATCH requires an AArch64 target "
+                            "(the x64 JIT keeps the upstream C++ dispatch loop).")
+    endif()
 endif()
 
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.

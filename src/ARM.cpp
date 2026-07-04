@@ -28,6 +28,7 @@
 #include "Platform.h"
 #include "GPU.h"
 #include "ARMJIT_Memory.h"
+#include "LiteProfile.h"
 
 namespace melonDS
 {
@@ -67,8 +68,12 @@ using Platform::LogLevel;
 static void LiteV_ShadowAssertBudget(const char* who, s32 cycles, s32 budget,
                                      s64 timestamp, s64 target)
 {
-    if (budget == 0)
-        return; // forced exit; trivially honoured, no timestamp obligation
+    if (budget <= 0)
+        return; // forced exit (budget zeroed) or slice already consumed; no timestamp
+                // obligation. Non-dispatch builds never make the budget negative, so this
+                // is identical to `== 0` there; the Unit 3 dispatcher maintains the budget
+                // as `budget -= Cycles` per chained block, which can drive a
+                // ForceExecutionExit()-zeroed budget below zero.
 
     bool budgetExit = (cycles >= budget);
     bool tsExit = (timestamp + (s64)cycles >= target);
@@ -703,6 +708,21 @@ void ARMv5::Execute()
                                      (s64)NDS.ARM9Timestamp, (s64)NDS.ARM9Target);
 #endif
 
+#if defined(LITEV_JIT_DISPATCH) && LITEV_PROFILE
+            // Unit 3: count C++ re-entries from the dispatcher. Dispatcher *hits*
+            // (chained transitions) happen entirely in asm and are not counted here;
+            // this tallies only the boundaries where the dispatcher handed control back.
+            if (block)
+            {
+                using namespace melonDS::LiteProfile;
+                AddAtomic(g_Frame.CppReentries);
+                // budget left and no pending stop => the dispatcher's inline lookup missed
+                // (uncompiled target or region change) rather than the slice ending.
+                if (!StopExecution && CyclesBudget > 0)
+                    AddAtomic(g_Frame.DispatcherMisses);
+            }
+#endif
+
             if (StopExecution)
             {
                 // this order is crucial otherwise idle loops waiting for an IRQ won't function
@@ -851,6 +871,16 @@ void ARMv4::Execute()
 #if defined(LITEV_SHADOW_ASSERT)
             LiteV_ShadowAssertBudget("ARM7", Cycles, CyclesBudget,
                                      (s64)NDS.ARM7Timestamp, (s64)NDS.ARM7Target);
+#endif
+
+#if defined(LITEV_JIT_DISPATCH) && LITEV_PROFILE
+            if (block)
+            {
+                using namespace melonDS::LiteProfile;
+                AddAtomic(g_Frame.CppReentries);
+                if (!StopExecution && CyclesBudget > 0)
+                    AddAtomic(g_Frame.DispatcherMisses);
+            }
 #endif
 
             if (StopExecution)
