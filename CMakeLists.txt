@@ -108,6 +108,12 @@ option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 # liteDS-v2 additions (all default OFF -> upstream-identical build with no flags).
 option(LITEV_HEADLESS "Build the liteDS-headless benchmark harness" OFF)
 option(LITEV_PROFILE "Enable LiteProfile frame-breakdown counters" OFF)
+# Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
+# implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
+option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)
+if (LITEV_SHADOW_ASSERT)
+    add_compile_definitions(LITEV_SHADOW_ASSERT=1)
+endif()
 
 add_subdirectory(src)
 
