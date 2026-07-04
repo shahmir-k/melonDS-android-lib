@@ -1,4 +1,9 @@
 #version 140
+#ifdef GL_ES
+#define FRAGLOC(loc) layout(location = loc)
+#else
+#define FRAGLOC(loc)
+#endif
 
 uniform sampler2D SpriteTex;
 uniform sampler2DArray Capture128Tex;
@@ -38,8 +43,8 @@ flat in int fSpriteIndex;
 smooth in vec2 fPosition;
 smooth in vec2 fTexcoord;
 
-out vec4 oColor;
-out vec4 oFlags;
+FRAGLOC(0) out vec4 oColor;
+FRAGLOC(1) out vec4 oFlags;
 
 vec4 GetSpritePixel(int sprite, vec2 coord)
 {

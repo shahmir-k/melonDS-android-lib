@@ -1,4 +1,9 @@
 #version 140
+#ifdef GL_ES
+#define FRAGLOC(loc) layout(location = loc)
+#else
+#define FRAGLOC(loc)
+#endif
 
 uniform usampler2DArray CurTexture;
 uniform sampler2DArray Capture128Texture;
@@ -26,8 +31,8 @@ flat in ivec3 fPolygonAttr;
 smooth in float fZ;
 #endif
 
-out vec4 oColor;
-out vec4 oAttr;
+FRAGLOC(0) out vec4 oColor;
+FRAGLOC(1) out vec4 oAttr;
 
 vec4 FinalColor()
 {

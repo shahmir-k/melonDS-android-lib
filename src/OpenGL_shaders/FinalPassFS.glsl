@@ -1,4 +1,9 @@
 #version 140
+#ifdef GL_ES
+#define FRAGLOC(loc) layout(location = loc)
+#else
+#define FRAGLOC(loc)
+#endif
 
 uniform sampler2D MainInputTexA;
 uniform sampler2D MainInputTexB;
@@ -20,8 +25,8 @@ layout(std140) uniform ubFinalPassConfig
 
 smooth in vec3 fTexcoord;
 
-out vec4 oTopColor;
-out vec4 oBottomColor;
+FRAGLOC(0) out vec4 oTopColor;
+FRAGLOC(1) out vec4 oBottomColor;
 
 ivec3 MasterBrightness(ivec3 color, int brightmode, int evy)
 {

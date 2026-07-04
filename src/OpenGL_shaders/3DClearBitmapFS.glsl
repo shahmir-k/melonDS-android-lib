@@ -1,4 +1,9 @@
 #version 140
+#ifdef GL_ES
+#define FRAGLOC(loc) layout(location = loc)
+#else
+#define FRAGLOC(loc)
+#endif
 
 uniform usampler2D ClearBitmapColor;
 uniform usampler2D ClearBitmapDepth;
@@ -8,8 +13,8 @@ uniform uint uOpaquePolyID;
 
 smooth in vec2 fTexcoord;
 
-out vec4 oColor;
-out vec4 oAttr;
+FRAGLOC(0) out vec4 oColor;
+FRAGLOC(1) out vec4 oAttr;
 
 void main()
 {

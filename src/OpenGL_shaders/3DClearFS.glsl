@@ -1,11 +1,16 @@
 #version 140
+#ifdef GL_ES
+#define FRAGLOC(loc) layout(location = loc)
+#else
+#define FRAGLOC(loc)
+#endif
 
 uniform uvec4 uColor;
 uniform uint uOpaquePolyID;
 uniform uint uFogFlag;
 
-out vec4 oColor;
-out vec4 oAttr;
+FRAGLOC(0) out vec4 oColor;
+FRAGLOC(1) out vec4 oAttr;
 
 void main()
 {
