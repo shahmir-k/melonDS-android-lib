@@ -159,6 +159,29 @@ endif()
 
 target_include_directories(core INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# ── liteDS-v2 Milestone 4 (renderer track, software-renderer scope) ──────────
+# Every flag defaults OFF; with none set the build is upstream-identical.
+
+if (LITEV_NEON_RENDERER)
+    # NEON SIMD 2D output paths. Bit-exact scalar-equivalent, but only meaningful
+    # on AArch64; the .cpp is compiled only there (macOS Apple Silicon qualifies).
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        target_sources(core PRIVATE GPU2D_NEON.cpp)
+        target_compile_definitions(core PUBLIC LITEV_NEON_RENDERER)
+    else()
+        message(WARNING "LITEV_NEON_RENDERER requested but target is not AArch64; "
+                        "NEON paths disabled (scalar fallback used).")
+    endif()
+endif()
+
+if (LITEV_SPU_FAST_INTERP)
+    target_compile_definitions(core PUBLIC LITEV_SPU_FAST_INTERP)
+endif()
+
+if (LITEV_AGGRESSIVE_SKIP)
+    target_compile_definitions(core PUBLIC LITEV_AGGRESSIVE_SKIP)
+endif()
+
 set(MELONDS_VERSION_SUFFIX "$ENV{MELONDS_VERSION_SUFFIX}" CACHE STRING "Suffix to add to displayed melonDS version")
 option(MELONDS_EMBED_BUILD_INFO "Embed detailed build info into the binary" OFF)
 set(MELONDS_GIT_BRANCH "$ENV{MELONDS_GIT_BRANCH}" CACHE STRING "The Git branch used for this build")

@@ -109,6 +109,11 @@ option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 option(LITEV_HEADLESS "Build the liteDS-headless benchmark harness" OFF)
 option(LITEV_PROFILE "Enable LiteProfile frame-breakdown counters" OFF)
 
+# Milestone 4 (renderer track, software-renderer scope). All default OFF.
+option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
+option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
+option(LITEV_AGGRESSIVE_SKIP "Enable per-frame 2D/3D rasterization skip gate" OFF)
+
 add_subdirectory(src)
 
 if (BUILD_QT_SDL)
