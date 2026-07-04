@@ -330,7 +330,8 @@ int main(int argc, char** argv)
     // into totals here to observe whole-run behaviour (esp. the Unit 4 link counters).
     struct { uint64_t linksPatched=0, linksUnlinked=0, pendingPeak=0,
                        cppReentries=0, dispatcherMisses=0,
-                       linkSitesEmitted=0, dispatchOnlyExits=0; } profTotals;
+                       linkSitesEmitted=0, dispatchOnlyExits=0,
+                       schedIterations=0, schedEventsFired=0; } profTotals;
 #endif
 
     for (int frame = 0; frame < opt.frames; frame++)
@@ -347,6 +348,8 @@ int main(int argc, char** argv)
             profTotals.dispatcherMisses+= g_Frame.DispatcherMisses.load(std::memory_order_relaxed);
             profTotals.linkSitesEmitted += g_Frame.LinkSitesEmitted.load(std::memory_order_relaxed);
             profTotals.dispatchOnlyExits+= g_Frame.DispatchOnlyExits.load(std::memory_order_relaxed);
+            profTotals.schedIterations  += g_Frame.SchedulerIterations.load(std::memory_order_relaxed);
+            profTotals.schedEventsFired += g_Frame.SchedulerEventsFired.load(std::memory_order_relaxed);
             uint64_t pk = g_Frame.PendingPeak.load(std::memory_order_relaxed);
             if (pk > profTotals.pendingPeak) profTotals.pendingPeak = pk;
         }
@@ -420,6 +423,12 @@ int main(int argc, char** argv)
     printf("dispatcher_miss: %llu\n", (unsigned long long)profTotals.dispatcherMisses);
     printf("link_sites_emitted:  %llu\n", (unsigned long long)profTotals.linkSitesEmitted);
     printf("dispatch_only_exits: %llu\n", (unsigned long long)profTotals.dispatchOnlyExits);
+    printf("sched_iterations:    %llu\n", (unsigned long long)profTotals.schedIterations);
+    printf("sched_events_fired:  %llu\n", (unsigned long long)profTotals.schedEventsFired);
+    printf("sched_iters_per_frame: %.2f\n",
+           opt.frames ? (double)profTotals.schedIterations / opt.frames : 0.0);
+    printf("cpp_reentries_per_frame: %.2f\n",
+           opt.frames ? (double)profTotals.cppReentries / opt.frames : 0.0);
 #endif
     fflush(stdout);
 
@@ -446,6 +455,8 @@ int main(int argc, char** argv)
                 "  ,\"pending_peak\": %llu\n"
                 "  ,\"cpp_reentries\": %llu\n"
                 "  ,\"dispatcher_misses\": %llu\n"
+                "  ,\"sched_iterations\": %llu\n"
+                "  ,\"sched_events_fired\": %llu\n"
 #endif
                 "}\n",
                 opt.rom.c_str(),
@@ -464,6 +475,8 @@ int main(int argc, char** argv)
                 , (unsigned long long)profTotals.pendingPeak
                 , (unsigned long long)profTotals.cppReentries
                 , (unsigned long long)profTotals.dispatcherMisses
+                , (unsigned long long)profTotals.schedIterations
+                , (unsigned long long)profTotals.schedEventsFired
 #endif
                 );
             fclose(jf);

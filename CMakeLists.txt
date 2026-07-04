@@ -172,6 +172,22 @@ if (LITEV_JIT_DISPATCH AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     endif()
 endif()
 
+# Unit 5 (M2.1): event-true scheduler slices. When ON, each scheduler iteration
+# runs the CPUs to the TRUE next deadline (next scheduled event / frame end /
+# next timer overflow) instead of the fixed kMaxIterationCycles cap, so the CPUs
+# stay in generated code for whole event intervals. Independent of, but designed
+# to combine with, LITEV_JIT_DISPATCH. Default OFF -> NextTarget() keeps the fixed
+# cap and the build is bit-identical to the pre-Unit-5 tree.
+#
+# SEMANTIC NOTE: longer slices coarsen the ARM9/ARM7 interleave, an OBSERVABLE
+# timing change (cross-CPU shared-memory/IPC visibility shifts). The flag-ON build
+# is therefore NOT bit-exact vs the flag-OFF golden by design; it carries its own
+# recorded baseline (tools/headless/baselines/shrek-600-eventslices.trace).
+option(LITEV_EVENT_SLICES "Unit 5: event-true scheduler slices (remove fixed iteration cap)" OFF)
+if (LITEV_EVENT_SLICES)
+    add_compile_definitions(LITEV_EVENT_SLICES=1)
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
