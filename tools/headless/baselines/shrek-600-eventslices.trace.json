@@ -1,0 +1,19 @@
+{
+  "trace": "shrek-600-eventslices.trace",
+  "format_version": 1,
+  "record_size_bytes": 192,
+  "header_size_bytes": 128,
+  "frames": 600,
+  "mode": "jit",
+  "fixed_rtc_epoch": 946684800,
+  "rom_name": ".tmp-shrek.nds",
+  "rom_path": "/Users/shahmir/Documents/GitHub/quickmelonDS/.tmp-shrek.nds",
+  "rom_sha1": "11d7849ab234ac16fce8c84027ca1d5c3a2632b0",
+  "rom_xxh3_64": "0xd6d1f5b2042f1b93",
+  "trace_size_bytes": 115328,
+  "recorded_commit": "f372d812c907fa39a230f5120a63f2c2312ac8c4",
+  "recorded_date": "2026-07-04",
+  "build_config": "LITEV_JIT_DISPATCH=ON, LITEV_EVENT_SLICES=ON, LITEV_LINK_*=ON (default), ENABLE_OGLRENDERER=OFF, ENABLE_GDBSTUB=OFF, Release",
+  "recorded_with": "liteDS-headless (liteDS-v2 Unit 5), event-true scheduler slices",
+  "note": "Unit 5 (event-true slices) golden. This is NOT bit-comparable to shrek-600.trace: uncapping the scheduler iteration cap coarsens the ARM9/ARM7 interleave, an intentional and observable timing change (cross-CPU shared-memory/IPC visibility shifts). This trace is the authoritative baseline for LITEV_EVENT_SLICES builds. verify-interp-converge (JIT vs interp, both with event slices) converges identically to the flag-off build; the timer-overflow subsystem is bounded per-iteration so timer IRQs remain at-or-before their true deadline. Re-record: liteDS-headless --rom <shrek> --frames 600 --record-trace shrek-600-eventslices.trace (LITEV_EVENT_SLICES=ON build). Double-record is byte-identical."
+}
