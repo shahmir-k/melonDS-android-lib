@@ -115,6 +115,11 @@ if (LITEV_SHADOW_ASSERT)
     add_compile_definitions(LITEV_SHADOW_ASSERT=1)
 endif()
 
+# Milestone 4 (renderer track, software-renderer scope). All default OFF.
+option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
+option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
+option(LITEV_AGGRESSIVE_SKIP "Enable per-frame 2D/3D rasterization skip gate" OFF)
+
 add_subdirectory(src)
 
 if (BUILD_QT_SDL)

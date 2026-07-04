@@ -22,6 +22,7 @@
 #include "types.h"
 #include "Args.h"
 #include "NDS.h"
+#include "SPU.h"
 #include "NDSCart.h"
 #include "GPU.h"
 #include "GPU_Soft.h"
@@ -63,6 +64,9 @@ struct Options
     RunMode mode = RunMode::Benchmark;
     std::string tracePath;
     long long fixedRtc = liteds::kDefaultRtcEpoch;
+
+    AudioInterpolation interp = AudioInterpolation::None;
+    int frameskip = 0;                  // LITEV_AGGRESSIVE_SKIP target (0 = off)
 };
 
 [[noreturn]] void Usage(const char* argv0, int code)
@@ -76,6 +80,8 @@ struct Options
         "  --mode jit|interp         execution mode (default jit)\n"
         "  --fb-hash-every N         print xxhash of both framebuffers every N frames\n"
         "  --fb-dump-ppm <f>:<path>  dump both framebuffers at frame f as PPM (side by side)\n"
+        "  --audio-interp <mode>     SPU interpolation: none|linear|cosine|cubic|gaussian (default none)\n"
+        "  --frameskip N             skip N of every N+1 frames' rasterization (LITEV_AGGRESSIVE_SKIP build)\n"
         "  --profile-json <path>     write per-run totals as JSON\n"
         "  --data-dir <path>         local firmware/save directory (default ./headless-data)\n"
         "  --fixed-rtc <unix-ts>     fixed RTC epoch for determinism (default 946684800)\n"
@@ -117,6 +123,17 @@ bool ParseArgs(int argc, char** argv, Options& o)
             o.fbDumpFrame = std::atoi(spec.substr(0, colon).c_str());
             o.fbDumpPath = spec.substr(colon + 1);
         }
+        else if (a == "--audio-interp")
+        {
+            std::string m = next("--audio-interp");
+            if (m == "none") o.interp = AudioInterpolation::None;
+            else if (m == "linear") o.interp = AudioInterpolation::Linear;
+            else if (m == "cosine") o.interp = AudioInterpolation::Cosine;
+            else if (m == "cubic") o.interp = AudioInterpolation::Cubic;
+            else if (m == "gaussian") o.interp = AudioInterpolation::SNESGaussian;
+            else { fprintf(stderr, "error: --audio-interp must be none|linear|cosine|cubic|gaussian\n"); return false; }
+        }
+        else if (a == "--frameskip") o.frameskip = std::atoi(next("--frameskip").c_str());
         else if (a == "--profile-json") o.profileJson = next("--profile-json");
         else if (a == "--data-dir") o.dataDir = next("--data-dir");
         else if (a == "--fixed-rtc") o.fixedRtc = std::atoll(next("--fixed-rtc").c_str());
@@ -243,6 +260,7 @@ int main(int argc, char** argv)
 
     // --- Build NDS (FreeBIOS + generated firmware, software renderer) ---
     NDSArgs args; // defaults: FreeBIOS ARM9/ARM7, generated NDS firmware
+    args.Interpolation = opt.interp;
 #ifdef JIT_ENABLED
     if (opt.jit)
         args.JIT = JITArgs{};       // default JIT settings
@@ -273,6 +291,16 @@ int main(int argc, char** argv)
 
     nds->SetKeyMask(0xFFFF); // no buttons pressed (active-low)
 
+    if (opt.frameskip > 0)
+    {
+#ifdef LITEV_AGGRESSIVE_SKIP
+        nds->GPU.SetFrameskipTarget(opt.frameskip);
+        fprintf(stderr, "frameskip: rendering 1 of every %d frames\n", opt.frameskip + 1);
+#else
+        fprintf(stderr, "warning: --frameskip ignored (build lacks LITEV_AGGRESSIVE_SKIP)\n");
+#endif
+    }
+
     fprintf(stderr, "liteDS-headless: rom=%s mode=%s frames=%d jit=%s\n",
             opt.rom.c_str(), opt.jit ? "jit" : "interp", opt.frames,
 #ifdef JIT_ENABLED
@@ -287,12 +315,31 @@ int main(int argc, char** argv)
     u64 firstTopHash = 0;
     bool haveFirst = false;
 
+    // Rolling xxhash over all SPU output samples. This lets acceptance checks
+    // detect audio-only changes (e.g. LITEV_SPU_FAST_INTERP) that leave the
+    // framebuffer identical. Deterministic given a fixed ROM + frame count.
+    XXH3_state_t* audioHashState = XXH3_createState();
+    XXH3_64bits_reset(audioHashState);
+    u64 audioSampleCount = 0;                 // stereo frames drained
+    std::vector<s16> audioDrain(2048 * 2);    // interleaved L/R scratch buffer
+
     auto wallStart = std::chrono::steady_clock::now();
 
     for (int frame = 0; frame < opt.frames; frame++)
     {
         LITE_PROFILE_RESET_FRAME();
         nds->RunFrame();
+
+        // Drain the SPU output buffer produced this frame into the rolling hash.
+        for (;;)
+        {
+            int got = nds->SPU.ReadOutput(audioDrain.data(), 2048);
+            if (got <= 0) break;
+            XXH3_64bits_update(audioHashState, audioDrain.data(),
+                               (size_t)got * 2 * sizeof(s16));
+            audioSampleCount += (u64)got;
+            if (got < 2048) break;
+        }
 
         void* top = nullptr;
         void* bot = nullptr;
@@ -330,6 +377,9 @@ int main(int argc, char** argv)
     double wallSec = std::chrono::duration<double>(wallEnd - wallStart).count();
     double avgFps = wallSec > 0 ? opt.frames / wallSec : 0.0;
 
+    u64 audioHash = XXH3_64bits_digest(audioHashState);
+    XXH3_freeState(audioHashState);
+
     printf("=== liteDS-headless summary ===\n");
     printf("mode:        %s\n", opt.jit ? "jit" : "interp");
     printf("frames:      %d\n", opt.frames);
@@ -338,6 +388,8 @@ int main(int argc, char** argv)
     printf("final_top:   %016llx\n", (unsigned long long)lastTopHash);
     printf("final_bot:   %016llx\n", (unsigned long long)lastBotHash);
     printf("fb_changing: %s\n", anyChange ? "yes" : "no");
+    printf("audio_hash:  %016llx\n", (unsigned long long)audioHash);
+    printf("audio_samples: %llu\n", (unsigned long long)audioSampleCount);
     fflush(stdout);
 
     if (!opt.profileJson.empty())
@@ -354,7 +406,9 @@ int main(int argc, char** argv)
                 "  \"avg_fps\": %.4f,\n"
                 "  \"final_top_hash\": \"%016llx\",\n"
                 "  \"final_bottom_hash\": \"%016llx\",\n"
-                "  \"framebuffer_changing\": %s\n"
+                "  \"framebuffer_changing\": %s,\n"
+                "  \"audio_hash\": \"%016llx\",\n"
+                "  \"audio_samples\": %llu\n"
                 "}\n",
                 opt.rom.c_str(),
                 opt.jit ? "jit" : "interp",
@@ -363,7 +417,9 @@ int main(int argc, char** argv)
                 avgFps,
                 (unsigned long long)lastTopHash,
                 (unsigned long long)lastBotHash,
-                anyChange ? "true" : "false");
+                anyChange ? "true" : "false",
+                (unsigned long long)audioHash,
+                (unsigned long long)audioSampleCount);
             fclose(jf);
             fprintf(stderr, "wrote profile json: %s\n", opt.profileJson.c_str());
         }
