@@ -508,6 +508,9 @@ void NDS::Reset()
     IPCFIFOCnt7 = 0;
     IPCFIFO9.Clear();
     IPCFIFO7.Clear();
+#ifdef LITEV_ARM7_IDLE
+    ARM7Idle.Reset();
+#endif
 
     DivCnt = 0;
     SqrtCnt = 0;
@@ -1516,6 +1519,13 @@ void NDS::UpdateIRQ(u32 cpu)
     // with StopExecution today; consumed by Unit 3's dispatcher.
     if (arm.IRQ)
         arm.ForceExecutionExit();
+
+#ifdef LITEV_ARM7_IDLE
+    // HARD CONSTRAINT: reset the ARM7 idle counters on ANY interrupt delivered to
+    // the ARM7 (IPC recv/send, SPI, timer, VBlank, ...). It has work again.
+    if (cpu == 1 && arm.IRQ)
+        ARM7Idle.NoteInterrupt();
+#endif
 }
 
 void NDS::SetIRQ(u32 cpu, u32 irq)
@@ -3625,6 +3635,10 @@ void NDS::ARM9IOWrite32(u32 addr, u32 val)
             {
                 bool wasempty = IPCFIFO9.IsEmpty();
                 IPCFIFO9.Write(val);
+#ifdef LITEV_ARM7_IDLE
+                // ARM9 pushed a command into the ARM7's receive FIFO: it has work.
+                ARM7Idle.NoteIPCFIFOGotData();
+#endif
                 if ((IPCFIFOCnt7 & 0x0400) && wasempty)
                     SetIRQ(1, IRQ_IPCRecv);
             }
@@ -3840,6 +3854,15 @@ u16 NDS::ARM7IORead16(u32 addr)
             else if (IPCFIFO7.IsFull()) val |= 0x0002;
             if (IPCFIFO9.IsEmpty())     val |= 0x0100;
             else if (IPCFIFO9.IsFull()) val |= 0x0200;
+#ifdef LITEV_ARM7_IDLE
+            // ARM7's receive FIFO (IPCFIFO9) empty => the ARM7 is spinning waiting
+            // for an ARM9 command. 32-bit reads delegate here, so this one site
+            // covers ldrh and ldr. (This is the IPC read path only — no WiFi.)
+            if (val & 0x0100)
+                ARM7Idle.NoteIPCFIFOEmptyRead(ARM7);
+            else
+                ARM7Idle.NoteIPCFIFOGotData();
+#endif
             return val;
         }
 
@@ -3848,7 +3871,14 @@ u16 NDS::ARM7IORead16(u32 addr)
     case 0x040001A4: return NDSCartSlots[0]->ReadROMCnt(1) & 0xFFFF;
     case 0x040001A6: return NDSCartSlots[0]->ReadROMCnt(1) >> 16;
 
-    case 0x040001C0: return SPI.ReadCnt();
+    case 0x040001C0:
+        {
+            u16 spicnt = SPI.ReadCnt();
+#ifdef LITEV_ARM7_IDLE
+            ARM7Idle.NoteSPIIdleRead(ARM7, spicnt);
+#endif
+            return spicnt;
+        }
     case 0x040001C2: return SPI.ReadData();
 
     case 0x04000204: return ExMemCnt[1];
@@ -3910,7 +3940,13 @@ u32 NDS::ARM7IORead32(u32 addr)
     case 0x040001A4: return NDSCartSlots[0]->ReadROMCnt(1);
 
     case 0x040001C0:
-        return SPI.ReadCnt() | (SPI.ReadData() << 16);
+        {
+            u16 spicnt = SPI.ReadCnt();
+#ifdef LITEV_ARM7_IDLE
+            ARM7Idle.NoteSPIIdleRead(ARM7, spicnt);
+#endif
+            return spicnt | (SPI.ReadData() << 16);
+        }
 
     case 0x04000208: return IME[1];
     case 0x04000210: return IE[1];
@@ -4027,6 +4063,9 @@ void NDS::ARM7IOWrite8(u32 addr, u8 val)
 
     case 0x040001C2:
         SPI.WriteData(val);
+#ifdef LITEV_ARM7_IDLE
+        ARM7Idle.NoteSPITransferStart();
+#endif
         return;
 
     case 0x04000208: IME[1] = val & 0x1; UpdateIRQ(1); return;
@@ -4156,6 +4195,9 @@ void NDS::ARM7IOWrite16(u32 addr, u16 val)
         return;
     case 0x040001C2:
         SPI.WriteData(val & 0xFF);
+#ifdef LITEV_ARM7_IDLE
+        ARM7Idle.NoteSPITransferStart();
+#endif
         return;
 
     case 0x04000204:
@@ -4297,6 +4339,9 @@ void NDS::ARM7IOWrite32(u32 addr, u32 val)
     case 0x040001C0:
         SPI.WriteCnt(val & 0xFFFF);
         SPI.WriteData((val >> 16) & 0xFF);
+#ifdef LITEV_ARM7_IDLE
+        ARM7Idle.NoteSPITransferStart();
+#endif
         return;
 
     case 0x04000208: IME[1] = val & 0x1; UpdateIRQ(1); return;

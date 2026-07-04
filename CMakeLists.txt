@@ -188,6 +188,20 @@ if (LITEV_EVENT_SLICES)
     add_compile_definitions(LITEV_EVENT_SLICES=1)
 endif()
 
+# Unit 6 (M2.3): ARM7 IPC/SPI idle detection. Counts consecutive empty polls on
+# the IPC receive-FIFO-empty (0x04000184) and SPI-idle (0x040001C0) ARM7 read
+# paths; past a small threshold sets ARM7.IdleLoop so the existing branch-to-self
+# fast-forward advances ARM7Timestamp to the next scheduled event. Lives ONLY on
+# the IPC/SPI read paths — no W_* / WiFi register involvement. Default OFF.
+#
+# SEMANTIC NOTE: flag-ON skips idle intervals, an OBSERVABLE timing change, so it
+# is NOT bit-exact vs any flag-OFF golden by design. The flag-OFF build compiles
+# the detector to nothing and stays bit-identical to the pre-Unit-6 tree.
+option(LITEV_ARM7_IDLE "Unit 6: ARM7 IPC/SPI idle detection (WiFi paths untouched)" OFF)
+if (LITEV_ARM7_IDLE)
+    add_compile_definitions(LITEV_ARM7_IDLE=1)
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
