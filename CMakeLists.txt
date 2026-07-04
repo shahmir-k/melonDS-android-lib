@@ -105,8 +105,16 @@ endif()
 
 option(BUILD_QT_SDL "Build Qt/SDL frontend" ON)
 
+# liteDS-v2 additions (all default OFF -> upstream-identical build with no flags).
+option(LITEV_HEADLESS "Build the liteDS-headless benchmark harness" OFF)
+option(LITEV_PROFILE "Enable LiteProfile frame-breakdown counters" OFF)
+
 add_subdirectory(src)
 
 if (BUILD_QT_SDL)
     add_subdirectory(src/frontend/qt_sdl)
+endif()
+
+if (LITEV_HEADLESS)
+    add_subdirectory(tools/headless)
 endif()

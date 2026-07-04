@@ -25,3 +25,8 @@ CMakeCache.txt
 freebios/FreeBIOS_Data.h
 freebios/bios*
 freebios/build/
+
+# liteDS-v2 headless harness
+build-host/
+headless-data/
+*.ppm
