@@ -1,0 +1,7 @@
+# Never commit third-party ROM binaries unless their license permits it.
+*.nds
+*.gba
+*.bin
+*.srl
+!.gitignore
+!README.md

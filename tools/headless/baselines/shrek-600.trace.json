@@ -1,0 +1,18 @@
+{
+  "trace": "shrek-600.trace",
+  "format_version": 1,
+  "record_size_bytes": 192,
+  "header_size_bytes": 128,
+  "frames": 600,
+  "mode": "jit",
+  "fixed_rtc_epoch": 946684800,
+  "rom_name": ".tmp-shrek.nds",
+  "rom_path": "/Users/shahmir/Documents/GitHub/quickmelonDS/.tmp-shrek.nds",
+  "rom_sha1": "11d7849ab234ac16fce8c84027ca1d5c3a2632b0",
+  "rom_xxh3_64": "0xd6d1f5b2042f1b93",
+  "trace_size_bytes": 115328,
+  "recorded_commit": "0b8641d47c589d51e75379a1e564821cb740d8dd",
+  "recorded_date": "2026-07-04",
+  "recorded_with": "liteDS-headless (liteDS-v2 Unit 1), current unmodified upstream JIT",
+  "note": "JIT-vs-JIT golden trace. Future JIT-rewrite units (2-5) must reproduce this bit-exactly via --verify-trace. Re-record command: liteDS-headless --rom <shrek> --frames 600 --record-trace shrek-600.trace"
+}
