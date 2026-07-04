@@ -934,3 +934,72 @@ The v2 core is *working* (WiFi aside) when, on both vehicles:
    re-ported);
 4. 30-minute soak per ROM without crash, JIT-memory exhaustion regression, or
    visual divergence in spot checks.
+
+---
+
+# Appendix C — Implementation Record (2026-07-04)
+
+Units 0–6, M3 Tier A, and the M4 software-renderer track are implemented on this
+branch, each gated as specified. This appendix records outcomes and the load-bearing
+deviations discovered during implementation (tree facts that supersede the plan text).
+
+## C.1 Status and measured results (Shrek ROM, Apple Silicon host)
+
+| Unit | Commits | Result |
+|---|---|---|
+| U0 headless harness | b2af6095..0b8641d4 | JIT 950 vs interp 399 FPS; modes converge byte-identical |
+| U1 golden-trace oracle | 9b2e6bee..bf5d8794 | 600f baseline committed; double-record byte-identical |
+| U2 CyclesBudget shadow | (Unit 2 commits) | bit-exact; zero shadow fires; offsets static_asserted |
+| U3 A64 dispatcher | b7a40053 | bit-exact; FPS flat (+0.2%, expected — see C.2.2) |
+| U4 direct linking | 7cc67bb4..f372d812 | bit-exact; 63% of exits link-eligible; FPS flat on host (renderer-bound) |
+| U5 event-true slices | 833bf80e, ea6eaf48 | iterations 9424→3168/frame (=event count); **+13.5% FPS, +23.2% CPU-bound** |
+| U6 ARM7 idle + decomposition | 7fef33d7, a54fadbc | ARM7 = 8.2% of frame, does real work; detector correct, no Shrek gain (as predicted) |
+| M3 Tier A memory | 8d07aa9a, 6d256c17 | bit-exact; SlowBlockTransfer9 −98.4% calls; **+4.4% FPS, +7.1% CPU-bound** |
+| M4 renderer (soft scope) | 6f4a6bf3..3f6fe05a (merged 3d31a20c) | NEON bit-exact; frameskip **+29–34% FPS**; GL items deferred to Android |
+
+Flags (all default OFF): LITEV_HEADLESS, LITEV_PROFILE, LITEV_SHADOW_ASSERT,
+LITEV_JIT_DISPATCH (+LITEV_LINK_UNCOND/COND/FALLTHROUGH), LITEV_EVENT_SLICES,
+LITEV_ARM7_IDLE, LITEV_MEM_DTCM_BLOCK, LITEV_MEM_MAINRAM_LOAD,
+LITEV_NEON_RENDERER, LITEV_SPU_FAST_INTERP, LITEV_AGGRESSIVE_SKIP.
+
+## C.2 Load-bearing deviations from the plan text
+
+1. **Oracle redesign (supersedes B.2 Unit 1):** JIT and interpreter legitimately
+   diverge in timing (208/600 frames mid-boot, reconverging), so the authoritative
+   gate is JIT-vs-JIT golden-trace comparison (`--verify-trace`), not interp
+   lockstep. Two goldens exist: `shrek-600.trace` (exact-timing configs) and
+   `shrek-600-eventslices.trace` (event-slices config, which is a deliberate
+   timing change).
+2. **Per-hop timestamp commit (supersedes A.2/A.4):** `ScheduleEvent` schedules
+   relative to `ARMxTimestamp`, so the dispatcher AND every link site must commit
+   `Timestamp += Cycles` per hop. Dispatcher is ~34 instrs, not ~17; link sites
+   carry the same bookkeeping. This is why U3/U4 alone were flat on host and the
+   payoff arrived with U5 (fewer, longer slices).
+3. **Iteration cap is 64, not 512** (`kMaxIterationCycles`, src/NDS.cpp): flag-off
+   baseline is ~9424 iterations/frame; the U5 win is proportionally larger than
+   projected. U5 added timer-deadline bounding (`NextTimerDeadline`) because DS
+   timers are per-iteration-polled, not event-scheduled.
+4. **StopExecution is a union over {Halted, IRQ, IdleLoop}** — the dispatcher's
+   single StopExecution check covers all loop-acted conditions; checked before the
+   timestamp commit (ordering is trace-visible).
+5. **Fastmem is OFF on macOS** (`IsFastMemSupported` returns false under __APPLE__)
+   and ON on Android — but block LOADS never take the fastmem path on any platform,
+   so M3's guard-based Tier A helps both. Tier B stubs deferred on evidence: the
+   host residual is Tier-C-exact MMIO/VRAM; Android's residual needs device data.
+6. **ARM7 parity came free:** Unit 3/4's per-CPU stubs and link registries covered
+   ARM7; the plan's Unit 6 reduced to measurement + the IPC/SPI idle port.
+
+## C.3 Remaining work (blocked on hardware/assets, or evidence-gated)
+
+- **Unit 7 Android bring-up** — requires porting the melonDS-android glue onto this
+  upstream base (the v1 app pins an older core) and an Android device for the
+  A55-class guard-cost measurements. DTCM block-LOAD inlining is the specific
+  Android win to re-measure.
+- **B.4 test suite** — only the Shrek ROM is locally available; Pokémon/NSMB/Mario
+  Kart/WarioWare and an SMC stressor are needed for the full compat oracle
+  (Mario Kart especially: the U5 GXFIFO-interleave watch item).
+- **MP smoke gate** — PlatformHeadless MP_* are stubs; wire the local channel
+  before any M2.4 work.
+- **Evidence-gated, intentionally not built:** M2.4 ARM7 concurrency (ARM7 is 8.2%
+  ≪ the 15% gate), M5 relaxed ARM9 timing, M1-followup hot-region recompilation,
+  M3 Tier B stubs (needs slowmem-miss region histogram from the profiler).
