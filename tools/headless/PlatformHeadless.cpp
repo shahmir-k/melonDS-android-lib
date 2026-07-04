@@ -361,7 +361,7 @@ u64 GetUSCount()
 // Save / firmware write-back (into the data dir)
 // ---------------------------------------------------------------------------
 
-static void WriteBufferToLocal(const char* name, const u8* data, u32 len)
+static void WriteBufferToLocal(const std::string& name, const u8* data, u32 len)
 {
     std::string path = GetLocalFilePath(name);
     FILE* f = fopen(path.c_str(), "wb");
@@ -370,16 +370,25 @@ static void WriteBufferToLocal(const char* name, const u8* data, u32 len)
     fclose(f);
 }
 
+// Resolve the per-instance save stem from the NDS userdata pointer. Falls back
+// to "headless" when no InstanceUserData was supplied (benchmark path).
+static std::string SavePrefix(void* userdata)
+{
+    if (userdata)
+        return reinterpret_cast<HeadlessHost::InstanceUserData*>(userdata)->savePrefix;
+    return "headless";
+}
+
 void WriteNDSSave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)
 {
-    (void)writeoffset; (void)writelen; (void)userdata;
-    WriteBufferToLocal("headless.sav", savedata, savelen);
+    (void)writeoffset; (void)writelen;
+    WriteBufferToLocal(SavePrefix(userdata) + ".sav", savedata, savelen);
 }
 
 void WriteGBASave(const u8* savedata, u32 savelen, u32 writeoffset, u32 writelen, void* userdata)
 {
-    (void)writeoffset; (void)writelen; (void)userdata;
-    WriteBufferToLocal("headless-gba.sav", savedata, savelen);
+    (void)writeoffset; (void)writelen;
+    WriteBufferToLocal(SavePrefix(userdata) + "-gba.sav", savedata, savelen);
 }
 
 void WriteFirmware(const Firmware& firmware, u32 writeoffset, u32 writelen, void* userdata)
