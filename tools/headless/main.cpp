@@ -325,10 +325,32 @@ int main(int argc, char** argv)
 
     auto wallStart = std::chrono::steady_clock::now();
 
+#if LITEV_PROFILE
+    // Run totals: g_Frame is reset every frame, so accumulate each frame's counters
+    // into totals here to observe whole-run behaviour (esp. the Unit 4 link counters).
+    struct { uint64_t linksPatched=0, linksUnlinked=0, pendingPeak=0,
+                       cppReentries=0, dispatcherMisses=0,
+                       linkSitesEmitted=0, dispatchOnlyExits=0; } profTotals;
+#endif
+
     for (int frame = 0; frame < opt.frames; frame++)
     {
         LITE_PROFILE_RESET_FRAME();
         nds->RunFrame();
+
+#if LITEV_PROFILE
+        {
+            using namespace melonDS::LiteProfile;
+            profTotals.linksPatched    += g_Frame.LinksPatched.load(std::memory_order_relaxed);
+            profTotals.linksUnlinked   += g_Frame.LinksUnlinked.load(std::memory_order_relaxed);
+            profTotals.cppReentries    += g_Frame.CppReentries.load(std::memory_order_relaxed);
+            profTotals.dispatcherMisses+= g_Frame.DispatcherMisses.load(std::memory_order_relaxed);
+            profTotals.linkSitesEmitted += g_Frame.LinkSitesEmitted.load(std::memory_order_relaxed);
+            profTotals.dispatchOnlyExits+= g_Frame.DispatchOnlyExits.load(std::memory_order_relaxed);
+            uint64_t pk = g_Frame.PendingPeak.load(std::memory_order_relaxed);
+            if (pk > profTotals.pendingPeak) profTotals.pendingPeak = pk;
+        }
+#endif
 
         // Drain the SPU output buffer produced this frame into the rolling hash.
         for (;;)
@@ -390,6 +412,15 @@ int main(int argc, char** argv)
     printf("fb_changing: %s\n", anyChange ? "yes" : "no");
     printf("audio_hash:  %016llx\n", (unsigned long long)audioHash);
     printf("audio_samples: %llu\n", (unsigned long long)audioSampleCount);
+#if LITEV_PROFILE
+    printf("links_patched:   %llu\n", (unsigned long long)profTotals.linksPatched);
+    printf("links_unlinked:  %llu\n", (unsigned long long)profTotals.linksUnlinked);
+    printf("pending_peak:    %llu\n", (unsigned long long)profTotals.pendingPeak);
+    printf("cpp_reentries:   %llu\n", (unsigned long long)profTotals.cppReentries);
+    printf("dispatcher_miss: %llu\n", (unsigned long long)profTotals.dispatcherMisses);
+    printf("link_sites_emitted:  %llu\n", (unsigned long long)profTotals.linkSitesEmitted);
+    printf("dispatch_only_exits: %llu\n", (unsigned long long)profTotals.dispatchOnlyExits);
+#endif
     fflush(stdout);
 
     if (!opt.profileJson.empty())
@@ -409,6 +440,13 @@ int main(int argc, char** argv)
                 "  \"framebuffer_changing\": %s,\n"
                 "  \"audio_hash\": \"%016llx\",\n"
                 "  \"audio_samples\": %llu\n"
+#if LITEV_PROFILE
+                "  ,\"links_patched\": %llu\n"
+                "  ,\"links_unlinked\": %llu\n"
+                "  ,\"pending_peak\": %llu\n"
+                "  ,\"cpp_reentries\": %llu\n"
+                "  ,\"dispatcher_misses\": %llu\n"
+#endif
                 "}\n",
                 opt.rom.c_str(),
                 opt.jit ? "jit" : "interp",
@@ -419,7 +457,15 @@ int main(int argc, char** argv)
                 (unsigned long long)lastBotHash,
                 anyChange ? "true" : "false",
                 (unsigned long long)audioHash,
-                (unsigned long long)audioSampleCount);
+                (unsigned long long)audioSampleCount
+#if LITEV_PROFILE
+                , (unsigned long long)profTotals.linksPatched
+                , (unsigned long long)profTotals.linksUnlinked
+                , (unsigned long long)profTotals.pendingPeak
+                , (unsigned long long)profTotals.cppReentries
+                , (unsigned long long)profTotals.dispatcherMisses
+#endif
+                );
             fclose(jf);
             fprintf(stderr, "wrote profile json: %s\n", opt.profileJson.c_str());
         }
