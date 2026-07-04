@@ -5,3 +5,9 @@
 *.srl
 !.gitignore
 !README.md
+
+# EXCEPTION: the redistributable/ subdir holds ROMs whose license permits
+# committing the binary itself (permissive/open-source homebrew). Track the
+# .nds files there; keep ignoring everything else.
+!redistributable/
+!redistributable/*.nds
