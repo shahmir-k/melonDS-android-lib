@@ -71,6 +71,13 @@ struct FrameCounters
     std::atomic<uint64_t> TimeInJitNs{0};
     std::atomic<uint64_t> TimeInCppNs{0};
 
+    // M3 memory-fast-path accounting: how many times the ARM9 C++ memory helpers
+    // are actually entered. With the LITEV_MEM_FAST tiers off these count every
+    // block transfer / u32 load; with them on they count only guard-miss
+    // fallbacks, so the OFF-vs-ON delta is the number of helper calls eliminated.
+    std::atomic<uint64_t> MemBlock9HelperCalls{0};   // SlowBlockTransfer9 entries
+    std::atomic<uint64_t> MemRead9U32HelperCalls{0}; // SlowRead9<u32> entries
+
     void Reset()
     {
         SchedulerIterations.store(0, std::memory_order_relaxed);
@@ -94,6 +101,8 @@ struct FrameCounters
         DispatchOnlyExits.store(0, std::memory_order_relaxed);
         TimeInJitNs.store(0, std::memory_order_relaxed);
         TimeInCppNs.store(0, std::memory_order_relaxed);
+        MemBlock9HelperCalls.store(0, std::memory_order_relaxed);
+        MemRead9U32HelperCalls.store(0, std::memory_order_relaxed);
     }
 };
 

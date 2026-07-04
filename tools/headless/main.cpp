@@ -333,7 +333,8 @@ int main(int argc, char** argv)
                        linkSitesEmitted=0, dispatchOnlyExits=0,
                        schedIterations=0, schedEventsFired=0,
                        arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0,
-                       arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0; } profTotals;
+                       arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0,
+                       memBlock9HelperCalls=0, memRead9U32HelperCalls=0; } profTotals;
 #endif
 
     for (int frame = 0; frame < opt.frames; frame++)
@@ -359,6 +360,8 @@ int main(int argc, char** argv)
             profTotals.arm9IdleHits += g_Frame.ARM9IdleHits.load(std::memory_order_relaxed);
             profTotals.arm7IdleHits += g_Frame.ARM7IdleHits.load(std::memory_order_relaxed);
             profTotals.arm7IdleSkips+= g_Frame.ARM7IdleSkips.load(std::memory_order_relaxed);
+            profTotals.memBlock9HelperCalls   += g_Frame.MemBlock9HelperCalls.load(std::memory_order_relaxed);
+            profTotals.memRead9U32HelperCalls += g_Frame.MemRead9U32HelperCalls.load(std::memory_order_relaxed);
             uint64_t pk = g_Frame.PendingPeak.load(std::memory_order_relaxed);
             if (pk > profTotals.pendingPeak) profTotals.pendingPeak = pk;
         }
@@ -430,6 +433,8 @@ int main(int argc, char** argv)
     printf("pending_peak:    %llu\n", (unsigned long long)profTotals.pendingPeak);
     printf("cpp_reentries:   %llu\n", (unsigned long long)profTotals.cppReentries);
     printf("dispatcher_miss: %llu\n", (unsigned long long)profTotals.dispatcherMisses);
+    printf("mem_block9_helper_calls:    %llu\n", (unsigned long long)profTotals.memBlock9HelperCalls);
+    printf("mem_read9_u32_helper_calls: %llu\n", (unsigned long long)profTotals.memRead9U32HelperCalls);
     printf("link_sites_emitted:  %llu\n", (unsigned long long)profTotals.linkSitesEmitted);
     printf("dispatch_only_exits: %llu\n", (unsigned long long)profTotals.dispatchOnlyExits);
     printf("sched_iterations:    %llu\n", (unsigned long long)profTotals.schedIterations);
