@@ -1058,61 +1058,74 @@ u32 NDS::RunFrame()
                 ARM9Target = target << ARM9ClockShift;
                 CurCPU = 0;
 
-                if (CPUStop & CPUStop_GXStall)
                 {
-                    // GXFIFO stall
-                    s32 cycles = GPU.GPU3D.CyclesToRunFor();
-
-                    ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
-                }
-                else if (CPUStop & CPUStop_DMA9)
-                {
-                    DMAs[0].Run();
-                    if (!(CPUStop & CPUStop_GXStall)) DMAs[1].Run();
-                    if (!(CPUStop & CPUStop_GXStall)) DMAs[2].Run();
-                    if (!(CPUStop & CPUStop_GXStall)) DMAs[3].Run();
-                    if (ConsoleType == 1)
+                    LITE_PROFILE_SCOPE(_arm9timer, LiteProfile::g_Frame.ARM9ExecNs);
+                    if (CPUStop & CPUStop_GXStall)
                     {
-                        auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
-                        dsi.RunNDMAs(0);
+                        // GXFIFO stall
+                        s32 cycles = GPU.GPU3D.CyclesToRunFor();
+
+                        ARM9Timestamp = std::min(ARM9Target, ARM9Timestamp+(cycles<<ARM9ClockShift));
                     }
-                }
-                else
-                {
-                    ARM9.Execute<cpuMode>();
-                }
-
-                RunTimers(0);
-                GPU.GPU3D.Run();
-
-                target = ARM9Timestamp >> ARM9ClockShift;
-                CurCPU = 1;
-
-                while (ARM7Timestamp < target)
-                {
-                    ARM7Target = target; // might be changed by a reschedule
-
-                    if (CPUStop & CPUStop_DMA7)
+                    else if (CPUStop & CPUStop_DMA9)
                     {
-                        DMAs[4].Run();
-                        DMAs[5].Run();
-                        DMAs[6].Run();
-                        DMAs[7].Run();
+                        DMAs[0].Run();
+                        if (!(CPUStop & CPUStop_GXStall)) DMAs[1].Run();
+                        if (!(CPUStop & CPUStop_GXStall)) DMAs[2].Run();
+                        if (!(CPUStop & CPUStop_GXStall)) DMAs[3].Run();
                         if (ConsoleType == 1)
                         {
                             auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
-                            dsi.RunNDMAs(1);
+                            dsi.RunNDMAs(0);
                         }
                     }
                     else
                     {
-                        ARM7.Execute<cpuMode>();
+                        ARM9.Execute<cpuMode>();
                     }
 
-                    RunTimers(1);
+                    RunTimers(0);
                 }
 
-                RunSystem(target);
+                {
+                    LITE_PROFILE_SCOPE(_gpu3dtimer, LiteProfile::g_Frame.GPU3DNs);
+                    GPU.GPU3D.Run();
+                }
+
+                target = ARM9Timestamp >> ARM9ClockShift;
+                CurCPU = 1;
+
+                {
+                    LITE_PROFILE_SCOPE(_arm7timer, LiteProfile::g_Frame.ARM7ExecNs);
+                    while (ARM7Timestamp < target)
+                    {
+                        ARM7Target = target; // might be changed by a reschedule
+
+                        if (CPUStop & CPUStop_DMA7)
+                        {
+                            DMAs[4].Run();
+                            DMAs[5].Run();
+                            DMAs[6].Run();
+                            DMAs[7].Run();
+                            if (ConsoleType == 1)
+                            {
+                                auto& dsi = dynamic_cast<melonDS::DSi&>(*this);
+                                dsi.RunNDMAs(1);
+                            }
+                        }
+                        else
+                        {
+                            ARM7.Execute<cpuMode>();
+                        }
+
+                        RunTimers(1);
+                    }
+                }
+
+                {
+                    LITE_PROFILE_SCOPE(_systimer, LiteProfile::g_Frame.RunSystemNs);
+                    RunSystem(target);
+                }
 
                 if (CPUStop & CPUStop_Sleep)
                 {

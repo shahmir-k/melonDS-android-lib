@@ -39,6 +39,20 @@ struct FrameCounters
     std::atomic<uint64_t> ARM7ExecNs{0};
     std::atomic<uint64_t> ARM7WaitNs{0};
 
+    // Frame-decomposition timers (Unit 6 measurement): GPU3D geometry engine
+    // run + the per-slice RunSystem event drain, so a frame decomposes into
+    // ARM9 / ARM7 / GPU3D / system.
+    std::atomic<uint64_t> GPU3DNs{0};
+    std::atomic<uint64_t> RunSystemNs{0};
+
+    // Idle-loop fast-forward hits (Unit 6): how often the existing branch-to-self
+    // IdleLoop detection (ARM.cpp Execute) fast-forwards each CPU to its slice
+    // target. ARM7IdleSkips additionally splits out hits attributable to the
+    // LITEV_ARM7_IDLE IPC/SPI detector (only counted when that flag is built).
+    std::atomic<uint64_t> ARM9IdleHits{0};
+    std::atomic<uint64_t> ARM7IdleHits{0};
+    std::atomic<uint64_t> ARM7IdleSkips{0};
+
     // Block-transition taxonomy (populated once M1 dispatcher/linking lands)
     std::atomic<uint64_t> LinkedTransitions{0};
     std::atomic<uint64_t> DispatcherHits{0};
@@ -64,6 +78,11 @@ struct FrameCounters
         ARM9ExecNs.store(0, std::memory_order_relaxed);
         ARM7ExecNs.store(0, std::memory_order_relaxed);
         ARM7WaitNs.store(0, std::memory_order_relaxed);
+        GPU3DNs.store(0, std::memory_order_relaxed);
+        RunSystemNs.store(0, std::memory_order_relaxed);
+        ARM9IdleHits.store(0, std::memory_order_relaxed);
+        ARM7IdleHits.store(0, std::memory_order_relaxed);
+        ARM7IdleSkips.store(0, std::memory_order_relaxed);
         LinkedTransitions.store(0, std::memory_order_relaxed);
         DispatcherHits.store(0, std::memory_order_relaxed);
         DispatcherMisses.store(0, std::memory_order_relaxed);

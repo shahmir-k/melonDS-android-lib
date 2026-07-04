@@ -331,7 +331,9 @@ int main(int argc, char** argv)
     struct { uint64_t linksPatched=0, linksUnlinked=0, pendingPeak=0,
                        cppReentries=0, dispatcherMisses=0,
                        linkSitesEmitted=0, dispatchOnlyExits=0,
-                       schedIterations=0, schedEventsFired=0; } profTotals;
+                       schedIterations=0, schedEventsFired=0,
+                       arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0,
+                       arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0; } profTotals;
 #endif
 
     for (int frame = 0; frame < opt.frames; frame++)
@@ -350,6 +352,13 @@ int main(int argc, char** argv)
             profTotals.dispatchOnlyExits+= g_Frame.DispatchOnlyExits.load(std::memory_order_relaxed);
             profTotals.schedIterations  += g_Frame.SchedulerIterations.load(std::memory_order_relaxed);
             profTotals.schedEventsFired += g_Frame.SchedulerEventsFired.load(std::memory_order_relaxed);
+            profTotals.arm9ExecNs   += g_Frame.ARM9ExecNs.load(std::memory_order_relaxed);
+            profTotals.arm7ExecNs   += g_Frame.ARM7ExecNs.load(std::memory_order_relaxed);
+            profTotals.gpu3dNs      += g_Frame.GPU3DNs.load(std::memory_order_relaxed);
+            profTotals.runSystemNs  += g_Frame.RunSystemNs.load(std::memory_order_relaxed);
+            profTotals.arm9IdleHits += g_Frame.ARM9IdleHits.load(std::memory_order_relaxed);
+            profTotals.arm7IdleHits += g_Frame.ARM7IdleHits.load(std::memory_order_relaxed);
+            profTotals.arm7IdleSkips+= g_Frame.ARM7IdleSkips.load(std::memory_order_relaxed);
             uint64_t pk = g_Frame.PendingPeak.load(std::memory_order_relaxed);
             if (pk > profTotals.pendingPeak) profTotals.pendingPeak = pk;
         }
@@ -429,6 +438,27 @@ int main(int argc, char** argv)
            opt.frames ? (double)profTotals.schedIterations / opt.frames : 0.0);
     printf("cpp_reentries_per_frame: %.2f\n",
            opt.frames ? (double)profTotals.cppReentries / opt.frames : 0.0);
+    {
+        uint64_t frameSumNs = profTotals.arm9ExecNs + profTotals.arm7ExecNs
+                            + profTotals.gpu3dNs + profTotals.runSystemNs;
+        double denom = frameSumNs ? (double)frameSumNs : 1.0;
+        printf("arm9_exec_ns:    %llu\n", (unsigned long long)profTotals.arm9ExecNs);
+        printf("arm7_exec_ns:    %llu\n", (unsigned long long)profTotals.arm7ExecNs);
+        printf("gpu3d_ns:        %llu\n", (unsigned long long)profTotals.gpu3dNs);
+        printf("run_system_ns:   %llu\n", (unsigned long long)profTotals.runSystemNs);
+        printf("frame_decomp_sum_ns: %llu\n", (unsigned long long)frameSumNs);
+        printf("arm9_share_pct:  %.2f\n", 100.0 * profTotals.arm9ExecNs / denom);
+        printf("arm7_share_pct:  %.2f\n", 100.0 * profTotals.arm7ExecNs / denom);
+        printf("gpu3d_share_pct: %.2f\n", 100.0 * profTotals.gpu3dNs / denom);
+        printf("system_share_pct:%.2f\n", 100.0 * profTotals.runSystemNs / denom);
+        printf("arm9_idle_hits:  %llu\n", (unsigned long long)profTotals.arm9IdleHits);
+        printf("arm7_idle_hits:  %llu\n", (unsigned long long)profTotals.arm7IdleHits);
+        printf("arm7_idle_skips: %llu\n", (unsigned long long)profTotals.arm7IdleSkips);
+        printf("arm9_idle_hits_per_frame: %.2f\n",
+               opt.frames ? (double)profTotals.arm9IdleHits / opt.frames : 0.0);
+        printf("arm7_idle_hits_per_frame: %.2f\n",
+               opt.frames ? (double)profTotals.arm7IdleHits / opt.frames : 0.0);
+    }
 #endif
     fflush(stdout);
 
@@ -457,6 +487,13 @@ int main(int argc, char** argv)
                 "  ,\"dispatcher_misses\": %llu\n"
                 "  ,\"sched_iterations\": %llu\n"
                 "  ,\"sched_events_fired\": %llu\n"
+                "  ,\"arm9_exec_ns\": %llu\n"
+                "  ,\"arm7_exec_ns\": %llu\n"
+                "  ,\"gpu3d_ns\": %llu\n"
+                "  ,\"run_system_ns\": %llu\n"
+                "  ,\"arm9_idle_hits\": %llu\n"
+                "  ,\"arm7_idle_hits\": %llu\n"
+                "  ,\"arm7_idle_skips\": %llu\n"
 #endif
                 "}\n",
                 opt.rom.c_str(),
@@ -477,6 +514,13 @@ int main(int argc, char** argv)
                 , (unsigned long long)profTotals.dispatcherMisses
                 , (unsigned long long)profTotals.schedIterations
                 , (unsigned long long)profTotals.schedEventsFired
+                , (unsigned long long)profTotals.arm9ExecNs
+                , (unsigned long long)profTotals.arm7ExecNs
+                , (unsigned long long)profTotals.gpu3dNs
+                , (unsigned long long)profTotals.runSystemNs
+                , (unsigned long long)profTotals.arm9IdleHits
+                , (unsigned long long)profTotals.arm7IdleHits
+                , (unsigned long long)profTotals.arm7IdleSkips
 #endif
                 );
             fclose(jf);
