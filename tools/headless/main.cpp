@@ -36,6 +36,7 @@
 #include "PlatformHeadless.h"
 #include "LiteProfile.h"
 #include "VerifyTrace.h"
+#include "InputScript.h"
 
 using namespace melonDS;
 
@@ -56,6 +57,7 @@ struct Options
     std::string profileJson;
     int frames = 300;
     bool jit = true;
+    bool fastmem = true;                // JIT fast-memory path (ignored if unsupported)
     int fbHashEvery = 0;                // 0 => only final hash
     int fbDumpFrame = -1;               // frame index to dump, -1 => none
     std::string fbDumpPath;
@@ -67,6 +69,8 @@ struct Options
 
     AudioInterpolation interp = AudioInterpolation::None;
     int frameskip = 0;                  // LITEV_AGGRESSIVE_SKIP target (0 = off)
+
+    std::string inputScript;            // --input-script: scripted button input
 };
 
 [[noreturn]] void Usage(const char* argv0, int code)
@@ -78,6 +82,7 @@ struct Options
         "  --savestate <path>        load a savestate after boot (optional)\n"
         "  --frames N                number of frames to run (default 300)\n"
         "  --mode jit|interp         execution mode (default jit)\n"
+        "  --fastmem on|off          JIT fast-memory path (default on; no-op where unsupported)\n"
         "  --fb-hash-every N         print xxhash of both framebuffers every N frames\n"
         "  --fb-dump-ppm <f>:<path>  dump both framebuffers at frame f as PPM (side by side)\n"
         "  --audio-interp <mode>     SPU interpolation: none|linear|cosine|cubic|gaussian (default none)\n"
@@ -85,6 +90,10 @@ struct Options
         "  --profile-json <path>     write per-run totals as JSON\n"
         "  --data-dir <path>         local firmware/save directory (default ./headless-data)\n"
         "  --fixed-rtc <unix-ts>     fixed RTC epoch for determinism (default 946684800)\n"
+        "  --input-script <path>     scripted button input: lines '<frame> <keys>'\n"
+        "                            keys = comma list (A,B,SELECT,START,RIGHT,LEFT,UP,\n"
+        "                            DOWN,R,L,X,Y), NONE, or a 0x hex pressed-mask; held\n"
+        "                            level from that frame on (applies to all run modes)\n"
         "\n"
         "  Unit 1 oracle modes (mutually exclusive; run --frames frames):\n"
         "  --record-trace <path>     record a per-frame binary state trace to <path>\n"
@@ -114,6 +123,13 @@ bool ParseArgs(int argc, char** argv, Options& o)
             else if (m == "interp") o.jit = false;
             else { fprintf(stderr, "error: --mode must be jit or interp\n"); return false; }
         }
+        else if (a == "--fastmem")
+        {
+            std::string m = next("--fastmem");
+            if (m == "on" || m == "1" || m == "true") o.fastmem = true;
+            else if (m == "off" || m == "0" || m == "false") o.fastmem = false;
+            else { fprintf(stderr, "error: --fastmem must be on or off\n"); return false; }
+        }
         else if (a == "--fb-hash-every") o.fbHashEvery = std::atoi(next("--fb-hash-every").c_str());
         else if (a == "--fb-dump-ppm")
         {
@@ -137,6 +153,7 @@ bool ParseArgs(int argc, char** argv, Options& o)
         else if (a == "--profile-json") o.profileJson = next("--profile-json");
         else if (a == "--data-dir") o.dataDir = next("--data-dir");
         else if (a == "--fixed-rtc") o.fixedRtc = std::atoll(next("--fixed-rtc").c_str());
+        else if (a == "--input-script") o.inputScript = next("--input-script");
         else if (a == "--record-trace") { o.mode = RunMode::RecordTrace; o.tracePath = next("--record-trace"); }
         else if (a == "--verify-trace") { o.mode = RunMode::VerifyTrace; o.tracePath = next("--verify-trace"); }
         else if (a == "--verify-interp-converge") o.mode = RunMode::VerifyInterpConverge;
@@ -228,6 +245,7 @@ int main(int argc, char** argv)
         cfg.dataDir = opt.dataDir;
         cfg.jit = opt.jit;
         cfg.fixedRtcEpoch = opt.fixedRtc;
+        cfg.inputScript = opt.inputScript;
 
         switch (opt.mode)
         {
@@ -263,7 +281,11 @@ int main(int argc, char** argv)
     args.Interpolation = opt.interp;
 #ifdef JIT_ENABLED
     if (opt.jit)
-        args.JIT = JITArgs{};       // default JIT settings
+    {
+        JITArgs ja{};               // default JIT settings
+        ja.FastMemory = opt.fastmem;
+        args.JIT = ja;
+    }
     else
         args.JIT = std::nullopt;    // interpreter
 #else
@@ -291,6 +313,24 @@ int main(int argc, char** argv)
 
     nds->SetKeyMask(0xFFFF); // no buttons pressed (active-low)
 
+    // Scripted input (optional). Loaded once; the run loop applies the level
+    // key mask for each frame before RunFrame so menu-driven test ROMs can be
+    // navigated. Script content is part of the deterministic input, so a trace
+    // recorded with a script only replays under the same script.
+    liteds::InputScript inputScript;
+    if (!opt.inputScript.empty())
+    {
+        std::string err;
+        if (!inputScript.LoadFile(opt.inputScript, err))
+        {
+            fprintf(stderr, "error: %s\n", err.c_str());
+            return 1;
+        }
+        fprintf(stderr, "input-script: %s (%zu directives, hash=%016llx)\n",
+                opt.inputScript.c_str(), inputScript.DirectiveCount(),
+                (unsigned long long)inputScript.Hash());
+    }
+
     if (opt.frameskip > 0)
     {
 #ifdef LITEV_AGGRESSIVE_SKIP
@@ -300,6 +340,23 @@ int main(int argc, char** argv)
         fprintf(stderr, "warning: --frameskip ignored (build lacks LITEV_AGGRESSIVE_SKIP)\n");
 #endif
     }
+
+    // Report the engine that ACTUALLY engaged (not just what was requested), so a
+    // silent JIT->interp or fastmem->slowmem fallback is detectable on device.
+#ifdef JIT_ENABLED
+    {
+        bool jitOn = nds->IsJITEnabled();
+        bool fmOn  = jitOn && nds->JIT.FastMemoryEnabled();
+        fprintf(stderr, "engine: %s  fastmem_requested=%s  fastmem_active=%s\n",
+                jitOn ? "JIT" : "interpreter",
+                opt.fastmem ? "on" : "off",
+                fmOn ? "yes" : "no");
+        if (opt.jit && !jitOn)
+            fprintf(stderr, "warning: JIT requested but interpreter engaged (silent fallback)\n");
+        if (opt.jit && opt.fastmem && !fmOn)
+            fprintf(stderr, "note: fastmem requested but inactive (unsupported on this platform)\n");
+    }
+#endif
 
     fprintf(stderr, "liteDS-headless: rom=%s mode=%s frames=%d jit=%s\n",
             opt.rom.c_str(), opt.jit ? "jit" : "interp", opt.frames,
@@ -339,6 +396,9 @@ int main(int argc, char** argv)
 
     for (int frame = 0; frame < opt.frames; frame++)
     {
+        if (inputScript.Loaded())
+            nds->SetKeyMask(inputScript.KeyMaskForFrame(frame));
+
         LITE_PROFILE_RESET_FRAME();
         nds->RunFrame();
 

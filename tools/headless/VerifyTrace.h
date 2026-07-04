@@ -30,6 +30,7 @@ struct TraceRunConfig
     bool jit = true;                          // JIT vs interpreter
     long long fixedRtcEpoch = kDefaultRtcEpoch;
     std::string instanceTag = "headless";     // save-file stem (isolation)
+    std::string inputScript;                  // optional --input-script path
 };
 
 // --record-trace: run `frames` frames and write a fixed-size binary trace
