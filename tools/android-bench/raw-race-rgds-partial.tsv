@@ -1,0 +1,9 @@
+config	fastmem	frameskip	rep	window_fps	soc_mC_pre	cpu_khz_pre	soc_mC_post
+baseline	on	0	1	28.82	55555	1992000	58333
+baseline	off	0	1	27.41	59444	1992000	60000
+baseline	on	9	1	58.52	56666	1992000	57777
+baseline	off	9	1	54.79	55000	1992000	56111
+dispatch	off	0	1	25.81	53750	1992000	60555
+dispatch	off	9	1	56.87	56111	1992000	57777
+link	off	0	1	25.94	55000	1992000	62777
+link	off	9	1	44.90	66875	1992000	70000
