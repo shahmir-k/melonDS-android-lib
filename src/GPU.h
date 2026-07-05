@@ -85,6 +85,11 @@ public:
     // RunFrame. No-op unless deferred submission is enabled AND the frame was
     // deferrable (non-capture; see CaptureActiveThisFrame). Call after RunFrame.
     void SubmitFrame() noexcept;
+
+    // Whether the frame just run used display capture (see CaptureActiveThisFrame).
+    // The app glue reads this after RunFrame to decide whether the frame was
+    // offloaded or took the synchronous fallback.
+    bool WasCaptureActiveThisFrame() const noexcept { return CaptureActiveThisFrame; }
 #endif
 
     u8* GetUniqueBankPtr(u32 mask, u32 offset) noexcept;
@@ -668,6 +673,22 @@ public:
     u32 CaptureCnt;
     bool CaptureEnable;
 
+#ifdef LITEV_RENDER_THREAD
+    // R4 capture-active fallback (docs/r4-render-thread-design.md §5.1 Tier 1).
+    // True for any frame that uses display capture: either capture starts this
+    // frame (CaptureEnable set), or a captured VRAM block already exists (any
+    // VRAMCaptureBlockFlags entry with CBFlag_IsCapture) whose contents the CPU
+    // might read back this frame via SyncVRAMCapture. Capture is the one path
+    // where rendered output flows BACK into emulation state (the pipeline
+    // feedback edge), so capture-active frames must NOT be offloaded: their GL
+    // submission runs synchronously on the emulation thread (exactly the
+    // flag-OFF path), keeping emulation-state writes byte-identical and the
+    // golden traces valid by construction. Reset each frame in StartFrame;
+    // reliably finalized before the first visible DrawScanline (capture start is
+    // decided at VCount 0). Inert until the capture/submit split consults it.
+    bool CaptureActiveThisFrame = false;
+#endif
+
     alignas(u64) u8 Palette[2*1024] {};
     alignas(u64) u8 OAM[2*1024] {};
 
@@ -823,6 +844,11 @@ private:
     void CheckCaptureEnd();
     void SyncVRAMCaptureBlock(u32 block, bool write);
     void SyncAllVRAMCaptures();
+#ifdef LITEV_RENDER_THREAD
+    // R4: true if any VRAM block is currently flagged as a display capture
+    // (CBFlag_IsCapture). Used to set CaptureActiveThisFrame at frame start.
+    bool AnyVRAMCaptureActive() const noexcept;
+#endif
     void GetCaptureInfo(int* info, u16** cbf, int len);
 
     void SetDispStatIRQ(int cpu, int num);
