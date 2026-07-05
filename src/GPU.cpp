@@ -1170,10 +1170,13 @@ void GPU::StartFrame() noexcept
     // starts this frame. Finalized before the first visible DrawScanline.
     CaptureActiveThisFrame = AnyVRAMCaptureActive();
 
-    // R4 Stage A (recipe §1): rewind this frame's GL command log so the
-    // converted call sites record into a clean log. Only meaningful under
-    // deferred submission on a non-capture frame; the renderer gates internally.
-    if (Rend && Rend->IsDeferredSubmit() && !CaptureActiveThisFrame)
+    // R4 Stage A/Phase-2 (recipe §1): rewind this frame's GL command log so the
+    // converted call sites record into a clean log, and (re)decide the deferred
+    // replay mode for this frame. Called every frame under deferred submission so
+    // DeferReplay is recomputed from CaptureActiveThisFrame (a capture-active frame
+    // takes NO log and runs fully synchronous, Tier 1); StartFrameLog reads
+    // CaptureActiveThisFrame internally.
+    if (Rend && Rend->IsDeferredSubmit())
         Rend->StartFrameLog();
 #endif
 

@@ -17,6 +17,7 @@
 */
 
 #include <string.h>
+#include <chrono>
 #include "NDS.h"
 #include "GPU_OpenGL.h"
 // R3: GL per-frame call counters. Must come AFTER the GL headers above so the
@@ -386,9 +387,12 @@ void GLRenderer::Reset()
 
 #ifdef LITEV_RENDER_THREAD
     // Drain protocol (design §5.2): reset/savestate-load discards any
-    // half-captured deferred frame so no stale composite is replayed.
+    // half-captured deferred frame so no stale composite/log is replayed.
     SubmitPending = false;
     SubmitReplaying = false;
+    DeferReplay = false;
+    RenderLogA.Reset();
+    RenderLogB.Reset();
 #endif
 
     Rend2D_A->Reset();
@@ -529,7 +533,7 @@ void GLRenderer::DrawScanline(u32 line)
     if (need_render && (line > 0))
     {
 #ifdef LITEV_RENDER_THREAD
-        if (RIRMode) RIRRecordFinalPass(LastLine, line);
+        if (RIRMode || DeferReplay) RIRRecordFinalPass(LastLine, line);
         else
 #endif
             RenderScreen(LastLine, line);
@@ -736,7 +740,29 @@ void GLRenderer::VBlank()
     // VCount >= 192; DrawSprites(0) at VCount 262 only re-uploads OBJ VRAM and
     // marks state dirty for the NEXT frame's prerender). Result: byte-identical
     // to the inline path, verified by on-device screenshot parity.
-    if (DeferSubmit && !GPU.CaptureActiveThisFrame)
+    if (DeferReplay)
+    {
+        // Phase 2 full deferred submit. Capture the 3D color output NOW (the
+        // VBlank point, VCount 192) — before the inline VCount-215 Start3DRendering
+        // overwrites the single OutputTex3D — so the deferred 2D composites can read
+        // it at SubmitFrame (SubmitReplaying picks the shadow). Then RECORD the
+        // VBlank-span 2D work (per-engine sprite raster + composite, and the final
+        // pass) into the log; no GL is issued. The whole log replays at
+        // SubmitFrame(), where the buffer swap + per-frame GL bookkeeping also run.
+        Submit_Snapshot3D();
+        Rend2D_A->VBlank();                 // records RenderSpritesSpan + Composite2D
+        Rend2D_B->VBlank();
+        RIRRecordFinalPass(LastLine, 192);  // records FinalPassSpan
+        LastLine = 0;
+        LastCapLine = 0;
+        SubmitPending = true;
+        return;
+    }
+
+    // Legacy narrow deferral (final composite only) — retained for the RIR bring-up
+    // path where DeferSubmit is set without full deferred replay. DeferReplay above
+    // supersedes it whenever the renderer is in Phase-2 deferred mode.
+    if (DeferSubmit && !RIRMode && !GPU.CaptureActiveThisFrame)
     {
         Submit_Snapshot3D();
         SubmitPending = true;
@@ -1140,6 +1166,13 @@ void GLRenderer::StartFrameLog()
     // is harmless and keeps the A/B plumbing exercised.
     LogBuild = LogBuildBank ? &RenderLogB : &RenderLogA;
     LogBuild->Reset();
+
+    // Phase 2: decide the deferred replay mode for this frame. RIR bring-up mode
+    // (record + immediate replay) takes precedence and is NOT deferred. A
+    // capture-active frame (Tier 1) records no log and runs synchronously.
+    DeferReplay = !RIRMode && !GPU.CaptureActiveThisFrame;
+    ShadowCopyNs = 0;
+    ShadowCopyBytes = 0;
 }
 
 void GLRenderer::Submit_Snapshot3D()
@@ -1184,7 +1217,27 @@ void GLRenderer::Start3DRendering()
         LogBuild->Reset();
     }
     else
+    {
+#if LITEV_PROFILE && defined(__ANDROID__)
+        // Measure the inline 3D raster cost (recipe §6 go/pivot). This is the GL
+        // the deferred RunFrame still emits — the piece a full render-thread split
+        // would additionally offload. Reported every 60 calls; static content so no
+        // reset needed here.
+        auto t0 = std::chrono::steady_clock::now();
         Rend3D->RenderFrame();
+        auto t1 = std::chrono::steady_clock::now();
+        static double acc = 0; static int n3 = 0;
+        acc += std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count() / 1e6;
+        if (++n3 >= 60)
+        {
+            __android_log_print(ANDROID_LOG_INFO, "LITEV_3D",
+                "60f: inline_3d_raster=%.3fms/frame", acc / 60.0);
+            acc = 0; n3 = 0;
+        }
+#else
+        Rend3D->RenderFrame();
+#endif
+    }
 }
 
 void GLRenderer::RIRRecordFinalPass(int ystart, int yend)
@@ -1213,25 +1266,67 @@ void GLRenderer::RIRRecordFinalPass(int ystart, int yend)
         memcpy(p + sizeof(h), AuxInputBuffer[0], aux0Bytes);
         memcpy(p + sizeof(h) + aux0Bytes, AuxInputBuffer[1], aux1Bytes);
 
-        // replay from the snapshot: restore the state RenderScreen reads, then draw
-        RIRFinalPassHdr hr;
-        memcpy(&hr, p, sizeof(hr));
-        FinalPassConfig = hr.FPC;
-        DispCntA = hr.DispCntA; DispCntB = hr.DispCntB;
-        MasterBrightnessA = hr.MasterBrightnessA; MasterBrightnessB = hr.MasterBrightnessB;
-        AuxUsageMask = (u8) hr.AuxUsageMask;
-        memcpy(AuxInputBuffer[0], p + sizeof(hr), aux0Bytes);
-        memcpy(AuxInputBuffer[1], p + sizeof(hr) + aux0Bytes, aux1Bytes);
-
-        RenderScreen(ystart, yend);
         RIRReplayCount++;
+        if (RIRMode)
+        {
+            ReplayFinalPass(*rec);   // immediate replay (bring-up)
+            LogBuild->Reset();
+        }
+        // else deferred: ReplayLog() replays this record at SubmitFrame.
     }
     else
     {
+        // Overflow. In RIR mode a synchronous inline final pass is bit-exact
+        // (same moment). In deferred mode the composites feeding it are still
+        // unreplayed in the log, so an inline pass would composite garbage —
+        // rely on arena sizing to keep this at zero (monitored by RIRInlineGL).
         RIRInlineGL++;
-        RenderScreen(ystart, yend);
+        if (RIRMode) { RenderScreen(ystart, yend); LogBuild->Reset(); }
     }
-    LogBuild->Reset();
+}
+
+// Replay one FinalPassSpan record: restore the register/config state the final
+// pass reads, then run RenderScreen. Shared by RIR immediate replay and the
+// deferred ReplayLog() drain.
+void GLRenderer::ReplayFinalPass(const GLLogRecord& r)
+{
+    const u32 aux0Bytes = 256 * 256 * sizeof(u16);
+    const u8* p = LogBuild->Payload(r);
+    RIRFinalPassHdr hr;
+    memcpy(&hr, p, sizeof(hr));
+    FinalPassConfig = hr.FPC;
+    DispCntA = hr.DispCntA; DispCntB = hr.DispCntB;
+    MasterBrightnessA = hr.MasterBrightnessA; MasterBrightnessB = hr.MasterBrightnessB;
+    AuxUsageMask = (u8) hr.AuxUsageMask;
+    memcpy(AuxInputBuffer[0], p + sizeof(hr), aux0Bytes);
+    memcpy(AuxInputBuffer[1], p + sizeof(hr) + aux0Bytes, 256 * 192 * sizeof(u16));
+    RenderScreen(r.YStart, r.YEnd);
+}
+
+// Replay the entire deferred log in record (timeline) order. Each 2D op routes to
+// its owning engine's RIRReplay; FinalPassSpan to ReplayFinalPass. Render3D is not
+// recorded in deferred mode (the raster stays inline at VCount 215); any stray
+// Render3D record is skipped. Called from SubmitFrame() with SubmitReplaying set.
+void GLRenderer::ReplayLog()
+{
+    const u32 n = LogBuild->Count();
+    for (u32 i = 0; i < n; i++)
+    {
+        const GLLogRecord& r = LogBuild->At(i);
+        switch (r.Op)
+        {
+        case GLOp::FinalPassSpan:
+            ReplayFinalPass(r);
+            break;
+        case GLOp::Render3D:
+            break;   // raster issued inline; not deferred this tranche
+        default:
+            // Rend2D_{A,B} are unique_ptr<Renderer2D>; under the GL renderer they
+            // are always GLRenderer2D (created in Init). RIRReplay is GL-specific.
+            static_cast<GLRenderer2D*>((r.Engine ? Rend2D_B : Rend2D_A).get())->RIRReplay(r);
+            break;
+        }
+    }
 }
 
 void GLRenderer::SubmitFrame()
@@ -1241,11 +1336,35 @@ void GLRenderer::SubmitFrame()
 
     SubmitPending = false;
 
-    // Replay the deferred 2D final composite, reading the 3D shadow instead of
-    // the (now-overwritten) live OutputTex3D.
     SubmitReplaying = true;
-    VBlankSubmit();
+    if (DeferReplay)
+        ReplayLog();       // Phase 2: drain the whole frame's GL command log
+    else
+        VBlankSubmit();    // legacy narrow deferral (final composite only)
     SubmitReplaying = false;
+
+    if (DeferReplay)
+    {
+#if LITEV_PROFILE && defined(__ANDROID__)
+        LiteVGLFrameReport();
+        {
+            // Stage-B copy-cost report (recipe §2 kill-criterion #1). Medians over
+            // 60 submits, in ms/frame, plus KB/frame moved into the log arena.
+            static u64 accNs = 0, accBytes = 0; static int nrep = 0;
+            accNs += ShadowCopyNs; accBytes += ShadowCopyBytes; nrep++;
+            if (nrep >= 60)
+            {
+                __android_log_print(ANDROID_LOG_INFO, "LITEV_SHADOW",
+                    "60f: vram_shadow_copy=%.3fms/frame  %llu KB/frame  (records=%u overflow=%d)",
+                    (accNs / 60.0) / 1e6,
+                    (unsigned long long)(accBytes / 60 / 1024),
+                    LogBuild->Count(), LogBuild->DidOverflow() ? 1 : 0);
+                accNs = 0; accBytes = 0; nrep = 0;
+            }
+        }
+#endif
+        LITEV_GL_RESET_STATE_CACHE();
+    }
 
     // Perform the swap that SwapBuffers() deferred, so GetFramebuffers() returns
     // the frame just composited.

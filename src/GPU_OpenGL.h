@@ -212,6 +212,40 @@ private:
     u64 RIRReplayCount = 0;   // converted sites that recorded + replayed
     u64 RIRInlineGL = 0;      // converted sites forced inline (overflow) — want 0
 
+    // R4 Phase 2 (recipe §1.3 + §2): DEFERRED replay. Selected per-frame in
+    // StartFrameLog when DeferSubmit is on, the renderer is not in RIR bring-up
+    // mode, and the frame is not capture-active (Tier 1 -> synchronous). When set,
+    // the converted call sites RECORD ONLY (no immediate replay); at SubmitFrame()
+    // the ENTIRE log is replayed in timeline order on the emu thread (single-thread
+    // this tranche). Because the log is replayed in exactly the record order, the
+    // replayed GL command stream is byte-identical to the inline stream (the RIR
+    // guarantee), with two differences the replay bodies resolve: (1) the 2D
+    // composites read the VBlank-point 3D-output shadow (SubmitReplaying) since the
+    // live OutputTex3D was overwritten by the inline VCount-215 Start3DRendering,
+    // and (2) VRAM uploads read a per-op byte snapshot taken at record time (Stage
+    // B, recipe §2) since VRAMFlat mutates within the frame between record and
+    // submit. Render3D itself stays INLINE (issued at VCount 215) — only its output
+    // is shadowed; the texcache texture-VRAM shadow needed to defer the 3D raster
+    // is a later tranche. So flag-ON-deferred RunFrame excludes ALL 2D GL and the
+    // final composite but still includes the 3D raster submission.
+    bool DeferReplay = false;
+
+    // Stage-B (recipe §2) per-op VRAM-copy cost accounting. Each deferred
+    // UploadBGVRAM/UploadOBJVRAM record deep-copies its dirty span into the log
+    // arena at record time; ShadowCopyNs accumulates the memcpy nanoseconds for the
+    // frame, ShadowCopyBytes the bytes. Reset at StartFrameLog, snapshotted into the
+    // 60-frame reportable accumulators at SubmitFrame. Design kill-criterion #1:
+    // >2.5 ms A55 kills the premise (budget <1 ms).
+    u64 ShadowCopyNs = 0;
+    u64 ShadowCopyBytes = 0;
+
+    // Replay the whole deferred log in record order (SubmitFrame). Dispatches each
+    // record to the owning engine's RIRReplay (2D ops) or ReplayFinalPass.
+    void ReplayLog();
+    // Replay one FinalPassSpan record: restore FinalPassConfig + regs + aux buffers
+    // from the snapshot, then run the final-pass RenderScreen.
+    void ReplayFinalPass(const GLLogRecord& r);
+
     // FinalPassSpan snapshot header (recipe §1.1): the per-final-pass register /
     // config state RenderScreen reads, snapshotted alongside the two aux buffers.
     struct RIRFinalPassHdr

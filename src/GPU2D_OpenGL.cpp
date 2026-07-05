@@ -17,6 +17,7 @@
 */
 
 #include <assert.h>
+#include <chrono>
 #include "GPU_OpenGL.h"
 #include "GPU2D_OpenGL.h"
 #include "GPU.h"
@@ -655,7 +656,7 @@ void GLRenderer2D::UpdateAndRender(int line)
     if ((comp_dirty || SpriteDirty) && (line > 0))
     {
 #ifdef LITEV_RENDER_THREAD
-        if (Parent.RIRMode) RIRRecordRenderSprites(line);
+        if (Parent.RIRMode || Parent.DeferReplay) RIRRecordRenderSprites(line);
         else
 #endif
             DoRenderSprites(line);
@@ -666,7 +667,7 @@ void GLRenderer2D::UpdateAndRender(int line)
     if (comp_dirty && (line > 0))
     {
 #ifdef LITEV_RENDER_THREAD
-        if (Parent.RIRMode) RIRRecordComposite(LastLine, line);
+        if (Parent.RIRMode || Parent.DeferReplay) RIRRecordComposite(LastLine, line);
         else
 #endif
             RenderScreen(LastLine, line);
@@ -734,6 +735,26 @@ void GLRenderer2D::UpdateAndRender(int line)
                 else     { Parent.RIRInlineGL++; DoUploadBGVRAM(start, end, vram); }
                 Parent.LogBuild->Reset();
             }
+            else if (Parent.DeferReplay)
+            {
+                // Phase 2 Stage-B (recipe §2): deep-copy the dirty VRAM span into
+                // the log arena at record time, so the deferred replay reads the
+                // record-time bytes instead of live post-mutation VRAM.
+                const u32 span = (u32)(end - start) * 1024;
+                auto t0 = std::chrono::steady_clock::now();
+                GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                    GLOp::UploadBGVRAM, &vram[start * 1024], span);
+                auto t1 = std::chrono::steady_clock::now();
+                if (rec)
+                {
+                    rec->Engine = GPU2D.Num; rec->YStart = start; rec->YEnd = end;
+                    Parent.ShadowCopyNs += (u64) std::chrono::duration_cast<
+                        std::chrono::nanoseconds>(t1 - t0).count();
+                    Parent.ShadowCopyBytes += span;
+                    Parent.RIRReplayCount++;
+                }
+                else Parent.RIRInlineGL++;
+            }
             else
 #endif
             {
@@ -767,6 +788,14 @@ void GLRenderer2D::UpdateAndRender(int line)
             if (rec) { rec->Engine = GPU2D.Num; RIRReplay(*rec); Parent.RIRReplayCount++; }
             else     { Parent.RIRInlineGL++; DoUploadPalBG(TempPalBuffer); }
             Parent.LogBuild->Reset();
+        }
+        else if (Parent.DeferReplay)
+        {
+            // Phase 2: record the palette snapshot; ReplayLog() replays at submit.
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::UploadPalBG, TempPalBuffer, sizeof(u16) * 256 * (1 + (4*16)));
+            if (rec) { rec->Engine = GPU2D.Num; Parent.RIRReplayCount++; }
+            else     Parent.RIRInlineGL++;
         }
         else
 #endif
@@ -813,6 +842,14 @@ void GLRenderer2D::UpdateAndRender(int line)
                 else     { Parent.RIRInlineGL++; PrerenderLayer(layer); }
                 Parent.LogBuild->Reset();
             }
+            else if (Parent.DeferReplay)
+            {
+                // Phase 2: record LayerConfig snapshot + layer index; replay at submit.
+                GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                    GLOp::PrerenderLayer, &LayerConfig, sizeof(LayerConfig));
+                if (rec) { rec->Engine = GPU2D.Num; rec->I0 = layer; Parent.RIRReplayCount++; }
+                else     Parent.RIRInlineGL++;
+            }
             else
 #endif
                 PrerenderLayer(layer);
@@ -848,6 +885,14 @@ void GLRenderer2D::UpdateAndRender(int line)
             else     { Parent.RIRInlineGL++; DoUploadPalOBJ(TempPalBuffer); }
             Parent.LogBuild->Reset();
         }
+        else if (Parent.DeferReplay)
+        {
+            // Phase 2: record OBJ palette snapshot; replay at submit.
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::UploadPalOBJ, TempPalBuffer, sizeof(u16) * 256 * (1 + 16));
+            if (rec) { rec->Engine = GPU2D.Num; Parent.RIRReplayCount++; }
+            else     Parent.RIRInlineGL++;
+        }
         else
 #endif
         {
@@ -865,6 +910,14 @@ void GLRenderer2D::UpdateAndRender(int line)
             if (rec) { rec->Engine = GPU2D.Num; rec->I0 = NumSprites; RIRReplay(*rec); Parent.RIRReplayCount++; }
             else     { Parent.RIRInlineGL++; PrerenderSprites(); }
             Parent.LogBuild->Reset();
+        }
+        else if (Parent.DeferReplay)
+        {
+            // Phase 2: record SpriteConfig snapshot + NumSprites; replay at submit.
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::PrerenderSprites, &SpriteConfig, sizeof(SpriteConfig));
+            if (rec) { rec->Engine = GPU2D.Num; rec->I0 = NumSprites; Parent.RIRReplayCount++; }
+            else     Parent.RIRInlineGL++;
         }
         else
 #endif
@@ -886,7 +939,7 @@ void GLRenderer2D::DrawScanline(u32 line)
 void GLRenderer2D::VBlank()
 {
 #ifdef LITEV_RENDER_THREAD
-    if (Parent.RIRMode)
+    if (Parent.RIRMode || Parent.DeferReplay)
     {
         RIRRecordRenderSprites(192);
         RIRRecordComposite(LastLine, 192);
@@ -1997,6 +2050,24 @@ void GLRenderer2D::DrawSprites(u32 line)
             else     { Parent.RIRInlineGL++; DoUploadOBJVRAM(start, end, vram); }
             Parent.LogBuild->Reset();
         }
+        else if (Parent.DeferReplay)
+        {
+            // Phase 2 Stage-B (recipe §2): deep-copy the dirty OBJ VRAM span.
+            const u32 span = (u32)(end - start) * 1024;
+            auto t0 = std::chrono::steady_clock::now();
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::UploadOBJVRAM, &vram[start * 1024], span);
+            auto t1 = std::chrono::steady_clock::now();
+            if (rec)
+            {
+                rec->Engine = GPU2D.Num; rec->YStart = start; rec->YEnd = end;
+                Parent.ShadowCopyNs += (u64) std::chrono::duration_cast<
+                    std::chrono::nanoseconds>(t1 - t0).count();
+                Parent.ShadowCopyBytes += span;
+                Parent.RIRReplayCount++;
+            }
+            else Parent.RIRInlineGL++;
+        }
         else
 #endif
         {
@@ -2085,6 +2156,13 @@ void GLRenderer2D::DoUploadOBJVRAM(int start, int end, const u8* vrambase)
 
 void GLRenderer2D::RIRReplay(const GLLogRecord& r)
 {
+    // The deferred drain (ReplayLog) calls this with no surrounding inline setup,
+    // so each case reproduces the shared GL setup the inline path did once before
+    // its loop (texture binds, shader/UBO binds, UBO uploads from the snapshot).
+    // In RIR immediate mode that setup is redundant (already established) but
+    // idempotent, so the same body serves both. VRAM ops read the record's byte
+    // snapshot when present (Stage B, deferred); RIR records carry no payload and
+    // read live VRAM at the (same-moment) immediate replay.
     switch (r.Op)
     {
     case GLOp::UploadPalBG:
@@ -2095,56 +2173,106 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         break;
     case GLOp::UploadBGVRAM:
     {
-        u8* vram; u32 vrammask;
-        GPU2D.GetBGVRAM(vram, vrammask);
-        DoUploadBGVRAM(r.YStart, r.YEnd, vram);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, VRAMTex_BG);
+        const u8* pl = Parent.LogBuild->Payload(r);
+        if (pl)
+            // deferred: payload holds exactly the span bytes (Stage B snapshot)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, r.YStart, 1024, r.YEnd - r.YStart,
+                            GL_RED_INTEGER, GL_UNSIGNED_BYTE, pl);
+        else
+        {
+            u8* vram; u32 vrammask;
+            GPU2D.GetBGVRAM(vram, vrammask);
+            DoUploadBGVRAM(r.YStart, r.YEnd, vram);
+        }
         break;
     }
     case GLOp::UploadOBJVRAM:
     {
-        u8* vram; u32 vrammask;
-        GPU2D.GetOBJVRAM(vram, vrammask);
-        DoUploadOBJVRAM(r.YStart, r.YEnd, vram);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
+        const u8* pl = Parent.LogBuild->Payload(r);
+        if (pl)
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, r.YStart, 1024, r.YEnd - r.YStart,
+                            GL_RED_INTEGER, GL_UNSIGNED_BYTE, pl);
+        else
+        {
+            u8* vram; u32 vrammask;
+            GPU2D.GetOBJVRAM(vram, vrammask);
+            DoUploadOBJVRAM(r.YStart, r.YEnd, vram);
+        }
         break;
     }
     case GLOp::PrerenderLayer:
-        // Restore the snapshotted LayerConfig, then run the existing prerender.
-        // The layer-preshader/UBO-20/texture setup is shared inline setup done
-        // once before the layer loop; immediate replay reuses it. (Phase 2 will
-        // also re-upload the UBO from the snapshot.)
+    {
+        // Restore the snapshotted LayerConfig + re-upload it to the UBO (the inline
+        // path uploaded via UpdateLayerConfig, which RECOMPUTES from live registers
+        // — must not be called here). Reproduce the shared layer-preshader setup.
         memcpy(&LayerConfig, Parent.LogBuild->Payload(r), sizeof(LayerConfig));
+        glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(LayerConfig), &LayerConfig);
+
+        glUseProgram(LayerPreShader);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_BLEND);
+        glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthMask(GL_FALSE);
+        glBindBufferBase(GL_UNIFORM_BUFFER, 20, LayerConfigUBO);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, VRAMTex_BG);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, PalTex_BG);
         PrerenderLayer(r.I0);
         break;
+    }
     case GLOp::PrerenderSprites:
-        // Restore the snapshotted SpriteConfig + NumSprites, then run the existing
-        // sprite prerender (shares the inline OBJ VRAM/pal texture binds).
+    {
+        // Restore SpriteConfig + NumSprites, re-upload SpriteConfigUBO from the
+        // snapshot, reproduce the OBJ VRAM/pal texture binds, then prerender.
         memcpy(&SpriteConfig, Parent.LogBuild->Payload(r), sizeof(SpriteConfig));
         NumSprites = r.I0;
+        glBindBuffer(GL_UNIFORM_BUFFER, SpriteConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0,
+                        offsetof(sSpriteConfig, uOAM) + (NumSprites * sizeof(SpriteConfig.uOAM[0])),
+                        &SpriteConfig);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
         PrerenderSprites();
         break;
+    }
     case GLOp::RenderSpritesSpan:
     {
-        // Restore SpriteScanlineConfig span + SpriteConfig + sprite scalars, then
-        // run the existing sprite-span raster (DoRenderSprites reads ystart from
-        // LastSpriteLine and yend from its arg).
+        // Restore SpriteScanlineConfig span + SpriteConfig + sprite scalars, upload
+        // SpriteConfigUBO from the snapshot (DoRenderSprites uploads the scanline
+        // UBO itself), then run the existing sprite-span raster.
         const u8* p = Parent.LogBuild->Payload(r);
         memcpy(&SpriteScanlineConfig, p, sizeof(SpriteScanlineConfig));
         memcpy(&SpriteConfig, p + sizeof(SpriteScanlineConfig), sizeof(SpriteConfig));
         NumSprites = r.I0;
         SpriteUseMosaic = (r.I1 != 0);
         LastSpriteLine = r.YStart;
+        glBindBuffer(GL_UNIFORM_BUFFER, SpriteConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0,
+                        offsetof(sSpriteConfig, uOAM) + (NumSprites * sizeof(SpriteConfig.uOAM[0])),
+                        &SpriteConfig);
         DoRenderSprites(r.YEnd);
         break;
     }
     case GLOp::Composite2D:
     {
-        // Restore per-composite registers + ScanlineConfig span, then run the
-        // existing per-engine composite (RenderScreen recomputes CompositorConfig
-        // from the restored registers and reuses the inline LayerConfig UBO).
+        // Restore per-composite registers + ScanlineConfig span + LayerConfig, then
+        // run the composite. RenderScreen uploads the ScanlineConfig/Compositor UBOs
+        // itself; LayerConfigUBO must be re-uploaded from the span snapshot because
+        // it holds end-of-frame layer state at submit time.
         const u8* p = Parent.LogBuild->Payload(r);
         RIRCompositeRegs regs;
         memcpy(&regs, p, sizeof(regs));
         memcpy(&ScanlineConfig, p + sizeof(regs), sizeof(ScanlineConfig));
+        memcpy(&LayerConfig, p + sizeof(regs) + sizeof(ScanlineConfig), sizeof(LayerConfig));
         DispCnt = regs.DispCnt;
         LayerEnable = regs.LayerEnable;
         OBJEnable = regs.OBJEnable;
@@ -2153,6 +2281,8 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         memcpy(BGCnt, regs.BGCnt, sizeof(BGCnt));
         BlendCnt = regs.BlendCnt;
         EVA = regs.EVA; EVB = regs.EVB; EVY = regs.EVY;
+        glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(LayerConfig), &LayerConfig);
         RenderScreen(r.YStart, r.YEnd);
         break;
     }
@@ -2175,17 +2305,22 @@ void GLRenderer2D::RIRRecordRenderSprites(int line)
         rec->YEnd = line;
         rec->I0 = NumSprites;
         rec->I1 = SpriteUseMosaic ? 1 : 0;
-        RIRReplay(*rec);
         Parent.RIRReplayCount++;
+        if (Parent.RIRMode) { RIRReplay(*rec); Parent.LogBuild->Reset(); }
+        // else deferred: replayed by ReplayLog() at SubmitFrame.
     }
-    else { Parent.RIRInlineGL++; DoRenderSprites(line); }
-    Parent.LogBuild->Reset();
+    else
+    {
+        Parent.RIRInlineGL++;
+        if (Parent.RIRMode) { DoRenderSprites(line); Parent.LogBuild->Reset(); }
+    }
 }
 
 void GLRenderer2D::RIRRecordComposite(int ystart, int yend)
 {
     GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
-        GLOp::Composite2D, nullptr, sizeof(RIRCompositeRegs) + sizeof(ScanlineConfig));
+        GLOp::Composite2D, nullptr,
+        sizeof(RIRCompositeRegs) + sizeof(ScanlineConfig) + sizeof(LayerConfig));
     if (rec)
     {
         RIRCompositeRegs regs;
@@ -2200,14 +2335,21 @@ void GLRenderer2D::RIRRecordComposite(int ystart, int yend)
         u8* p = Parent.LogBuild->Payload(*rec);
         memcpy(p, &regs, sizeof(regs));
         memcpy(p + sizeof(regs), &ScanlineConfig, sizeof(ScanlineConfig));
+        // Snapshot LayerConfig too: the deferred composite reads LayerConfigUBO,
+        // which at submit holds end-of-frame layer state, not this span's.
+        memcpy(p + sizeof(regs) + sizeof(ScanlineConfig), &LayerConfig, sizeof(LayerConfig));
         rec->Engine = GPU2D.Num;
         rec->YStart = ystart;
         rec->YEnd = yend;
-        RIRReplay(*rec);
         Parent.RIRReplayCount++;
+        if (Parent.RIRMode) { RIRReplay(*rec); Parent.LogBuild->Reset(); }
+        // else deferred: replayed by ReplayLog() at SubmitFrame.
     }
-    else { Parent.RIRInlineGL++; RenderScreen(ystart, yend); }
-    Parent.LogBuild->Reset();
+    else
+    {
+        Parent.RIRInlineGL++;
+        if (Parent.RIRMode) { RenderScreen(ystart, yend); Parent.LogBuild->Reset(); }
+    }
 }
 #endif // LITEV_RENDER_THREAD
 

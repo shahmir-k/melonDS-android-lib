@@ -89,8 +89,12 @@ public:
     // (≤192 lines × 160 B ≈ 30 KB) and can appear multiple times per frame when
     // register state changes mid-frame, so size generously. VRAM is NOT copied
     // here (Stage-B shadow). 4 MB arena covers pathological many-span frames.
-    static constexpr u32 ArenaSize   = 4 * 1024 * 1024;
-    static constexpr u32 MaxRecords  = 4096;
+    // Phase 2 (Stage B, recipe §2): the arena now also carries per-op VRAM span
+    // byte snapshots (BG up to ~512 KB/engine, OBJ up to ~256 KB), so size it well
+    // above the worst single-upload frame plus mid-frame raster re-uploads. 8 MB
+    // covers pathological many-span frames; overflow is monitored (RIRInlineGL).
+    static constexpr u32 ArenaSize   = 8 * 1024 * 1024;
+    static constexpr u32 MaxRecords  = 8192;
 
     RenderLog()
     {
