@@ -56,9 +56,13 @@ COMMON=(
   -DENABLE_LTO=OFF
   -DENABLE_LTO_RELEASE=OFF
   -DLITEV_HEADLESS=ON
-  -DLITEV_PROFILE=OFF
+  -DLITEV_PROFILE="${LITEV_PROFILE:-OFF}"
   -DLITEV_AGGRESSIVE_SKIP=ON
 )
+
+# Optional separate output tree so a profiled build (LITEV_PROFILE=ON) does not
+# clobber the default non-profiled binaries. Defaults empty => unchanged paths.
+BUILD_TAG="${BUILD_TAG:-}"
 
 # Per-config LITEV flag deltas.
 config_flags() {
@@ -80,7 +84,7 @@ config_flags() {
 
 build_one() {
   local cfg="$1"
-  local bdir="$REPO/build-android/$cfg"
+  local bdir="$REPO/build-android${BUILD_TAG}/$cfg"
   local flags; flags="$(config_flags "$cfg")" || exit 1
   echo "=============================================================="
   echo ">>> configuring config=$cfg  (ABI=$ABI API=$API)"
@@ -108,6 +112,6 @@ done
 echo
 echo "=== binary sizes (stripped) ==="
 for c in "${CONFIGS[@]}"; do
-  b="$REPO/build-android/$c/liteDS-headless"
+  b="$REPO/build-android${BUILD_TAG}/$c/liteDS-headless"
   [ -f "$b" ] && printf "  %-10s %8d bytes  (%s)\n" "$c" "$(stat -f%z "$b")" "$(file -b "$b" | cut -c1-40)"
 done
