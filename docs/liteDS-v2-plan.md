@@ -1293,3 +1293,21 @@ mainRAM words from 8,204 SlowBlockTransfer9 LDM calls — the M3 Tier B
 ~0.5-0.7ms, bit-exact, effort M (task M6.14). Secondary: mainRAM u16/u8
 inline + div/sqrt result-read shortcut ~0.1-0.2ms. ARM9 floor ~6.6ms; core
 best-case ~11.9ms — 60fps remains render-side + pipelining per D.7.
+
+### D.7 addendum 2 — R0 pacing-floor diagnosis (same day): no wait exists; the floor is real serialized CPU
+
+Off-CPU tracing + schedstat on the app's emu thread (in-race, 3x GL): ~90%
+on-CPU at 1.992GHz, no audio/limiter/present wait (all three suspects
+exonerated with code+trace evidence; SPU drops-oldest and never blocks). The
+~30.5ms floor decomposes as ~18-19ms ARM/SPU/2D emulation + ~11ms Mali GL
+serialized on the SAME thread: ~5ms per-polygon glDrawElements submission
+(GPU3D_OpenGL RenderSceneChunk, scales with 3x resolution), ~2.6ms blit,
+~3.4ms glFlush/sync/save-check glue. The dispatcher A/B's "absorbed savings"
+were the Mali driver's fixed async submission cost redistributing between
+profiler buckets when frames arrive faster — an illusion of pacing.
+Implications: (1) R4 render-thread offload is confirmed as THE ceiling-raiser
+(frame -> max(ARM ~18, GL ~11) => ~50-55fps at 3x, more at 1x, before R1-R3
+and core wins); (2) R3 draw batching directly attacks the ~5ms submission;
+(3) once R4 overlaps rendering, ARM becomes the critical path and the
+dispatcher's 1.2ms + M6.14's ~0.6ms surface as FPS — ship dispatcher ON
+after R4 lands; (4) GPU hardware remains ~idle (0.1-0.7ms) even at 3x.
