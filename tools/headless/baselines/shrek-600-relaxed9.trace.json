@@ -1,0 +1,19 @@
+{
+  "trace": "shrek-600-relaxed9.trace",
+  "format_version": 1,
+  "record_size_bytes": 192,
+  "header_size_bytes": 128,
+  "frames": 600,
+  "mode": "jit",
+  "fixed_rtc_epoch": 946684800,
+  "rom_name": "shrek.nds",
+  "rom_path": "tools/headless/testroms/shrek.nds",
+  "rom_sha1": "11d7849ab234ac16fce8c84027ca1d5c3a2632b0",
+  "rom_xxh3_64": "0xd6d1f5b2042f1b93",
+  "trace_size_bytes": 115328,
+  "recorded_commit": "bdac12a8 (parent of the M6.12 implementation commit)",
+  "recorded_date": "2026-07-05",
+  "build_config": "LITEV_HEADLESS=ON, LITEV_RELAXED_ARM9_TIMING=ON, all other LITEV OFF, ENABLE_OGLRENDERER=OFF, ENABLE_GDBSTUB=OFF, Release",
+  "recorded_with": "liteDS-headless (liteDS-v2 M6.12), DraStic-style flat ARM9 timing",
+  "note": "M6.12 (plan §8) relaxed-ARM9-timing golden. NOT bit-comparable to shrek-600.trace: replacing the per-access ARM9 MemTimings region-table walk with a flat cycles-per-instruction cost is a deliberate, observable timing change (arm9Timestamp shifts from frame 0; cross-CPU interleave shifts). ARM7 timing is UNCHANGED (WiFi invariant) -- all relaxed paths gate on Num==0. This trace is the authoritative baseline for LITEV_RELAXED_ARM9_TIMING builds with no other timing-affecting flags. Double-record is byte-identical (determinism proven). Re-record: liteDS-headless --rom <shrek> --frames 600 --record-trace shrek-600-relaxed9.trace (LITEV_RELAXED_ARM9_TIMING=ON build)."
+}

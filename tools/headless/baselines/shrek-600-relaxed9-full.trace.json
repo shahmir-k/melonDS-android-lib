@@ -1,0 +1,19 @@
+{
+  "trace": "shrek-600-relaxed9-full.trace",
+  "format_version": 1,
+  "record_size_bytes": 192,
+  "header_size_bytes": 128,
+  "frames": 600,
+  "mode": "jit",
+  "fixed_rtc_epoch": 946684800,
+  "rom_name": "shrek.nds",
+  "rom_path": "tools/headless/testroms/shrek.nds",
+  "rom_sha1": "11d7849ab234ac16fce8c84027ca1d5c3a2632b0",
+  "rom_xxh3_64": "0xd6d1f5b2042f1b93",
+  "trace_size_bytes": 115328,
+  "recorded_commit": "bdac12a8 (parent of the M6.12 implementation commit)",
+  "recorded_date": "2026-07-05",
+  "build_config": "LITEV_HEADLESS=ON, LITEV_RELAXED_ARM9_TIMING=ON, LITEV_EVENT_SLICES=ON, LITEV_JIT_DISPATCH=ON, LITEV_LINK_*=ON (default), LITEV_MEM_DTCM_BLOCK=ON, LITEV_MEM_MAINRAM_LOAD=ON, ENABLE_OGLRENDERER=OFF, ENABLE_GDBSTUB=OFF, Release",
+  "recorded_with": "liteDS-headless (liteDS-v2 M6.12), relaxed ARM9 timing composed with the app-matching flag stack",
+  "note": "M6.12 relaxed-ARM9-timing golden for the APP-MATCHING full flag stack (relaxed9 + EVENT_SLICES + dispatch + link + MEM Tier-A). NOT bit-comparable to shrek-600-eventslices.trace (adds the relaxed-timing change) nor to shrek-600-relaxed9.trace (EVENT_SLICES coarsens the ARM9/ARM7 interleave on top of the flat timing). Mirrors the eventslices precedent: the shipping config gets its own golden so core changes can be gated on it. Double-record byte-identical (gate 4 determinism). ARM7 timing UNCHANGED (WiFi invariant). Re-record: LITEV_RELAXED_ARM9_TIMING + LITEV_EVENT_SLICES + LITEV_JIT_DISPATCH + LITEV_MEM_DTCM_BLOCK + LITEV_MEM_MAINRAM_LOAD build, --frames 600 --record-trace shrek-600-relaxed9-full.trace."
+}

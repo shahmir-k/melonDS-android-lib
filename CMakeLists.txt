@@ -252,6 +252,24 @@ if (LITEV_NEON_GEOMETRY)
     add_compile_definitions(LITEV_NEON_GEOMETRY=1)
 endif()
 
+# M6.12 (plan §8, "Milestone 5 ARM9 relaxed timing"): DraStic-style flat
+# cycles-per-instruction for ARM9 ONLY. Replaces the per-access MemTimings
+# region-table walk (code-fetch wait states, data-access sequential/non-seq
+# distinctions, incl. every GXFIFO MMIO write's accounting) with a fixed flat
+# cost. The flat cost source (ARMv5::CodeRead32 / DataRead*/DataWrite* in CP15.cpp)
+# propagates to BOTH the interpreter runtime AND the JIT's compile-time-baked cycle
+# constants (the decode loop reads cpu->CodeCycles/DataCycles), so JIT-emitted
+# blocks skip the timing math and more cycle contributions fold into ConstantCycles.
+# ARM7 timing stays EXACT permanently (WiFi/MP invariant) -- every relaxed path is
+# gated on Num==0. Default OFF -> byte-identical to the exact-timing tree. This is a
+# DELIBERATE semantic timing change: exact-timing goldens will NOT verify under it;
+# it carries its own golden (shrek-600-relaxed9.trace). Host-agnostic (pure C++;
+# no arch guard) so all configs build on aarch64 and x86_64.
+option(LITEV_RELAXED_ARM9_TIMING "M6.12/plan §8: flat cycles-per-instruction for ARM9 (ARM7 stays exact)" OFF)
+if (LITEV_RELAXED_ARM9_TIMING)
+    add_compile_definitions(LITEV_RELAXED_ARM9_TIMING=1)
+endif()
+
 add_subdirectory(src)
 
 # --- liteDS-v2 core-fix: export LITEV_* configuration as a PUBLIC usage requirement ---

@@ -81,6 +81,12 @@ config_flags() {
       # M6.11 step 3: the app-matching `full` stack + integer-NEON GPU3D geometry.
       # A/B against `full` isolates the LITEV_NEON_GEOMETRY delta on the A55.
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_NEON_GEOMETRY=ON" ;;
+    full-relaxed9)
+      # M6.12 / plan §8: the app-matching `full-neon` stack + DraStic-style flat
+      # ARM9 timing. A/B against `full-neon` isolates the LITEV_RELAXED_ARM9_TIMING
+      # delta on the A55 (targets the 7.55ms ARM9 bucket incl. GXFIFO write timing).
+      # ARM7 timing stays exact (WiFi invariant). Deliberate semantic timing change.
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_NEON_GEOMETRY=ON -DLITEV_RELAXED_ARM9_TIMING=ON" ;;
     *)
       echo "error: unknown config '$1'" >&2; return 1 ;;
   esac

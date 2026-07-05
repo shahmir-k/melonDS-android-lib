@@ -1174,3 +1174,27 @@ cycles-per-instruction removes per-access timing math including every GXFIFO
 write's accounting (which the decomposition shows is where geometry cost
 actually lives). Semantic change: new golden config required; ARM7 stays
 exact (WiFi invariant).
+
+## D.6 — M6.12 relaxed ARM9 timing (2026-07-05): CLOSED-NEGATIVE
+
+**Implemented, flag-gated (`LITEV_RELAXED_ARM9_TIMING`, default OFF), correct,
+deterministic, game runs a full live race under it — but a performance
+REGRESSION on both host (−6.0% FPS) and the A55 (−4.8% FPS; ARM9 bucket 7.76 →
+9.11 ms, +17.3%).** All gates pass (OFF byte-identical to both existing goldens;
+new goldens `shrek-600-relaxed9{,-full}.trace` double-record byte-identical and
+self-verify). Full report: `docs/m6.12-relaxed-arm9-device.md`.
+
+Root cause — the D.5 premise did not survive the code: **in this JIT, ARM9
+timing is baked at block-COMPILE time** (the decode loop runs the interpreter
+once to fill `CurInstr.CodeCycles/DataCycles`; the emitted block just does
+`ADD RCycles, #const`). There is **no per-access MemTimings walk in the ARM9
+runtime hot path** to remove — the 8,451 GXFIFO writes/frame each cost one baked
+constant, set at compile time; `SlowWrite9` performs the write without touching
+cycles. Relaxing the model cannot delete runtime work; it only shrinks each
+instruction's sim-time, which makes the game's status-poll/busy-wait loops
+iterate MORE per real frame (measured: ARM9 u32-load helper calls +23.6%, ARM9
+idle-loop hits +51–58%, scheduler iterations +21%) → ARM9 exec time GROWS. A
+DraStic-style timing win requires DraStic's runtime-computed-timing structure,
+which melonDS's compile-time-baking JIT does not have, so there is nothing to
+reclaim. Reclassified to the same closed-negative tier as M6.11 NEON-geometry;
+the emulation-side ARM9 bucket is not reachable by timing relaxation.
