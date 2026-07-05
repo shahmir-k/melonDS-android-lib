@@ -1148,6 +1148,14 @@ void GPU::StartFrame() noexcept
 {
     ScreensEnabled = !!(NDS.PowerControl9 & (1<<0));
 
+#ifdef LITEV_RENDER_THREAD
+    // R4 (§5.1 Tier 1): recompute the capture-active fallback flag for this
+    // frame. Seeded from any pre-existing captured block (the SyncVRAMCapture
+    // feedback edge); CheckCaptureStart at VCount 0 sets it if a capture also
+    // starts this frame. Finalized before the first visible DrawScanline.
+    CaptureActiveThisFrame = AnyVRAMCaptureActive();
+#endif
+
     // only run the display FIFO if needed:
     // * if it is used for display or capture
     // * if we have display FIFO DMA
@@ -1316,6 +1324,10 @@ void GPU::StartScanline(u32 line) noexcept
         {
             CaptureEnable = true;
             CheckCaptureStart();
+#ifdef LITEV_RENDER_THREAD
+            // R4 (§5.1 Tier 1): a capture starts this frame -> not offloadable.
+            CaptureActiveThisFrame = true;
+#endif
         }
     }
     else if (VCount == 192)
@@ -1604,6 +1616,22 @@ void GPU::VRAMCBFlagsOr(u32 bank, u32 block, u16 val)
         b = (b + 1) & 0x3;
     }
 }
+
+#ifdef LITEV_RENDER_THREAD
+bool GPU::AnyVRAMCaptureActive() const noexcept
+{
+    // R4 (docs/r4-render-thread-design.md §5.1 Tier 1): a captured VRAM block
+    // still holds pixels that live only in a GL texture until the CPU touches
+    // the block (SyncVRAMCapture reads them back). If any such block exists, the
+    // frame is on the capture-feedback edge and must not be offloaded.
+    for (u32 b = 0; b < 16; b++)
+    {
+        if (VRAMCaptureBlockFlags[b] & CBFlag_IsCapture)
+            return true;
+    }
+    return false;
+}
+#endif
 
 void GPU::CheckCaptureStart()
 {
