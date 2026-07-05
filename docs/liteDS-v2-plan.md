@@ -1276,3 +1276,20 @@ serialization ~6) => ~17-18ms wall => ~55-58fps at 3x resolution, better at
 1x; with thermal headroom restored by fewer joules/frame. Reserve tier
 (ARM9 idle-skip NEW-GOLDEN, Tier-B memory stubs, hot-region recompilation)
 remains if a gap persists.
+
+### D.7 addendum — ARM9 deep-dive results (same day)
+
+On-device hot-block histogram + slow-memory classification (bit-exact
+instrumented runs, in-race window): ARM9's 7.55ms is well-distributed genuine
+game execution (~46 host-cycles/guest-instr; top-50 blocks = 59% but all
+diverse mainRAM game code). Busy-wait/poll share is <0.15ms (DISPSTAT 0,
+GXSTAT 1.5, IPCSYNC 0.5 polls/frame; VBlank is a HALT already fast-forwarded
+1,373x/frame) — ARM9 idle-skip is CLOSED before implementation, and D.6's
+relaxed-timing regression is fully explained. JIT churn near zero; dispatch
+84% in-asm. fastmem: neutral on the ARM9 bucket in matched A/B (keep ON,
+not a lever). THE one core pickup: 86% of slow reads (23,162/frame) are
+mainRAM words from 8,204 SlowBlockTransfer9 LDM calls — the M3 Tier B
+"block-LOAD inline tier for mainRAM" deferred in C.3 now has its evidence:
+~0.5-0.7ms, bit-exact, effort M (task M6.14). Secondary: mainRAM u16/u8
+inline + div/sqrt result-read shortcut ~0.1-0.2ms. ARM9 floor ~6.6ms; core
+best-case ~11.9ms — 60fps remains render-side + pipelining per D.7.
