@@ -24,7 +24,11 @@ void main()
     uint depth = texture(ClearBitmapDepth, pos).r;
     float fdepth = float(depth & 0xFFFFFFu) / 16777216.0;
 
+#ifdef GL_ES
+    oColor = color.bgra; // Mali: 3D layer emitted BGRA (see 3DRenderFS)
+#else
     oColor = color;
+#endif
     oAttr.r = float(uOpaquePolyID) / 63.0;
     oAttr.g = 0.0;
     oAttr.b = float(depth >> 24);

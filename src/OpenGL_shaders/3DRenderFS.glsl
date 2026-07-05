@@ -93,7 +93,14 @@ vec4 FinalColor()
         }
     }
 
+#ifdef GL_ES
+    // Mali/Android GLES: the 3D layer reaches the display with R/B swapped
+    // relative to the (correct) 2D compositor output, so the whole 3D layer must
+    // be emitted in BGRA (matching the v1 GLES renderer). Desktop keeps RGBA.
+    return col.bgra;
+#else
     return col.rgba;
+#endif
 }
 
 void main()
