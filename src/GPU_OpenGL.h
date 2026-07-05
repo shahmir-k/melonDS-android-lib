@@ -63,6 +63,7 @@ public:
     void SetDeferredSubmit(bool enable) override;
     bool IsDeferredSubmit() const override { return DeferSubmit; }
     void SubmitFrame() override;
+    void SwapBuffers() override;
 #endif
 
 private:
@@ -160,7 +161,29 @@ private:
     // boundary this tranche stops at. Default false -> submission inline in
     // RunFrame, byte-identical to flag-OFF.
     bool DeferSubmit = false;
+
+    // R4 step-2 (this tranche): the 2D final-composite phase is deferred out of
+    // RunFrame into SubmitFrame(). SubmitPending marks a frame whose VBlank
+    // composite + buffer swap were deferred; SubmitReplaying is true only while
+    // SubmitFrame() replays them (so GLRenderer2D::RenderScreen reads the
+    // snapshotted 3D output instead of the live one). See SubmitFrame() for the
+    // full contract and the 3D-output coupling this resolves.
+    bool SubmitPending = false;
+    bool SubmitReplaying = false;
+    // Snapshot of the 3D color output (OutputTex3D) taken at the VBlank point,
+    // before the next frame's Start3DRendering (VCount 215) overwrites the single
+    // OutputTex3D. The deferred composite reads this shadow so its output is
+    // byte-identical to the inline path.
+    GLuint SubmitShadow3DTex = 0;
+    GLuint SubmitShadow3DFB = 0;      // draw FBO: shadow attached
+    GLuint SubmitShadow3DReadFB = 0;  // read FBO: OutputTex3D attached at blit time
+    void Submit_Snapshot3D();
 #endif
+
+    // The 2D final-composite GL body (per-engine composite + final pass +
+    // display capture). Called inline from VBlank() on the synchronous path and,
+    // under LITEV_RENDER_THREAD deferred mode, from SubmitFrame() during replay.
+    void VBlankSubmit();
 
     void SetScaleFactor(int scale);
 

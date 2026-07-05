@@ -299,6 +299,22 @@ bool GLRenderer::Init()
     if (!Rend2D_B->Init()) return false;
     if (!Rend3D->Init()) return false;
 
+#ifdef LITEV_RENDER_THREAD
+    // R4 deferred-submit: shadow of the 3D color output + its blit FBOs. The
+    // texture is sized in SetScaleFactor (matching OutputTex3D = RGBA8,
+    // ScreenW x ScreenH). The read FBO gets OutputTex3D attached at blit time.
+    glGenTextures(1, &SubmitShadow3DTex);
+    glBindTexture(GL_TEXTURE_2D, SubmitShadow3DTex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenFramebuffers(1, &SubmitShadow3DFB);
+    glBindFramebuffer(GL_FRAMEBUFFER, SubmitShadow3DFB);
+    glFramebufferTexture(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, SubmitShadow3DTex, 0);
+    glGenFramebuffers(1, &SubmitShadow3DReadFB);
+#endif
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
 }
@@ -336,6 +352,12 @@ GLRenderer::~GLRenderer()
     glDeleteBuffers(1, &FPConfigUBO);
     glDeleteBuffers(1, &CaptureConfigUBO);
 
+#ifdef LITEV_RENDER_THREAD
+    glDeleteTextures(1, &SubmitShadow3DTex);
+    glDeleteFramebuffers(1, &SubmitShadow3DFB);
+    glDeleteFramebuffers(1, &SubmitShadow3DReadFB);
+#endif
+
     auto rend2D = dynamic_cast<GLRenderer2D*>(Rend2D_A.get());
     rend2D->DeleteShaders();
 }
@@ -361,6 +383,13 @@ void GLRenderer::Reset()
     LastLine = 0;
     LastCapLine = 0;
     Aux0VRAMCap = -1;
+
+#ifdef LITEV_RENDER_THREAD
+    // Drain protocol (design §5.2): reset/savestate-load discards any
+    // half-captured deferred frame so no stale composite is replayed.
+    SubmitPending = false;
+    SubmitReplaying = false;
+#endif
 
     Rend2D_A->Reset();
     Rend2D_B->Reset();
@@ -456,6 +485,15 @@ void GLRenderer::SetScaleFactor(int scale)
         glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, FPOutputTex[i], 0, 1);
         glDrawBuffers(2, fbassign2);
     }
+
+#ifdef LITEV_RENDER_THREAD
+    // R4 deferred-submit: size the 3D-output shadow to match OutputTex3D.
+    if (SubmitShadow3DTex)
+    {
+        glBindTexture(GL_TEXTURE_2D, SubmitShadow3DTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ScreenW, ScreenH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
+#endif
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -678,6 +716,34 @@ void GLRenderer::RenderScreen(int ystart, int yend)
 }
 
 void GLRenderer::VBlank()
+{
+#ifdef LITEV_RENDER_THREAD
+    // R4 step-2 capture/submit split (single-thread this tranche). When deferred
+    // submission is selected and the frame does NOT use display capture (the one
+    // feedback edge, §5.1 Tier 1 -> synchronous), do not issue the 2D final
+    // composite now. Snapshot the 3D color output (the single GL texture the next
+    // frame's Start3DRendering at VCount 215 would overwrite before SubmitFrame
+    // runs) and mark the composite pending; SubmitFrame() replays it after
+    // RunFrame. SwapBuffers() is deferred in lockstep so the replayed composite
+    // still targets THIS frame's back buffer. Every other input the deferred
+    // composite reads (the per-engine composite outputs, prerendered layer/sprite
+    // textures, config UBOs, aux buffers) is not mutated between here and
+    // SubmitFrame() during single-thread operation (no DrawScanline runs at
+    // VCount >= 192; DrawSprites(0) at VCount 262 only re-uploads OBJ VRAM and
+    // marks state dirty for the NEXT frame's prerender). Result: byte-identical
+    // to the inline path, verified by on-device screenshot parity.
+    if (DeferSubmit && !GPU.CaptureActiveThisFrame)
+    {
+        Submit_Snapshot3D();
+        SubmitPending = true;
+        return;
+    }
+#endif
+
+    VBlankSubmit();
+}
+
+void GLRenderer::VBlankSubmit()
 {
     Rend2D_A->VBlank();
     Rend2D_B->VBlank();
@@ -1016,59 +1082,40 @@ void GLRenderer::ShaderCompileStep(int& current, int& count)
 // ===========================================================================
 // R4 render-thread offload seam (docs/r4-render-thread-design.md §3.2, §8).
 //
-// Purpose of these entry points: give the app glue a stable, exported API to
-// drive the frame's GL submission as a phase separable from RunFrame, so the
-// app tranche can move that phase onto a render thread WITHOUT further core
-// changes to this API surface.
+// This tranche implements the FINAL-COMPOSITE phase of the capture/submit split
+// (design step 2), single-threaded: SubmitFrame() is called on the emulation
+// thread immediately after RunFrame. It proves the split is byte-correct before
+// a real render thread is introduced.
 //
-//   SetDeferredSubmit(true)  -- chosen once at emu start (topology is fixed for
-//                               the session; toggling requires a renderer
-//                               re-init, per §6). Selects the deferred path.
-//   IsDeferredSubmit()       -- query.
-//   SubmitFrame()            -- called on the render thread after RunFrame to
-//                               replay the frame's deferred GL submission.
+// What is deferred out of RunFrame into SubmitFrame():
+//   * the 2D final composite of the frame's VBlank span (both engine composites
+//     GLRenderer2D::VBlank/RenderScreen + the final pass GLRenderer::RenderScreen
+//     + display-capture DoCapture), and
+//   * the back-buffer swap (SwapBuffers).
 //
-// -------------------------- BOUNDARY (this tranche stops here) --------------
-// The load-bearing body behind SubmitFrame() is the design's step-2 packet
-// materialization for the 2D compositor, which the design itself rates
-// Med-High risk / ~4-6 days. Reading the actual melonDS GL renderer shows why
-// it cannot be reduced to a mechanical "record spans, replay draws":
+// The coupling that makes this non-trivial (design boundary note item 3): the
+// 2D compositor reads the 3D color output OutputTex3D, which is a SINGLE GL
+// texture (GLRenderer3D ColorBufferTex) that the NEXT frame's Start3DRendering
+// (GPU.cpp VCount 215, still inside the same RunFrame) overwrites BEFORE
+// SubmitFrame runs. We resolve it by snapshotting OutputTex3D into a shadow
+// texture at the VBlank point (Submit_Snapshot3D) and having the deferred
+// composite read the shadow (GLRenderer2D::RenderScreen, gated by
+// SubmitReplaying). The mid-frame partial composites (issued inline during
+// DrawScanline at VCount < 192) are unchanged; only the VBlank span is deferred,
+// and it reads exactly the pixels the inline path would have read.
 //
-//   1. The per-scanline composite (GLRenderer2D::RenderScreen) and the final
-//      pass (GLRenderer::RenderScreen) issue GL that reads LayerConfig /
-//      CompositorConfig UBOs which are re-uploaded MID-FRAME as 2D registers
-//      change (GPU2D_OpenGL.cpp glBufferSubData of LayerConfig/CompositorConfig
-//      inside UpdateAndRender). A deferred composite of an early span would
-//      therefore read the FINAL frame's config, not the config as of that span.
-//      Correct deferral needs a render-span list with a per-span config
-//      snapshot -- i.e. the packet's items 5-8/12 fully materialized and
-//      double-buffered.
-//   2. The layer/sprite prerenders and the VRAM/palette texture uploads
-//      (glTexSubImage2D from live GPU.VRAM / GPU.Palette) read LIVE emulation
-//      state. Once submission runs on a thread while RunFrame N+1 mutates VRAM,
-//      those reads are races unless the flatten (MakeVRAMFlat_*Coherent) is
-//      redirected into a render-idle shadow flat mirror (packet item 11) with
-//      dirty-range fill, plus a palette dirty-range copy (item 10).
-//   3. The 2D compositor consumes the 3D output texture (OutputTex3D, read at
-//      GPU2D_OpenGL.cpp in RenderScreen). 3D and 2D submission are therefore
-//      coupled and must move across the seam together; neither can be deferred
-//      alone.
+// Capture-active frames (GPU.CaptureActiveThisFrame, §5.1 Tier 1) never defer:
+// they run the synchronous VBlankSubmit() inline, so the capture feedback edge
+// (SyncVRAMCapture writing rendered pixels back into traced VRAM) is untouched.
 //
-// That body's flag-ON correctness is validated ONLY by the design's §7 gate 2
-// (on-device screenshot parity flag-ON vs OFF, allowing a <=1-frame shift).
-// This environment has no device (per the task's "No device access"), so the
-// packet body cannot be smoke-tested at all -- every gate available here
-// (host goldens, app compile) passes for a stub too, giving no signal on the
-// rewrite's correctness. Per the design's "correctness never regresses" rule
-// and the task's instruction to stop at a clean boundary rather than force an
-// unverifiable change, the packet materialization is deferred to a follow-up
-// that has device screenshot-parity in the loop.
-//
-// Until then, DeferSubmit is honored as API state only: GL submission stays
-// inline in RunFrame (synchronous, byte-identical to flag-OFF), SubmitFrame()
-// has no deferred work to replay, and capture-active frames
-// (GPU.CaptureActiveThisFrame, §5.1 Tier 1) would take the synchronous path
-// unconditionally in any case.
+// STILL REMAINING for the threaded design (a later tranche, NOT this one): the
+// per-span 2D config packet (LayerConfig/CompositorConfig snapshots, items
+// 5-8/12) and the VRAM/palette shadow flat mirror (items 10-11). Those are only
+// needed once RunFrame N+1 can mutate live VRAM/registers WHILE submission runs
+// concurrently. In single-thread operation submission completes before RunFrame
+// N+1 begins, so the live config/VRAM the inline prerenders/uploads already used
+// during THIS frame are still valid at SubmitFrame; only the 3D-output overwrite
+// (above) crosses the boundary, and the shadow handles it.
 // ===========================================================================
 
 void GLRenderer::SetDeferredSubmit(bool enable)
@@ -1076,13 +1123,49 @@ void GLRenderer::SetDeferredSubmit(bool enable)
     DeferSubmit = enable;
 }
 
+void GLRenderer::Submit_Snapshot3D()
+{
+    // Copy the just-finished 3D color output into the shadow so the deferred
+    // composite can read it after the next Start3DRendering overwrites the live
+    // OutputTex3D. glBlitFramebuffer (proven available; used by DoCapture).
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, SubmitShadow3DReadFB);
+    glFramebufferTexture(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, OutputTex3D, 0);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, SubmitShadow3DFB);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+
+    glBlitFramebuffer(0, 0, ScreenW, ScreenH,
+                      0, 0, ScreenW, ScreenH,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+}
+
+void GLRenderer::SwapBuffers()
+{
+    // Deferred frames swap only after the deferred composite has been replayed
+    // (in SubmitFrame). This keeps the deferred VBlank composite targeting the
+    // same back buffer the inline mid-frame composites already wrote to.
+    if (SubmitPending)
+        return;
+    BackBuffer ^= 1;
+}
+
 void GLRenderer::SubmitFrame()
 {
-    // No deferred submission is recorded yet (see the BOUNDARY note above):
-    // the inline path in RunFrame has already issued this frame's GL. This is a
-    // safe no-op that gives the app tranche the exported render-thread entry
-    // point to call after RunFrame; the deferred-replay body lands with the
-    // packet materialization.
+    if (!SubmitPending)
+        return;
+
+    SubmitPending = false;
+
+    // Replay the deferred 2D final composite, reading the 3D shadow instead of
+    // the (now-overwritten) live OutputTex3D.
+    SubmitReplaying = true;
+    VBlankSubmit();
+    SubmitReplaying = false;
+
+    // Perform the swap that SwapBuffers() deferred, so GetFramebuffers() returns
+    // the frame just composited.
+    BackBuffer ^= 1;
 }
 #endif
 

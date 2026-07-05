@@ -1810,7 +1810,18 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
         glActiveTexture(GL_TEXTURE0 + i);
 
         if ((i == 0) && (DispCnt & (1<<3)))
+        {
+#ifdef LITEV_RENDER_THREAD
+            // R4 deferred submit: during SubmitFrame replay the live OutputTex3D
+            // has already been overwritten by the next frame's Start3DRendering,
+            // so read the snapshot taken at the VBlank point instead.
+            glBindTexture(GL_TEXTURE_2D,
+                          Parent.SubmitReplaying ? Parent.SubmitShadow3DTex
+                                                 : Parent.OutputTex3D);
+#else
             glBindTexture(GL_TEXTURE_2D, Parent.OutputTex3D);
+#endif
+        }
         else
             glBindTexture(GL_TEXTURE_2D, BGLayerTex[i]);
 
