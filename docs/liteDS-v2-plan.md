@@ -1330,3 +1330,26 @@ resolves automatically when R4 reaches 60fps. Two cheap copy-worthy ideas:
 audio never back-pressures emulation, instrument underrun/silence-fill events
 as a clean realtime-miss signal for the profiler. Full teardown:
 docs/drastic-audio-teardown.md.
+
+### D.7 addendum 4 — R2/R3 device verification: R2 shelved, R3 diet re-aimed at redundant state
+
+**R2 deferred blit = REGRESSION on-device (3x GL, verified).** Toggle ON vs OFF
+medians: blit 2.53->3.60ms (did NOT collapse), cpu_loop 31.26->33.13, fps
+31.9->30.0. Correctness all-pass (screenshots identical, savestate/pause/3-min
+stability clean, 0 crashes). Root cause = R0's floor: the frame is CPU-bound
+serialized, no idle-GPU window for a deferred blit to hide in, so deferral only
+shuffles cost between buckets (other 3.38->0.73, runFrame 25.3->28.8) and
+slightly worsens. VERDICT: R2 provides no benefit pre-overlap. Keep the toggle
+default OFF / SHELVE the commit until R4 creates a real overlap window, then
+re-measure (the blit belongs on the render thread, which subsumes R2 anyway).
+
+**R3 GL counters aim the diet — it's redundant STATE, not draw count.** Per-frame
+in-race medians (menu->race): draws 5->124, binds 411->529, texparam 17->251,
+uniforms 4->29, uploadKB 79->121, progs 6->7. The ~411 binds present at a STATIC
+menu prove a large fixed redundant-rebind baseline independent of scene. Ranked
+diet targets: (1) binds 529/frame — redundant-state shadow cache (skip no-op
+glBindTexture/glBind*), (2) texparam 251/frame — cache glTexParameter per
+texture / GLES sampler objects (steepest race scaler, +234), (3) draws
+124/frame — batching, far lower leverage. So R3 = redundant-state shadowing
+FIRST (biggest win, lowest risk), draw batching last. Upload 121KB/frame is
+modest, not a target. This is the ~5ms Mali-submission slice from R0.
