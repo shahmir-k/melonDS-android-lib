@@ -1140,3 +1140,37 @@ rendering caps at ~40. The campaign is now entirely emulation-side, in order:
 M6.9 dispatcher-in-app (in progress), M6.11 geometry engine (requires
 decomposing the 20ms RunFrame bucket — GXFIFO/geometry share unknown), M6.12
 relaxed timing, hot-region recompilation (Appendix A follow-up).
+
+## D.5 — M6.9 + M6.11 outcomes (2026-07-05): geometry front closed, M6.12 is the path
+
+**M6.9 dispatcher-in-app: DONE.** Root cause was ABI, not W^X: LITEV_* macros
+were directory-scoped, so the app's JNI glue compiled a smaller NDS layout than
+the core constructed (SEGV at construction). Fix: LITEV_* exported as PUBLIC
+usage requirements of core (core 1ca8b152, mainline 54c7ff5c's parent). App
+with dispatcher+link ON: boots clean, in-race stable, median 33.0 FPS
+(baseline 31-33). App branch cebcf95 repins core.
+
+**M6.11 decomposition (host 54c7ff5c, device 4c166ca8):** A55 in-race,
+app-matching config, per frame: ARM9 JIT 7.55ms (55.7% of emu-compute),
+GPU3D geometry 2.29ms (16.9%), ARM7 1.95ms, DMA 1.76ms; 8,451 GX cmds/frame
+@ 271ns. Menus: 22 cmds/frame (geometry idles, as D.1 predicted). Full detail:
+docs/m6.11-runframe-decomposition-{host,device}.md.
+
+**M6.11 NEON geometry (cbaaf32e): landed flag-gated (LITEV_NEON_GEOMETRY,
+default OFF), bit-exact on all four gates, but the measured win is ~0.02ms
+(~1%) on the A55 — order of magnitude under the 1.0-1.2ms projection.**
+Verdict: the 271ns/cmd bucket is dominated by FIFO dispatch + SubmitPolygon/
+clipping/vertex-RAM writes, not transform arithmetic; single 4-wide integer
+dot products can't amortize NEON lane-move overhead on an in-order A55. The
+D.2 M6.11 "NEON-ify the math" premise is CLOSED-NEGATIVE for math-only
+vectorization; a material geometry win requires structural work (batched
+GXFIFO drain, clipping restructure) — reclassified to the same reserve tier
+as hot-region recompilation.
+
+**60 FPS path forward (evidence-ranked):** ARM9 is 7.55ms and already carries
+every landed optimization; geometry structural work is speculative. The next
+sanctioned front is **M6.12 relaxed ARM9 timing (plan §8)** — flat
+cycles-per-instruction removes per-access timing math including every GXFIFO
+write's accounting (which the decomposition shows is where geometry cost
+actually lives). Semantic change: new golden config required; ARM7 stays
+exact (WiFi invariant).
