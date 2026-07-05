@@ -55,6 +55,16 @@ public:
     bool NeedsShaderCompile() override;
     void ShaderCompileStep(int& current, int& count) override;
 
+#ifdef LITEV_RENDER_THREAD
+    // --- R4 render-thread offload seam (docs/r4-render-thread-design.md) ---
+    // Exported phase entry points the app tranche drives. See the definitions
+    // in GPU_OpenGL.cpp for the precise contract and the documented boundary at
+    // which this tranche stops (packet materialization + VRAM/palette shadow).
+    void SetDeferredSubmit(bool enable) override;
+    bool IsDeferredSubmit() const override { return DeferSubmit; }
+    void SubmitFrame() override;
+#endif
+
 private:
     friend class GLRenderer2D;
     friend class GLRenderer3D;
@@ -142,6 +152,15 @@ private:
     int LastLine;
     int LastCapLine;
     int Aux0VRAMCap;
+
+#ifdef LITEV_RENDER_THREAD
+    // R4: deferred-submit mode selected by the app glue at emu start. When set
+    // (and the frame is not capture-active), GL submission is meant to move to
+    // the render thread's SubmitFrame() phase. See SubmitFrame() for the
+    // boundary this tranche stops at. Default false -> submission inline in
+    // RunFrame, byte-identical to flag-OFF.
+    bool DeferSubmit = false;
+#endif
 
     void SetScaleFactor(int scale);
 
