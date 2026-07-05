@@ -11,8 +11,8 @@
 
     IMPORTANT ordering: include this header in a renderer .cpp AFTER the GL
     headers (i.e. after GPU_OpenGL.h / OpenGLSupport.h), because on Android the
-    GLES3 compat shim (GLES_Compat.h) already remaps glTexImage*/glTexSubImage*
-    to melonGL* wrappers; we #undef those and forward to the melonGL* function
+    GLES3 compat shim (GLES_Compat.h) already remaps the glTexImage / glTexSubImage
+    entry points to melonGL* wrappers; we #undef those and forward to the melonGL*
     directly so the 1555->5551 conversion is preserved.
 
     Gating: the wrappers only exist when LITEV_PROFILE && __ANDROID__. That is
