@@ -235,6 +235,28 @@ if (LITEV_MEM_DTCM_BLOCK OR LITEV_MEM_MAINRAM_LOAD)
     endif()
 endif()
 
+# M6.14 Tier A (plan Appendix D.7): MainRAM-hit inline path for LDM/STM BLOCK
+# LOADS. In-race the ARM9 issues ~8.2k SlowBlockTransfer9 (LDM) calls/frame that
+# re-enter SlowRead9 once per word -> ~23k MainRAM word-reads/frame (86% of all
+# slow reads). This composes the two landed Tier A wins: a block (LDM) whose
+# whole address range lies inside MainRAM takes a guarded direct-pointer copy
+# instead of per-word SlowRead9, exactly as MEM_DTCM_BLOCK does for DTCM. LOADS
+# ONLY (stores stay on the helper -> JIT invalidation untouched). ARM9 only
+# (SlowBlockTransfer9; ARM7/WiFi untouched). Same exactness class as MEM_DTCM_BLOCK:
+# cycles are baked at compile time by Comp_AddCycles_CDI independent of the memory
+# path, the copy touches the SAME bytes SlowBlockTransfer9 would, and any runtime
+# guard miss (DTCM overlay, region exit, MainRAM mirror wrap) falls back to the
+# exact helper. Default OFF -> emission-identical to the pre-M6.14 tree.
+option(LITEV_MEM_MAINRAM_BLOCK "M6.14 Tier A: MainRAM inline path for LDM/STM block LOADS (ARM9)" OFF)
+if (LITEV_MEM_MAINRAM_BLOCK)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_MEM_MAINRAM_BLOCK=1)
+    else()
+        message(FATAL_ERROR "LITEV_MEM_MAINRAM_BLOCK requires an AArch64 target "
+                            "(the x64 JIT keeps the upstream helper paths).")
+    endif()
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
