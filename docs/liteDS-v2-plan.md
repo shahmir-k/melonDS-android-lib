@@ -1414,3 +1414,46 @@ call-bound). Post-R4, the banked core wins (dispatcher 1.2ms, M6.14 mainRAM,
 event-slices) become the ARM-side critical path and surface as FPS. If R4's
 overlap does not materialize the win on-device, the honest conclusion is 60fps
 at 3x is not reachable on this A55 without dropping internal resolution.
+
+### D.7 addendum 7 — DraStic full teardown (Ghidra, 3285 fns): findings for the campaign
+
+Complete decompile of libdrastic_arm64.so r2.6.0.4a → docs/drastic-teardown/
+(12 subsystem docs, 4131 lines). Campaign-relevant conclusions:
+
+**CONFIRMS closed levers (do not reopen):**
+- DraStic ALSO bakes cycle cost at compile time (per-instr base + LDM/STM popcount
+  + waitstate tables, one subtract/block against a signed down-counter). M6.12
+  relaxed-timing regression was correct; DraStic would regress identically.
+- DraStic's #1 speed technique — per-block backward liveness → dead-flag AND
+  dead-register elimination — is ALREADY in melonDS's JIT (FloodFillSetFlags +
+  ARM_InstrInfo ReadFlags/DstRegs/SrcRegs/NotStrictlyNeeded). Not a new lever;
+  explains why the ARM9 bucket is dense (~46 cyc/instr), not naive-codegen bloat.
+
+**VALIDATES R4 as the right move:** DraStic runs emulation on the caller thread
+and renders FULLY off the critical path — double-buffered software framebuffer,
+emu's only present cost is a buffer-index flip + condvar signal; a separate GL
+thread does upload+post-FX. This is exactly R4's design. Frame pacing = audio
+back-pressure + GLSurfaceView vsync, no sleep-to-60 (matches our R0/audio
+findings). R4 is DraStic's proven architecture.
+
+**THE DEEPER ARCHITECTURAL DIVERGENCE (the real ceiling question):** DraStic does
+NOT use GL for rendering at all — GLES2 only blits+post-processes a software
+framebuffer (no glDrawElements/VBO). Its entire 2D compositor and 3D rasterizer
+are software-NEON on DEDICATED helper threads (2D engine-B on its own thread; 3D
+raster split 12×16-line bands across 4 threads). melonDS-v2's ~11ms GL-content
+CPU (R0) is its full-GL renderer submission — an architecture DraStic proves is
+NOT required for DS 60fps on this silicon. So:
+- R4 (offload GL submission to a thread) → the sanctioned next step, gets ~54fps.
+- IF R4's overlap is insufficient, the DraStic-proven ceiling-raiser is the M6.6
+  HYBRID reconsidered with in-race data: soft-2D(NEON) + soft-or-GL-3D + GL-as-
+  dumb-blit, rendering on dedicated A55 helper threads — v1's architecture, which
+  is literally DraStic's. D.4 rejected M6.6 on 1.2ms MENU compositor data; in-race
+  the GL cost is ~11ms, so the rejection no longer holds and M6.6 is REOPENED as
+  the reserve behind R4.
+
+**Other portable ideas (logged, not yet actioned):** branchless 2KB software
+pointer-table fastmem (vs our SIGSEGV-handler fastmem — may suit A55 better;
+big rearchitecture); deferred/batched GXFIFO threaded-code interpreter (our
+GXFIFO is already deferred per M6.11); LLE clean-room custom BIOS + synthesized
+firmware direct-boot (compat/legal, not perf). Full detail per subsystem in
+docs/drastic-teardown/.
