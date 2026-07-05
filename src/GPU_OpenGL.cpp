@@ -932,4 +932,79 @@ void GLRenderer::ShaderCompileStep(int& current, int& count)
     return Rend3D->ShaderCompileStep(current, count);
 }
 
+
+#ifdef LITEV_RENDER_THREAD
+// ===========================================================================
+// R4 render-thread offload seam (docs/r4-render-thread-design.md §3.2, §8).
+//
+// Purpose of these entry points: give the app glue a stable, exported API to
+// drive the frame's GL submission as a phase separable from RunFrame, so the
+// app tranche can move that phase onto a render thread WITHOUT further core
+// changes to this API surface.
+//
+//   SetDeferredSubmit(true)  -- chosen once at emu start (topology is fixed for
+//                               the session; toggling requires a renderer
+//                               re-init, per §6). Selects the deferred path.
+//   IsDeferredSubmit()       -- query.
+//   SubmitFrame()            -- called on the render thread after RunFrame to
+//                               replay the frame's deferred GL submission.
+//
+// -------------------------- BOUNDARY (this tranche stops here) --------------
+// The load-bearing body behind SubmitFrame() is the design's step-2 packet
+// materialization for the 2D compositor, which the design itself rates
+// Med-High risk / ~4-6 days. Reading the actual melonDS GL renderer shows why
+// it cannot be reduced to a mechanical "record spans, replay draws":
+//
+//   1. The per-scanline composite (GLRenderer2D::RenderScreen) and the final
+//      pass (GLRenderer::RenderScreen) issue GL that reads LayerConfig /
+//      CompositorConfig UBOs which are re-uploaded MID-FRAME as 2D registers
+//      change (GPU2D_OpenGL.cpp glBufferSubData of LayerConfig/CompositorConfig
+//      inside UpdateAndRender). A deferred composite of an early span would
+//      therefore read the FINAL frame's config, not the config as of that span.
+//      Correct deferral needs a render-span list with a per-span config
+//      snapshot -- i.e. the packet's items 5-8/12 fully materialized and
+//      double-buffered.
+//   2. The layer/sprite prerenders and the VRAM/palette texture uploads
+//      (glTexSubImage2D from live GPU.VRAM / GPU.Palette) read LIVE emulation
+//      state. Once submission runs on a thread while RunFrame N+1 mutates VRAM,
+//      those reads are races unless the flatten (MakeVRAMFlat_*Coherent) is
+//      redirected into a render-idle shadow flat mirror (packet item 11) with
+//      dirty-range fill, plus a palette dirty-range copy (item 10).
+//   3. The 2D compositor consumes the 3D output texture (OutputTex3D, read at
+//      GPU2D_OpenGL.cpp in RenderScreen). 3D and 2D submission are therefore
+//      coupled and must move across the seam together; neither can be deferred
+//      alone.
+//
+// That body's flag-ON correctness is validated ONLY by the design's §7 gate 2
+// (on-device screenshot parity flag-ON vs OFF, allowing a <=1-frame shift).
+// This environment has no device (per the task's "No device access"), so the
+// packet body cannot be smoke-tested at all -- every gate available here
+// (host goldens, app compile) passes for a stub too, giving no signal on the
+// rewrite's correctness. Per the design's "correctness never regresses" rule
+// and the task's instruction to stop at a clean boundary rather than force an
+// unverifiable change, the packet materialization is deferred to a follow-up
+// that has device screenshot-parity in the loop.
+//
+// Until then, DeferSubmit is honored as API state only: GL submission stays
+// inline in RunFrame (synchronous, byte-identical to flag-OFF), SubmitFrame()
+// has no deferred work to replay, and capture-active frames
+// (GPU.CaptureActiveThisFrame, §5.1 Tier 1) would take the synchronous path
+// unconditionally in any case.
+// ===========================================================================
+
+void GLRenderer::SetDeferredSubmit(bool enable)
+{
+    DeferSubmit = enable;
+}
+
+void GLRenderer::SubmitFrame()
+{
+    // No deferred submission is recorded yet (see the BOUNDARY note above):
+    // the inline path in RunFrame has already issued this frame's GL. This is a
+    // safe no-op that gives the app tranche the exported render-thread entry
+    // point to call after RunFrame; the deferred-replay body lands with the
+    // packet materialization.
+}
+#endif
+
 }
