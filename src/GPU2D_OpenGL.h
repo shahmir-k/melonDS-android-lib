@@ -240,6 +240,10 @@ private:
     // RIRReplay: re-issue GL for one record from its snapshot. Immediate replay at
     // the recording site this session; Phase 2 drives the same body off-thread.
     void RIRReplay(const GLLogRecord& r);
+    // record+immediate-replay wrappers for the composite ops (snapshot the config
+    // the op reads, then replay it now; inline fallback on arena overflow).
+    void RIRRecordRenderSprites(int line);
+    void RIRRecordComposite(int ystart, int yend);
 #endif
 };
 

@@ -654,14 +654,22 @@ void GLRenderer2D::UpdateAndRender(int line)
 
     if ((comp_dirty || SpriteDirty) && (line > 0))
     {
-        DoRenderSprites(line);
+#ifdef LITEV_RENDER_THREAD
+        if (Parent.RIRMode) RIRRecordRenderSprites(line);
+        else
+#endif
+            DoRenderSprites(line);
     }
 
     // if needed, composite the previous screen section
 
     if (comp_dirty && (line > 0))
     {
-        RenderScreen(LastLine, line);
+#ifdef LITEV_RENDER_THREAD
+        if (Parent.RIRMode) RIRRecordComposite(LastLine, line);
+        else
+#endif
+            RenderScreen(LastLine, line);
         LastLine = line;
     }
 
@@ -877,8 +885,18 @@ void GLRenderer2D::DrawScanline(u32 line)
 
 void GLRenderer2D::VBlank()
 {
-    DoRenderSprites(192);
-    RenderScreen(LastLine, 192);
+#ifdef LITEV_RENDER_THREAD
+    if (Parent.RIRMode)
+    {
+        RIRRecordRenderSprites(192);
+        RIRRecordComposite(LastLine, 192);
+    }
+    else
+#endif
+    {
+        DoRenderSprites(192);
+        RenderScreen(LastLine, 192);
+    }
 
     LastSpriteLine = 0;
     LastLine = 0;
@@ -2019,6 +2037,18 @@ void GLRenderer2D::DrawSprites(u32 line)
 // this phase) — bit-exact because replay is immediate, at the same moment.
 // ===========================================================================
 
+// Register block a Composite2D record snapshots alongside the ScanlineConfig span,
+// so RIRReplay can restore the exact per-composite register state that RenderScreen
+// (and its UpdateCompositorConfig / forced-blank logic) reads.
+struct RIRCompositeRegs
+{
+    u32 DispCnt;
+    u8  LayerEnable, OBJEnable, ForcedBlank, UnitEnabled;
+    u16 BGCnt[4];
+    u16 BlendCnt;
+    u8  EVA, EVB, EVY, _pad;
+};
+
 void GLRenderer2D::DoUploadPalBG(const u16* palbuf)
 {
     glBindTexture(GL_TEXTURE_2D, PalTex_BG);
@@ -2092,9 +2122,92 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         NumSprites = r.I0;
         PrerenderSprites();
         break;
+    case GLOp::RenderSpritesSpan:
+    {
+        // Restore SpriteScanlineConfig span + SpriteConfig + sprite scalars, then
+        // run the existing sprite-span raster (DoRenderSprites reads ystart from
+        // LastSpriteLine and yend from its arg).
+        const u8* p = Parent.LogBuild->Payload(r);
+        memcpy(&SpriteScanlineConfig, p, sizeof(SpriteScanlineConfig));
+        memcpy(&SpriteConfig, p + sizeof(SpriteScanlineConfig), sizeof(SpriteConfig));
+        NumSprites = r.I0;
+        SpriteUseMosaic = (r.I1 != 0);
+        LastSpriteLine = r.YStart;
+        DoRenderSprites(r.YEnd);
+        break;
+    }
+    case GLOp::Composite2D:
+    {
+        // Restore per-composite registers + ScanlineConfig span, then run the
+        // existing per-engine composite (RenderScreen recomputes CompositorConfig
+        // from the restored registers and reuses the inline LayerConfig UBO).
+        const u8* p = Parent.LogBuild->Payload(r);
+        RIRCompositeRegs regs;
+        memcpy(&regs, p, sizeof(regs));
+        memcpy(&ScanlineConfig, p + sizeof(regs), sizeof(ScanlineConfig));
+        DispCnt = regs.DispCnt;
+        LayerEnable = regs.LayerEnable;
+        OBJEnable = regs.OBJEnable;
+        ForcedBlank = regs.ForcedBlank;
+        UnitEnabled = (regs.UnitEnabled != 0);
+        memcpy(BGCnt, regs.BGCnt, sizeof(BGCnt));
+        BlendCnt = regs.BlendCnt;
+        EVA = regs.EVA; EVB = regs.EVB; EVY = regs.EVY;
+        RenderScreen(r.YStart, r.YEnd);
+        break;
+    }
     default:
         break;
     }
+}
+
+void GLRenderer2D::RIRRecordRenderSprites(int line)
+{
+    GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+        GLOp::RenderSpritesSpan, nullptr, sizeof(SpriteScanlineConfig) + sizeof(SpriteConfig));
+    if (rec)
+    {
+        u8* p = Parent.LogBuild->Payload(*rec);
+        memcpy(p, &SpriteScanlineConfig, sizeof(SpriteScanlineConfig));
+        memcpy(p + sizeof(SpriteScanlineConfig), &SpriteConfig, sizeof(SpriteConfig));
+        rec->Engine = GPU2D.Num;
+        rec->YStart = LastSpriteLine;
+        rec->YEnd = line;
+        rec->I0 = NumSprites;
+        rec->I1 = SpriteUseMosaic ? 1 : 0;
+        RIRReplay(*rec);
+        Parent.RIRReplayCount++;
+    }
+    else { Parent.RIRInlineGL++; DoRenderSprites(line); }
+    Parent.LogBuild->Reset();
+}
+
+void GLRenderer2D::RIRRecordComposite(int ystart, int yend)
+{
+    GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+        GLOp::Composite2D, nullptr, sizeof(RIRCompositeRegs) + sizeof(ScanlineConfig));
+    if (rec)
+    {
+        RIRCompositeRegs regs;
+        regs.DispCnt = DispCnt;
+        regs.LayerEnable = LayerEnable;
+        regs.OBJEnable = OBJEnable;
+        regs.ForcedBlank = ForcedBlank;
+        regs.UnitEnabled = UnitEnabled ? 1 : 0;
+        memcpy(regs.BGCnt, BGCnt, sizeof(BGCnt));
+        regs.BlendCnt = BlendCnt;
+        regs.EVA = EVA; regs.EVB = EVB; regs.EVY = EVY; regs._pad = 0;
+        u8* p = Parent.LogBuild->Payload(*rec);
+        memcpy(p, &regs, sizeof(regs));
+        memcpy(p + sizeof(regs), &ScanlineConfig, sizeof(ScanlineConfig));
+        rec->Engine = GPU2D.Num;
+        rec->YStart = ystart;
+        rec->YEnd = yend;
+        RIRReplay(*rec);
+        Parent.RIRReplayCount++;
+    }
+    else { Parent.RIRInlineGL++; RenderScreen(ystart, yend); }
+    Parent.LogBuild->Reset();
 }
 #endif // LITEV_RENDER_THREAD
 
