@@ -21,6 +21,8 @@
 #include "GPU2D_OpenGL.h"
 #include "GPU.h"
 #include "GPU3D.h"
+// R3: GL per-frame call counters (after the GL headers above). See LiteProfileGL.h.
+#include "LiteProfileGL.h"
 
 namespace melonDS
 {

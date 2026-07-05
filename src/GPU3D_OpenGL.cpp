@@ -23,6 +23,8 @@
 #include <string.h>
 #include "NDS.h"
 #include "GPU.h"
+// R3: GL per-frame call counters (after the GL headers above). See LiteProfileGL.h.
+#include "LiteProfileGL.h"
 
 namespace melonDS
 {

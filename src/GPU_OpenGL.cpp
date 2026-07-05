@@ -19,11 +19,64 @@
 #include <string.h>
 #include "NDS.h"
 #include "GPU_OpenGL.h"
+// R3: GL per-frame call counters. Must come AFTER the GL headers above so the
+// wrapping macros can #undef/redefine the (GLES_Compat) glTex* entry points.
+#include "LiteProfileGL.h"
+#if LITEV_PROFILE && defined(__ANDROID__)
+#include <android/log.h>
+#endif
 
 namespace melonDS
 {
 using Platform::Log;
 using Platform::LogLevel;
+
+#if LITEV_PROFILE && defined(__ANDROID__)
+// R3: emit one "LITEV_GL:" logcat line per 60 rendered frames from the core
+// renderer itself (least-invasive route: the app glue's LITEV_PROF profiler
+// does not read the core LiteProfile counters). Values are averaged per frame
+// over the 60-frame window. Each GL counter is read-and-reset (exchange) here
+// at end-of-frame so no external per-frame Reset() is required on Android.
+static void LiteVGLFrameReport()
+{
+    using namespace melonDS::LiteProfile;
+    static uint64_t s_draws = 0, s_binds = 0, s_progs = 0, s_unif = 0, s_texp = 0;
+    static uint64_t s_bufb = 0, s_bufd = 0, s_fbo = 0, s_texu = 0, s_bytes = 0;
+    static uint32_t s_n = 0;
+
+    s_draws += g_Frame.GLDrawCalls.exchange(0, std::memory_order_relaxed);
+    s_binds += g_Frame.GLTexBinds.exchange(0, std::memory_order_relaxed);
+    s_progs += g_Frame.GLProgramSwitches.exchange(0, std::memory_order_relaxed);
+    s_unif  += g_Frame.GLUniformCalls.exchange(0, std::memory_order_relaxed);
+    s_texp  += g_Frame.GLTexParamCalls.exchange(0, std::memory_order_relaxed);
+    s_bufb  += g_Frame.GLBufferBinds.exchange(0, std::memory_order_relaxed);
+    s_bufd  += g_Frame.GLBufferUploads.exchange(0, std::memory_order_relaxed);
+    s_fbo   += g_Frame.GLFramebufferBinds.exchange(0, std::memory_order_relaxed);
+    s_texu  += g_Frame.GLTexUploads.exchange(0, std::memory_order_relaxed);
+    s_bytes += g_Frame.GLUploadBytes.exchange(0, std::memory_order_relaxed);
+    s_n++;
+
+    if (s_n >= 60)
+    {
+        __android_log_print(ANDROID_LOG_INFO, "LITEV_GL",
+            "60f avg/frame: draws=%llu binds=%llu progs=%llu uniforms=%llu "
+            "texparam=%llu bufbind=%llu bufdata=%llu fbo=%llu texup=%llu uploadKB=%llu",
+            (unsigned long long)(s_draws / s_n),
+            (unsigned long long)(s_binds / s_n),
+            (unsigned long long)(s_progs / s_n),
+            (unsigned long long)(s_unif  / s_n),
+            (unsigned long long)(s_texp  / s_n),
+            (unsigned long long)(s_bufb  / s_n),
+            (unsigned long long)(s_bufd  / s_n),
+            (unsigned long long)(s_fbo   / s_n),
+            (unsigned long long)(s_texu  / s_n),
+            (unsigned long long)((s_bytes / s_n) / 1024));
+        s_draws = s_binds = s_progs = s_unif = s_texp = 0;
+        s_bufb = s_bufd = s_fbo = s_texu = s_bytes = 0;
+        s_n = 0;
+    }
+}
+#endif
 
 #include "OpenGL_shaders/FinalPassVS.h"
 #include "OpenGL_shaders/FinalPassFS.h"
@@ -624,6 +677,13 @@ void GLRenderer::VBlank()
 
     LastLine = 0;
     LastCapLine = 0;
+
+#if LITEV_PROFILE && defined(__ANDROID__)
+    // R3: once-per-frame hook — VBlank runs exactly once per rendered frame and
+    // GL context is current here (RenderScreen above submits the compositor
+    // draws). Emits the LITEV_GL logcat line every 60 frames.
+    LiteVGLFrameReport();
+#endif
 }
 
 void GLRenderer::VBlankEnd()

@@ -1,4 +1,6 @@
 #include "GPU3D_TexcacheOpenGL.h"
+// R3: GL per-frame call counters (the header above pulls in OpenGLSupport). See LiteProfileGL.h.
+#include "LiteProfileGL.h"
 
 namespace melonDS
 {

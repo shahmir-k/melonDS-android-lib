@@ -112,6 +112,23 @@ struct FrameCounters
     std::atomic<uint64_t> MemBlock9HelperCalls{0};   // SlowBlockTransfer9 entries
     std::atomic<uint64_t> MemRead9U32HelperCalls{0}; // SlowRead9<u32> entries
 
+    // R3 GL-renderer call counters (Appendix D.7 §R3). Populated by the thin
+    // wrapping macros in LiteProfileGL.h, which redefine the GL entry points in
+    // the OpenGL renderer .cpp files. Only wired up on Android (the Mali GL
+    // driver is the ~7ms/frame in-race suspect); desktop GL builds leave these
+    // at zero. Used to aim the draw-call / state-change diet: hundreds of tiny
+    // 2D-compositor draws + per-batch glTexParameteri are the prime suspects.
+    std::atomic<uint64_t> GLDrawCalls{0};        // glDrawArrays + glDrawElements
+    std::atomic<uint64_t> GLTexBinds{0};         // glBindTexture
+    std::atomic<uint64_t> GLProgramSwitches{0};  // glUseProgram
+    std::atomic<uint64_t> GLUniformCalls{0};     // glUniform* value updates
+    std::atomic<uint64_t> GLTexParamCalls{0};    // glTexParameteri/f
+    std::atomic<uint64_t> GLBufferBinds{0};      // glBindBuffer
+    std::atomic<uint64_t> GLBufferUploads{0};    // glBufferData + glBufferSubData
+    std::atomic<uint64_t> GLFramebufferBinds{0}; // glBindFramebuffer
+    std::atomic<uint64_t> GLTexUploads{0};       // glTexImage*/glTexSubImage*
+    std::atomic<uint64_t> GLUploadBytes{0};      // bytes across buffer+texture uploads
+
     void Reset()
     {
         SchedulerIterations.store(0, std::memory_order_relaxed);
@@ -142,6 +159,16 @@ struct FrameCounters
         TimeInCppNs.store(0, std::memory_order_relaxed);
         MemBlock9HelperCalls.store(0, std::memory_order_relaxed);
         MemRead9U32HelperCalls.store(0, std::memory_order_relaxed);
+        GLDrawCalls.store(0, std::memory_order_relaxed);
+        GLTexBinds.store(0, std::memory_order_relaxed);
+        GLProgramSwitches.store(0, std::memory_order_relaxed);
+        GLUniformCalls.store(0, std::memory_order_relaxed);
+        GLTexParamCalls.store(0, std::memory_order_relaxed);
+        GLBufferBinds.store(0, std::memory_order_relaxed);
+        GLBufferUploads.store(0, std::memory_order_relaxed);
+        GLFramebufferBinds.store(0, std::memory_order_relaxed);
+        GLTexUploads.store(0, std::memory_order_relaxed);
+        GLUploadBytes.store(0, std::memory_order_relaxed);
     }
 };
 
