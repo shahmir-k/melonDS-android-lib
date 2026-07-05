@@ -1457,3 +1457,35 @@ big rearchitecture); deferred/batched GXFIFO threaded-code interpreter (our
 GXFIFO is already deferred per M6.11); LLE clean-room custom BIOS + synthesized
 firmware direct-boot (compat/legal, not perf). Full detail per subsystem in
 docs/drastic-teardown/.
+
+### D.7 addendum 8 — R4 single-thread split landed (device bit-exact); threaded tranche is next
+
+Pushed liteDS-v2-android 7e54405d: the 2D final-composite capture/submit split
+body behind SubmitFrame(), still SINGLE-THREADED (submit runs on the emu thread
+after RunFrame). This is the correctness foundation for the actual thread.
+- Capture phase (GLRenderer::VBlank): non-capture deferred frames snapshot the 3D
+  color output into a shadow tex and defer the 2D composite + buffer swap.
+- Submit phase (SubmitFrame after RunFrame): replay per-engine 2D composite ->
+  final pass (consuming OutputTex2D) -> swap, reading the 3D shadow.
+- The ONLY boundary crossing in single-thread was OutputTex3D (ColorBufferTex)
+  being overwritten by the next frame's Start3DRendering at VCount 215 before
+  SubmitFrame runs — resolved with a glBlitFramebuffer snapshot to SubmitShadow3DTex
+  (~tens of us on Mali, no CPU packet copy this tranche). Config/VRAM stay
+  live-valid because submit completes before the next RunFrame mutates them.
+- Capture-active frames run inline (Tier 1 fallback, SyncVRAMCapture edge preserved);
+  Reset() drains pending state.
+
+GATES: host golden bit-exact flag OFF and ON; app builds both flags; DEVICE
+screenshot-parity PASS — same savestate deferred vs inline: top(3D) maxdiff=0
+(pixel-exact), bottom 98.9% (diff only animated timer/minimap, <=1-frame),
+pause/save/load correct, no corruption. Perf flat as expected (single-thread).
+Artifacts: apk-r4-flagON.apk, r4-app-glue.diff (MelonInstance calls SubmitFrame;
+debug.litev.renderthread toggle), r4shots/.
+
+NEXT (threaded tranche): add the render thread + depth-1 queue so SubmitFrame(N)
+runs concurrent with RunFrame(N+1). THEN the per-span 2D config packet
+(Layer/Compositor/Scanline/OAM snapshots, double-buffered) + VRAM/palette shadow
+flat-mirror become necessary (live state is no longer submit-before-mutate), plus
+deferring Start3DRendering/mid-frame composites. This is the tranche that
+realizes the wall -> max(emu ~18.5, render ~11) => ~54fps win. Design in
+docs/r4-render-thread-design.md; the single-thread seam proven here de-risks it.
