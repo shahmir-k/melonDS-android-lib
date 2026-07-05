@@ -1556,3 +1556,25 @@ frameskip sweep, which skips rasterization) on-device. Do this BEFORE the split.
 Artifacts (not pushed, HEAD still 7e54405d): r4-app-glue-profsplit.diff (the
 emu/render submit-bucket profiling split — safe/useful regardless),
 apk-r4-prof-split.apk, r4t_{defer,inline}.log.
+
+### D.7 addendum 11 — core-floor measurement: frameskip invalid, but decomposition leans PROCEED
+
+Attempted app core-only RunFrame via frameskip sweep (in-race 3x). Result:
+frameskip is INVALID for isolating core — confirmed in GPU.cpp: frameskip gates
+the software 2D compositor (if !SkipThisFrame, ~3-5ms) but the GL 3D render
+(VCount215 CurrentRenderer->RenderFrame, synchronous in RunFrame) is gated by
+!SkipThisFrame || !RenderFrameIdentical, and RenderFrameIdentical is forced
+false on every geometry flush → in a racing scene the GL 3D submission runs
+EVERY frame regardless of frameskip. So the movable GL-3D cost stays in RunFrame
+and can't be skipped away.
+
+Decomposition obtained (in-race 3x medians): full RunFrame ~26ms; 2D compositor
+~3-5ms; floor with 2D removed (core + GL-3D-submit) ~20-22ms. Cross-ref headless
+core ~13.5ms ⇒ GL-3D-submit ~6-7ms, core ~13-15ms (core~20/GL3D~0 is impossible
+— GL 3D provably costs several ms). This LEANS PROCEED (core in the go-zone),
+not pivot — but is not proof. Authoritative number = the per-section profiler
+(LiteProfile GPU3DRunNs/ARM9ExecNs/ARM7ExecNs summed) which R4 STAGE A produces
+directly: Stage A makes RunFrame emit ~zero GL, so its gated RunFrame reading IS
+the app core floor from the target build. No separate measurement needed.
+Also confirmed: debug.litev.renderthread is inert in the installed e3badc8 build
+(expected — pre-R4-seam); the R4 seam lives only in unpushed local commits.
