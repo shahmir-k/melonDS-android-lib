@@ -68,6 +68,7 @@ public:
     void SetRIRMode(bool enable) override { RIRMode = enable; }
     u64 GetRIRReplayCount() const override { return RIRReplayCount; }
     u64 GetRIRInlineGL() const override { return RIRInlineGL; }
+    void Start3DRendering() override;   // RIR-routes the 3D raster (recipe §1.2 Render3D)
     void SubmitFrame() override;
     void SwapBuffers() override;
 #endif

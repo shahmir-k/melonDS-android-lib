@@ -1169,6 +1169,24 @@ void GLRenderer::SwapBuffers()
     BackBuffer ^= 1;
 }
 
+void GLRenderer::Start3DRendering()
+{
+    if (RIRMode)
+    {
+        // RIR (recipe §8): route the 3D raster through the log. Payload-less —
+        // GLRenderer3D::RenderFrame reads live RenderPolygonRAM + texture VRAM;
+        // under IMMEDIATE replay these are unchanged (same moment, VCount 215), so
+        // read-live is bit-exact. (The DEFERRED / Phase-2 path needs the Stage-B
+        // texture-VRAM shadow to be bit-exact — recipe §2 — but RIR does not.)
+        GLLogRecord* rec = LogBuild->Append(GLOp::Render3D);
+        if (rec) { Rend3D->RenderFrame(); RIRReplayCount++; }
+        else     { RIRInlineGL++; Rend3D->RenderFrame(); }
+        LogBuild->Reset();
+    }
+    else
+        Rend3D->RenderFrame();
+}
+
 void GLRenderer::RIRRecordFinalPass(int ystart, int yend)
 {
     // RIR (recipe §8): snapshot the final-pass config + registers + both aux input
