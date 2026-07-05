@@ -1123,6 +1123,17 @@ void GLRenderer::SetDeferredSubmit(bool enable)
     DeferSubmit = enable;
 }
 
+void GLRenderer::StartFrameLog()
+{
+    // Rewind the build-bank log for a new frame. LogBuild alternates A/B so the
+    // depth-1 queue (design §4.2) can, in the threaded stage, have the render
+    // thread replay bank r while the emu thread fills bank 1-r. Single-thread
+    // this tranche: SubmitFrame consumes the same bank immediately, so the flip
+    // is harmless and keeps the A/B plumbing exercised.
+    LogBuild = LogBuildBank ? &RenderLogB : &RenderLogA;
+    LogBuild->Reset();
+}
+
 void GLRenderer::Submit_Snapshot3D()
 {
     // Copy the just-finished 3D color output into the shadow so the deferred

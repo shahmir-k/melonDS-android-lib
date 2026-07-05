@@ -954,6 +954,11 @@ public:
     // synchronous (capture-active fallback) path. Safe to call unconditionally
     // after RunFrame.
     virtual void SubmitFrame() {}
+
+    // R4 Stage A: rewind the per-frame GL command log (recipe §1). Called from
+    // GPU::StartFrame under deferred submission so the frame's converted call
+    // sites (recipe §1.2) record into a clean log. Base/software = no-op.
+    virtual void StartFrameLog() {}
 #endif
 
 protected:

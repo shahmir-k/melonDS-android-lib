@@ -1154,6 +1154,12 @@ void GPU::StartFrame() noexcept
     // feedback edge); CheckCaptureStart at VCount 0 sets it if a capture also
     // starts this frame. Finalized before the first visible DrawScanline.
     CaptureActiveThisFrame = AnyVRAMCaptureActive();
+
+    // R4 Stage A (recipe §1): rewind this frame's GL command log so the
+    // converted call sites record into a clean log. Only meaningful under
+    // deferred submission on a non-capture frame; the renderer gates internally.
+    if (Rend && Rend->IsDeferredSubmit() && !CaptureActiveThisFrame)
+        Rend->StartFrameLog();
 #endif
 
     // only run the display FIFO if needed:

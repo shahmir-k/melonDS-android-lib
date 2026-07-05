@@ -24,6 +24,9 @@
 #include "GPU2D_OpenGL.h"
 #include "GPU3D_OpenGL.h"
 #include "GPU3D_Compute.h"
+#ifdef LITEV_RENDER_THREAD
+#include "GPU_RenderLog.h"
+#endif
 
 namespace melonDS
 {
@@ -178,6 +181,19 @@ private:
     GLuint SubmitShadow3DFB = 0;      // draw FBO: shadow attached
     GLuint SubmitShadow3DReadFB = 0;  // read FBO: OutputTex3D attached at blit time
     void Submit_Snapshot3D();
+
+    // R4 Stage A — the per-frame GL command log (recipe §1). Two instances form
+    // the depth-1 A/B double buffer (design §4.2); LogBuild points at the one the
+    // current frame records into. Populated during RunFrame by the converted call
+    // sites (recipe §1.2) and replayed by SubmitFrame(). Reset at StartFrame.
+    // NOTE: call-site conversion (recipe §1.2) + Stage-B VRAM shadow (recipe §2)
+    // are the remaining work; until every op is converted, LogBuild stays empty
+    // and the existing final-composite-deferral path (Submit*Pending) is used.
+    RenderLog RenderLogA;
+    RenderLog RenderLogB;
+    RenderLog* LogBuild = &RenderLogA;
+    int LogBuildBank = 0;
+    void StartFrameLog() override;   // called from GPU::StartFrame under DeferSubmit
 #endif
 
     // The 2D final-composite GL body (per-engine composite + final pass +
