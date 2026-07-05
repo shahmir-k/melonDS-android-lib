@@ -1489,3 +1489,45 @@ flat-mirror become necessary (live state is no longer submit-before-mutate), plu
 deferring Start3DRendering/mid-frame composites. This is the tranche that
 realizes the wall -> max(emu ~18.5, render ~11) => ~54fps win. Design in
 docs/r4-render-thread-design.md; the single-thread seam proven here de-risks it.
+
+### D.7 addendum 9 — THE DraStic gap, quantified: we waste 3 of 4 cores
+
+Direct analysis of docs/drastic-teardown/ against our measured numbers. The
+gap to DraStic is NOT emulation speed — it is the rendering architecture.
+
+**Our emulation already fits 60fps.** M6.11 decomposition: pure emu-compute
+13.56ms + scheduler residual 2.53 = 16.09ms < the 16.6ms budget. The reason
+we're at 32fps is the ~11ms of full-GL renderer submission SERIALIZED into
+RunFrame on the emu thread (R0), so frame = 13.5 + 11 + glue on ~1 CPU core.
+
+**DraStic renders in software-NEON across all 4 A55 cores; GL is a dumb blit**
+(docs 07/05, proven): emu on caller thread, 2D engine-B on its own thread, 3D
+rasterizer in 12x16-line bands across 4 threads, GL thread does only
+texSubImage2D+drawArrays+post-FX. Its wall = slowest of ~6 overlapped threads.
+We use ONE core and serialize. That is the entire gap.
+
+**R4 threaded is the fix and is the make-or-break test.** If GL submission
+overlaps emulation on a second core: wall -> max(emu ~13.5, GL ~11) ~= 13.5ms
+=> ~60fps, emulation-bound. Running now; the FPS delta is the campaign verdict.
+Kill-criteria if R4 underdelivers (packet-copy >2.5ms, sync overhead, or
+2-core memory-bandwidth contention on the shared A55 L3): fall to the M6.6
+HYBRID = DraStic's exact model (soft-NEON 2D compositor + banded 3D raster on
+dedicated helper threads, GL as blit) — reopened in addendum 7, this is the
+proven-on-weaker-silicon ceiling and uses all 4 cores like DraStic does.
+
+**Secondary JIT gaps (real, but only matter AFTER R4 makes us emu-bound):**
+- Compile-time idle-loop detector (doc 01 §9): overview calls it the biggest
+  CPU gap, BUT our ARM9 deep-dive measured Shrek-race busy-wait <0.15ms (we
+  have HALT + branch-to-self detection already). Helps WarioWare-class IPC-poll
+  titles, NOT the Shrek target. Port for general compat, not for this number.
+- Fixed static register allocation (doc 01 §6): DraStic pins guest r0-r14 ->
+  host x13-x27 and CPSR flags 1:1 -> host NZCV, so guest ALU ~1:1, zero
+  per-block spill; melonDS uses a dynamic register cache. Genuine per-instr win
+  on the 13.5ms emu bucket, but a large risky JIT rearchitecture — only worth
+  it once R4 makes emulation the wall and we need to push 13.5 -> lower.
+- melonDS ALREADY has: backward liveness/dead-flag+reg elimination
+  (FloodFillSetFlags), deferred GXFIFO, HALT idle, NEON 2D/geometry. Those
+  DraStic techniques are NOT gaps.
+
+Bottom line: one architectural fix (R4, use the other cores) closes the DraStic
+gap; the JIT micro-gaps are a distant second and some are already closed.
