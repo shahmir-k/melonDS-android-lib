@@ -240,6 +240,18 @@ option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
 option(LITEV_AGGRESSIVE_SKIP "Enable per-frame 2D/3D rasterization skip gate" OFF)
 
+# M6.11 step 3: flag-gated integer-NEON of the GPU3D geometry engine's hot
+# per-vertex / per-command fixed-point math (SubmitVertex position + texcoord
+# transforms, MatrixMult4x4). Default OFF -> byte-identical scalar behaviour.
+# The option is host-agnostic: the source guards every NEON block with
+# `#if defined(__ARM_NEON)` and falls back to the scalar reference elsewhere, so
+# all configs build on both aarch64 (NEON active) and x86_64 (scalar). Set via
+# add_compile_definitions so the LITEV_* re-export loop below carries it PUBLIC.
+option(LITEV_NEON_GEOMETRY "M6.11: integer-NEON GPU3D geometry math (AArch64 active, scalar fallback elsewhere)" OFF)
+if (LITEV_NEON_GEOMETRY)
+    add_compile_definitions(LITEV_NEON_GEOMETRY=1)
+endif()
+
 add_subdirectory(src)
 
 # --- liteDS-v2 core-fix: export LITEV_* configuration as a PUBLIC usage requirement ---

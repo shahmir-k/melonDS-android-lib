@@ -463,7 +463,7 @@ int main(int argc, char** argv)
                        linkSitesEmitted=0, dispatchOnlyExits=0,
                        schedIterations=0, schedEventsFired=0,
                        arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0,
-                       runFrameNs=0, dma9Ns=0, dma7Ns=0, gxCommands=0,
+                       runFrameNs=0, dma9Ns=0, dma7Ns=0, gxCommands=0, lightingCalls=0,
                        arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0,
                        memBlock9HelperCalls=0, memRead9U32HelperCalls=0; } profTotals;
     // Frames actually folded into profTotals. When --bench-window is set we
@@ -505,6 +505,7 @@ int main(int argc, char** argv)
             profTotals.dma9Ns      += g_Frame.DMA9Ns.load(std::memory_order_relaxed);
             profTotals.dma7Ns      += g_Frame.DMA7Ns.load(std::memory_order_relaxed);
             profTotals.gxCommands  += g_Frame.GXCommands.load(std::memory_order_relaxed);
+            profTotals.lightingCalls += g_Frame.LightingCalls.load(std::memory_order_relaxed);
             profTotals.linksPatched    += g_Frame.LinksPatched.load(std::memory_order_relaxed);
             profTotals.linksUnlinked   += g_Frame.LinksUnlinked.load(std::memory_order_relaxed);
             profTotals.cppReentries    += g_Frame.CppReentries.load(std::memory_order_relaxed);
@@ -656,6 +657,8 @@ int main(int argc, char** argv)
         printf("run_system_ns_per_frame:%.0f\n", (double)profTotals.runSystemNs / pf);
         printf("residual_ns_per_frame:  %.0f\n", (double)residualNs / pf);
         printf("gx_commands_per_frame:  %.0f\n", (double)profTotals.gxCommands / pf);
+        printf("lighting_calls:  %llu\n", (unsigned long long)profTotals.lightingCalls);
+        printf("lighting_calls_per_frame: %.1f\n", (double)profTotals.lightingCalls / pf);
         printf("gpu3d_ns_per_gx_command: %.1f\n",
                profTotals.gxCommands ? (double)profTotals.gpu3dNs / profTotals.gxCommands : 0.0);
 

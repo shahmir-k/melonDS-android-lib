@@ -73,6 +73,12 @@ struct FrameCounters
     // whose sanity (vs. a known-cheap command) exposes timing distortion.
     std::atomic<uint64_t> GXCommands{0};
 
+    // M6.11 step 3 (NEON geometry) scope-sizing: how often CalculateLighting()
+    // runs in the measured window. Used to decide whether the per-light
+    // normal-transform/dot-product math is worth vectorizing for a given
+    // workload (Shrek's race scene) vs. leaving it scalar. A cheap ++.
+    std::atomic<uint64_t> LightingCalls{0};
+
     // Idle-loop fast-forward hits (Unit 6): how often the existing branch-to-self
     // IdleLoop detection (ARM.cpp Execute) fast-forwards each CPU to its slice
     // target. ARM7IdleSkips additionally splits out hits attributable to the
@@ -119,6 +125,7 @@ struct FrameCounters
         DMA9Ns.store(0, std::memory_order_relaxed);
         DMA7Ns.store(0, std::memory_order_relaxed);
         GXCommands.store(0, std::memory_order_relaxed);
+        LightingCalls.store(0, std::memory_order_relaxed);
         ARM9IdleHits.store(0, std::memory_order_relaxed);
         ARM7IdleHits.store(0, std::memory_order_relaxed);
         ARM7IdleSkips.store(0, std::memory_order_relaxed);
