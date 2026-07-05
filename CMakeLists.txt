@@ -286,6 +286,24 @@ if (LITEV_GL_STATE_CACHE)
     add_compile_definitions(LITEV_GL_STATE_CACHE=1)
 endif()
 
+# R4 (Appendix D.7; docs/r4-render-thread-design.md): render-thread offload seam.
+# Compiles in the capture/submit phase split so the Android app glue can later
+# move GL renderer submission off the emulation thread (RunFrame produces a
+# frame packet on the emu thread; a separable submit phase replays the GL). This
+# flag ONLY affects the accelerated (OpenGL) renderer path. Default OFF ->
+# byte-identical to the synchronous path (renderer submission inline in
+# RunFrame). The headless harness uses the software renderer and issues no GL, so
+# the flag is INERT there and the golden traces are unaffected whether it is
+# compiled in or not (verified: shrek-600 bit-exact with -DLITEV_RENDER_THREAD=ON).
+# Set via add_compile_definitions so the LITEV_* re-export loop below carries it
+# PUBLIC: the seam appends fields/virtuals to renderer types that the out-of-tree
+# Android frontend constructs, so ALL consumers must agree on one ABI (see the
+# re-export rationale below).
+option(LITEV_RENDER_THREAD "R4: render-thread offload capture/submit seam (GL submission separable from RunFrame; OpenGL path only)" OFF)
+if (LITEV_RENDER_THREAD)
+    add_compile_definitions(LITEV_RENDER_THREAD=1)
+endif()
+
 add_subdirectory(src)
 
 # --- liteDS-v2 core-fix: export LITEV_* configuration as a PUBLIC usage requirement ---

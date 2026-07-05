@@ -74,6 +74,19 @@ public:
     //          - values are renderer-specific (ie. OpenGL texture handle)
     bool GetFramebuffers(void** top, void** bottom);
 
+#ifdef LITEV_RENDER_THREAD
+    // R4 seam forwarders (docs/r4-render-thread-design.md). Thin GPU-level
+    // wrappers so the app glue can drive the capture/submit split without
+    // reaching through GetRenderer(). Defined in GPU.cpp (Renderer is
+    // incomplete here). See Renderer::SubmitFrame et al.
+    void SetDeferredSubmit(bool enable) noexcept;
+    bool IsDeferredSubmit() const noexcept;
+    // Run the deferred GL-submission phase for the frame just produced by
+    // RunFrame. No-op unless deferred submission is enabled AND the frame was
+    // deferrable (non-capture; see CaptureActiveThisFrame). Call after RunFrame.
+    void SubmitFrame() noexcept;
+#endif
+
     u8* GetUniqueBankPtr(u32 mask, u32 offset) noexcept;
     const u8* GetUniqueBankPtr(u32 mask, u32 offset) const noexcept;
 
@@ -884,6 +897,38 @@ public:
 
     virtual bool NeedsShaderCompile() { return false; }
     virtual void ShaderCompileStep(int& current, int& count) {}
+
+#ifdef LITEV_RENDER_THREAD
+    // --- R4 render-thread offload seam (docs/r4-render-thread-design.md) ---
+    //
+    // The synchronous renderer path issues all GL submission inline in RunFrame
+    // (per-scanline DrawScanline/DrawSprites, Start/Finish3DRendering, VBlank).
+    // R4 splits a frame into two phases so the app glue can run them on separate
+    // threads:
+    //   * CAPTURE  (emulation thread): runs during RunFrame. Advances the 2D
+    //              compositor state machine and fills the renderer's config
+    //              structs / render-span list from live emulation state. Under
+    //              the flag it may DEFER the actual GL submission.
+    //   * SUBMIT   (render thread, later): replays the deferred GL submission
+    //              from the captured config; issues no reads of live emulation
+    //              state. SubmitFrame() is the exported entry point the app
+    //              tranche calls after RunFrame.
+    //
+    // SetDeferredSubmit selects the mode at emu start (topology is chosen once,
+    // not mid-run). Default false -> submission stays inline in RunFrame, i.e.
+    // byte-identical to flag-OFF. Base + software renderer are no-ops (they issue
+    // no GL); GLRenderer overrides these. These are appended to the end of the
+    // vtable and are carried PUBLIC by the CMake LITEV_* re-export so every
+    // consumer (incl. the out-of-tree Android frontend) shares one ABI.
+    virtual void SetDeferredSubmit(bool enable) {}
+    virtual bool IsDeferredSubmit() const { return false; }
+
+    // Submit phase: replay the deferred GL submission for the frame just
+    // captured. No-op when deferred submission is off or the frame took the
+    // synchronous (capture-active fallback) path. Safe to call unconditionally
+    // after RunFrame.
+    virtual void SubmitFrame() {}
+#endif
 
 protected:
     melonDS::GPU& GPU;
