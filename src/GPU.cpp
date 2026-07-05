@@ -350,6 +350,25 @@ bool GPU::GetFramebuffers(void** top, void** bottom)
 }
 
 
+#ifdef LITEV_RENDER_THREAD
+// R4 render-thread offload seam forwarders (docs/r4-render-thread-design.md).
+void GPU::SetDeferredSubmit(bool enable) noexcept
+{
+    if (Rend) Rend->SetDeferredSubmit(enable);
+}
+
+bool GPU::IsDeferredSubmit() const noexcept
+{
+    return Rend && Rend->IsDeferredSubmit();
+}
+
+void GPU::SubmitFrame() noexcept
+{
+    if (Rend) Rend->SubmitFrame();
+}
+#endif
+
+
 u8 GPU::Read8(u32 addr)
 {
     u16 ret = Read16(addr & ~0x1);
