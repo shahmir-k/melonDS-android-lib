@@ -1531,3 +1531,28 @@ proven-on-weaker-silicon ceiling and uses all 4 cores like DraStic does.
 
 Bottom line: one architectural fix (R4, use the other cores) closes the DraStic
 gap; the JIT micro-gaps are a distant second and some are already closed.
+
+### D.7 addendum 10 — R4 threaded: precise NEGATIVE on the current seam; core-floor measurement gates the full split
+
+Device A/B (in-race 3x): inline vs single-thread-deferred → wall 32.8ms both,
+fps 30.5 vs 30.4 (Δ≈0). The landed seam (7e54405d) defers ONLY the VBlank final
+composite (~2.83ms into a new `submit` bucket); RunFrame stays 28.4ms and still
+issues ALL per-scanline GL (DrawScanline VRAM/palette glTexSubImage, prerender
+draws, mid-frame RenderScreen composites). Threading THIS seam ceiling =
+max(28.4, 2.83+1.29) ≈ 28.4ms ⇒ ~33fps — fails the 45-54 target. NOT a
+sync/bandwidth failure (design kill-criterion #2) — the render work simply
+isn't isolated from RunFrame. The agent correctly refused to ship a threaded
+flag-ON (false win + unverifiable data-race surface).
+
+THE GATE ON THE 4-6 DAY FULL SPLIT: RunFrame 28.4ms = core_emu + inline_GL. Our
+13.5ms "emu-compute" is HEADLESS (software renderer, no GL); the APP core floor
+is unmeasured. Decide before investing:
+- core ~13.5ms + inline_GL ~15ms → full per-scanline split → wall max(13.5,~18)
+  ≈18ms ⇒ ~55fps. Full R4 split IS worth it.
+- core ~20ms+ → even a perfect split caps <60 ⇒ pivot to M6.6 hybrid (DraStic
+  software-render, addendum 9) or drop internal resolution.
+Cheap decisive test: measure app RunFrame with the 3D/2D renderer disabled (or
+frameskip sweep, which skips rasterization) on-device. Do this BEFORE the split.
+Artifacts (not pushed, HEAD still 7e54405d): r4-app-glue-profsplit.diff (the
+emu/render submit-bucket profiling split — safe/useful regardless),
+apk-r4-prof-split.apk, r4t_{defer,inline}.log.
