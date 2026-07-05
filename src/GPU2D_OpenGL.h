@@ -235,6 +235,8 @@ private:
     void DoUploadPalOBJ(const u16* palbuf);         // 256 x (1+16)
     void DoUploadBGVRAM(int start, int end, const u8* vrambase);
     void DoUploadOBJVRAM(int start, int end, const u8* vrambase);
+    // config-driven ops replay by restoring their snapshot into the live config
+    // member then running the existing draw function (PrerenderLayer/-Sprites).
     // RIRReplay: re-issue GL for one record from its snapshot. Immediate replay at
     // the recording site this session; Phase 2 drives the same body off-thread.
     void RIRReplay(const GLLogRecord& r);

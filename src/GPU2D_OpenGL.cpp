@@ -795,7 +795,19 @@ void GLRenderer2D::UpdateAndRender(int line)
             if (!(layer_pre_dirty & (1 << layer)))
                 continue;
 
-            PrerenderLayer(layer);
+#ifdef LITEV_RENDER_THREAD
+            if (Parent.RIRMode)
+            {
+                // RIR (recipe §8): snapshot LayerConfig + replay the prerender now.
+                GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                    GLOp::PrerenderLayer, &LayerConfig, sizeof(LayerConfig));
+                if (rec) { rec->Engine = GPU2D.Num; rec->I0 = layer; RIRReplay(*rec); Parent.RIRReplayCount++; }
+                else     { Parent.RIRInlineGL++; PrerenderLayer(layer); }
+                Parent.LogBuild->Reset();
+            }
+            else
+#endif
+                PrerenderLayer(layer);
         }
     }
 
@@ -836,7 +848,19 @@ void GLRenderer2D::UpdateAndRender(int line)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, TempPalBuffer);
         }
 
-        PrerenderSprites();
+#ifdef LITEV_RENDER_THREAD
+        if (Parent.RIRMode)
+        {
+            // RIR (recipe §8): snapshot SpriteConfig + NumSprites, replay now.
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::PrerenderSprites, &SpriteConfig, sizeof(SpriteConfig));
+            if (rec) { rec->Engine = GPU2D.Num; rec->I0 = NumSprites; RIRReplay(*rec); Parent.RIRReplayCount++; }
+            else     { Parent.RIRInlineGL++; PrerenderSprites(); }
+            Parent.LogBuild->Reset();
+        }
+        else
+#endif
+            PrerenderSprites();
 
         LastSpriteLine = line;
     }
@@ -2053,6 +2077,21 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         DoUploadOBJVRAM(r.YStart, r.YEnd, vram);
         break;
     }
+    case GLOp::PrerenderLayer:
+        // Restore the snapshotted LayerConfig, then run the existing prerender.
+        // The layer-preshader/UBO-20/texture setup is shared inline setup done
+        // once before the layer loop; immediate replay reuses it. (Phase 2 will
+        // also re-upload the UBO from the snapshot.)
+        memcpy(&LayerConfig, Parent.LogBuild->Payload(r), sizeof(LayerConfig));
+        PrerenderLayer(r.I0);
+        break;
+    case GLOp::PrerenderSprites:
+        // Restore the snapshotted SpriteConfig + NumSprites, then run the existing
+        // sprite prerender (shares the inline OBJ VRAM/pal texture binds).
+        memcpy(&SpriteConfig, Parent.LogBuild->Payload(r), sizeof(SpriteConfig));
+        NumSprites = r.I0;
+        PrerenderSprites();
+        break;
     default:
         break;
     }
