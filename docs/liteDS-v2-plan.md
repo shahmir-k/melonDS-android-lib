@@ -1598,3 +1598,31 @@ already fully snapshot. After Phase 2, RunFrame emits ~zero GL ⇒ its flag-ON
 RunFrame reading IS the authoritative app core floor (the go/pivot number),
 still single-thread (no perf win yet — that's Phase 3's thread). PHASE 3: render
 thread + depth-1 queue = the wall→max(core,render) FPS win.
+
+### D.7 addendum 13 — resolution sweep: RunFrame is resolution-INVARIANT; the floor is CPU, not raster
+
+apk-r4-deferred (2D-GL deferred), in-race, cooled starts, freq pinned:
+| res | runFrame | submit | fps |
+|-----|----------|--------|-----|
+| 1x  | 29.08ms  | 4.15   | 28.6 |
+| 2x  | 28.50ms  | 4.25   | 28.95 |
+| 3x  | 27.86ms  | 3.93   | 29.8 |
+
+RunFrame is FLAT (~28ms) across resolution — 3x is marginally FASTER (noise).
+Falsifies "1x/2x reaches 60" AND "prep is resolution-dependent GPU work."
+Internal resolution scales only async GPU rasterization, which is NOT the
+bottleneck at any res. The ~28ms floor is fixed resolution-invariant CPU:
+ARM emulation + GL-renderer CPU (MakeVRAMFlat, config, GL-3D geometry
+submission — polygon-count-bound, not pixel-bound). Native res is off the
+table (owner: unacceptable UX) and would not help anyway.
+
+Consequence for R4: the offload target (MakeVRAMFlat + config + inline GL 3D
+RenderFrame) is resolution-invariant CPU → genuinely parallelizable to another
+A55 core, which is what we want. The go/no-go number is the split of RunFrame
+into UNMOVABLE ARM emulation (incl GPU3D geometry emulation ~2.29ms, stays —
+traced hardware) vs MOVABLE GL-renderer CPU. If movable ≈14.5ms and emulation
+≈13.5ms → Phase 3 offload + Phase 4 thread → ~55fps@3x. If app emulation is
+actually ~20ms → capped ~43fps → also need JIT (register-alloc) work. Phase 3's
+decompose-first step measures this split — it is the decisive go/no-go for the
+whole R4 investment. (Caveat: sweep's staging-grid scene ~28ms is ~5ms heavier
+than the prior 23ms in-race point; relative resolution-invariance holds.)
