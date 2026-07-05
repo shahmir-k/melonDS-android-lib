@@ -1110,3 +1110,33 @@ change; every flag defaults OFF upstream-identical.
 - App savestates wrap core states with a mandatory RetroAchievements section
   (RCHV) — headless-made states are rejected by the app (cross-embedder
   compatibility gap; make the wrapper optional someday).
+
+## D.4 — M6.1 phase breakdown results (2026-07-05): render side CLOSED
+
+On-device in-race frame (~30.5ms total, 1992MHz unthrottled): RunFrame (ARM
+emulation incl. GXFIFO/geometry/DMA/scheduler) ~20ms; 3D GL submission ~3.3ms
+(≤9ms dense); 2D compositor + VRAM/pal/OAM upload ~1.2ms (already dirty-tracked
+upstream); app blit ~2.3ms; misc ~2.5ms; GPU hardware time ~1ms (near idle).
+
+Decisions from evidence:
+- M6.2 stall kill: NO STALL EXISTS (fenceWait 0; capture readback never called
+  in-race; glMapBuffer is a small WRITE_ONLY UBO). Closed.
+- M6.3 draw diet: renderer already batch-merges; <1ms upside. Rejected.
+- M6.4 dirty uploads: already upstream. Closed.
+- M6.5 pipelining: GPU ~1ms -> nothing meaningful to overlap. Rejected for FPS
+  (may return for latency later).
+- M6.6 hybrid architecture: REJECTED — compositor slice is 1.2ms << 5ms bar;
+  soft-2D would ADD CPU raster to a saturated A55.
+- M6.7 frameskip: shipped (debug.litev.frameskip 0-3); RunFrame −6ms at skip 1;
+  net ~45 cap. M6.10 fastmem: shipped ON (stable in-race).
+- NEW: gated in-app frame-phase profiler (debug.litev.prof, zero-overhead when
+  off) — the seed of the melonDS-profiler on-device backend.
+- THERMALS: sustained racing throttles 1.992->1.8GHz at ~83C, −20% FPS. On this
+  passively-cooled device, emulation EFFICIENCY (fewer joules/frame) is part of
+  the 60 FPS problem, not just speed.
+
+The 60 FPS math: 16.6ms budget vs ~20ms of ARM emulation — even zero-cost
+rendering caps at ~40. The campaign is now entirely emulation-side, in order:
+M6.9 dispatcher-in-app (in progress), M6.11 geometry engine (requires
+decomposing the 20ms RunFrame bucket — GXFIFO/geometry share unknown), M6.12
+relaxed timing, hot-region recompilation (Appendix A follow-up).
