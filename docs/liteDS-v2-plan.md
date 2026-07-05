@@ -1353,3 +1353,30 @@ texture / GLES sampler objects (steepest race scaler, +234), (3) draws
 124/frame — batching, far lower leverage. So R3 = redundant-state shadowing
 FIRST (biggest win, lowest risk), draw batching last. Upload 121KB/frame is
 modest, not a target. This is the ~5ms Mali-submission slice from R0.
+
+### D.7 addendum 5 — R3 diet implemented (redundant-state shadow cache); latent Android build bug fixed
+
+Landed on liteDS-v2-android (60af1f87): LITEV_GL_STATE_CACHE (default OFF,
+Android-only). New src/LiteGLStateCache.h shadows bound GL state and wraps the
+renderer's bind/param calls so redundant ones (bind to already-bound object,
+same texparam on same object) are skipped — a driver-level identity. Reset at
+END of every VBlank (not frameskip-gated) so no assumption survives into the
+app-glue blit/present or next frame => transparent to the app. Attacks binds
+529/frame (the ~411 static-menu baseline is per-frame re-binds of a fixed small
+object set — collapses toward the count of DISTINCT bind points, tens) and
+texparam 251/frame (SetupPolygonTexture's 2 WRAP calls/polygon). Per-object
+param cache chosen over a sampler object because wrap mode is per-polygon.
+Deliberately NOT cached (ambiguous ownership): UNIFORM/ELEMENT_ARRAY buffer
+binds (VAO/BufferBase aliasing), VAO binds, the compute-3D renderer. Gates:
+host golden bit-exact flag OFF and ON (inert in headless); Android app builds
+flag OFF and ON exit 0. Standalone FPS value (unlike R2): the eliminated calls
+are Mali userspace command-construction CPU on R0's serial critical path.
+Staged apk-r3-diet.apk for device counter-verify (expect binds/texparam LITEV_GL
+counters to drop OFF->ON by exactly the redundant count).
+
+LATENT BUG FOUND + FIXED (41cdf730): LiteProfileGL.h had `*/` inside a comment
+(the text "glTexSubImage*/") that closes the block comment early — breaks EVERY
+Android LITEV_PROFILE build. It never showed on the host golden (OGLRENDERER=OFF
+never compiles the header), meaning the earlier profile-gl instrumentation
+commit was host-verified only, never Android-built. Process note: GL/renderer
+changes must be Android-compile-gated, not just host-golden-gated.
