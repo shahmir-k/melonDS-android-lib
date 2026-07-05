@@ -1380,3 +1380,37 @@ Android LITEV_PROFILE build. It never showed on the host golden (OGLRENDERER=OFF
 never compiles the header), meaning the earlier profile-gl instrumentation
 commit was host-verified only, never Android-built. Process note: GL/renderer
 changes must be Android-compile-gated, not just host-golden-gated.
+
+### D.7 addendum 6 — R3 diet + R1 release: BOTH closed-negative on-device; only R4 remains
+
+Two device A/Bs, both clean negatives, both reshape the plan:
+
+**R3 GL diet: cuts calls, does NOT cut frame time.** Device (3x GL, in-race):
+binds 529->436 (-18%), texparam 251->74 (-70%) — the cache works — but fps
+30.75->30.90 (noise), cpu_loop -0.11ms. GL *call count* is NOT a serial-CPU
+cost. This RETRACTS the R0/simpleperf read that Mali command construction was
+~5ms of the ~11ms GL slice: the Mali on-CPU time is proportional to draw/vertex
+CONTENT (124 draws, geometry, fragments), not bind/param call count, so
+deduping calls can't reclaim it. Correctness PASS (visually identical, stable).
+Keep LITEV_GL_STATE_CACHE flag default OFF (correct, harmless, may reduce
+render-thread work post-R4); no standalone value.
+
+**R1 release build: 0ms CheckJNI win.** Non-debuggable release vs debug, same
+race scene, -O3 matched: cpu_loop 31.15 vs 31.15, fps 32 vs 32. The emulation
+hot loop makes too few JNI calls/frame for CheckJNI/ART validation to register;
+the ~2.8ms simpleperf "ART/JNI" was the Java driver-loop's real work, not the
+debuggable flag. Release build has no perf value (still worth shipping for size/
+production hygiene, not FPS).
+
+**Roadmap impact — the cheap wins are exhausted.** Every incremental lever tried
+(dispatcher wash, NEON geom +1%, relaxed timing -5%, R2 blit regression, R3 diet
+0%, R1 release 0%) is closed. The frame is ~30.5ms of serial work that does not
+yield to call-count/CPU-micro cuts. The ONLY remaining structural lever is R4
+render-thread offload: run the ~11ms GL-content CPU on a spare A55 concurrent
+with the ~18.5ms emulation, wall -> max(~18.5, ~11) ~= 18.5ms => ~54fps at 3x.
+R4 is now 60fps-or-bust; its value rests on the ~11ms GL CPU being genuinely
+parallelizable (it is CPU per R0's 90%-on-CPU finding, just content-bound not
+call-bound). Post-R4, the banked core wins (dispatcher 1.2ms, M6.14 mainRAM,
+event-slices) become the ARM-side critical path and surface as FPS. If R4's
+overlap does not materialize the win on-device, the honest conclusion is 60fps
+at 3x is not reachable on this A55 without dropping internal resolution.
