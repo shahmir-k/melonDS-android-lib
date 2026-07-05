@@ -1311,3 +1311,22 @@ and core wins); (2) R3 draw batching directly attacks the ~5ms submission;
 (3) once R4 overlaps rendering, ARM becomes the critical path and the
 dispatcher's 1.2ms + M6.14's ~0.6ms surface as FPS — ship dispatcher ON
 after R4 lands; (4) GPU hardware remains ~idle (0.1-0.7ms) even at 3x.
+
+### D.7 addendum 3 — DraStic audio teardown (binary RE): no audio-slaved pacing; audio is free once fast
+
+Decompiled libdrastic_arm64.so (OpenSL ES Simple Buffer Queue). Proven from the
+binary: DraStic's audio is the SAME non-blocking model melonDS already uses —
+callback contains zero pthread calls, enqueues an all-zeros silence buffer on
+underrun, and the producer (emu thread) DROPS-ON-FULL (branch at 0x1de98
+returns immediately, no usleep/cond_wait/spin). No sync primitive is shared
+between the audio path and the frame path; DraStic's frame limiter is a condvar
+shared only emu<->render-thread (waitScreen/signalScreen) — which is exactly
+the R4 architecture we're building. Rate 44100 stereo, DS 32768->44100
+fixed-ratio resample, user-selectable output-buffer depth {1470..5880 samples,
+up to ~4 video frames of slack}. VERDICT: liteDS-v2 needs NO audio-architecture
+change; the crackle at 33fps is pure underrun from running at ~55% realtime and
+resolves automatically when R4 reaches 60fps. Two cheap copy-worthy ideas:
+(1) user-selectable output-buffer depth to mask transient spikes; (2) since
+audio never back-pressures emulation, instrument underrun/silence-fill events
+as a clean realtime-miss signal for the profiler. Full teardown:
+docs/drastic-audio-teardown.md.
