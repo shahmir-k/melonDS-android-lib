@@ -1198,3 +1198,81 @@ DraStic-style timing win requires DraStic's runtime-computed-timing structure,
 which melonDS's compile-time-baking JIT does not have, so there is nothing to
 reclaim. Reclassified to the same closed-negative tier as M6.11 NEON-geometry;
 the emulation-side ARM9 bucket is not reachable by timing relaxation.
+
+## D.7 — 60 FPS reanalysis (2026-07-05, post-M6.12): render side REOPENED with evidence
+
+Three independent deep-dives (prior-art/DraStic mapping; on-device simpleperf of
+the app's emu thread; A55 headless decomposition) converge on a reframing that
+supersedes D.4's "the wall is ARM emulation" conclusion:
+
+**Core emulation compute is ~13.5ms/frame — it already fits the 16.6ms budget.**
+The app's ~22ms RunFrame = core (~13.5) + ~8.5ms of GL render submission that
+melonDS's GL renderer issues INSIDE NDS::RunFrame on the emulation thread
+(simpleperf: Mali userspace driver 25% self ≈ 7ms + GL renderer C++ ≈ 1.7ms).
+On top: ~2.8ms ART/JNI tax purely from the debuggable build (CheckJNI on), and
+the 2.1ms "blit" bucket is a GPU-completion stall (0% CPU), not work. D.4's
+M6.5 rejection judged GPU *hardware* idle (~1ms) and missed the CPU-side
+submission mass. Three of four A55 cores are idle.
+
+DraStic's shape confirms the path: one cooperative core thread + a render
+thread. Its 60fps recipe is NOT more core speed — its own ceiling is realtime.
+120fps verdict: no documented path on in-order A55 short of per-game
+hot-region recompilation + HLE; out of scope for this fork.
+
+### The four render-side workstreams (exact plans)
+
+**R1 — Release build (S; ~1.5-2.5ms; app repo).** Build the existing gitHubProd
+RELEASE variant (debug-keystore signing acceptable for the RG DS). Verify the
+native cmake flags are identical to the debug production set; verify
+minify/R8 keeps JNI symbols (existing proguard rules); confirm
+android:debuggable=false kills CheckJNI (logcat "CheckJNI is ON" absent).
+Gate: same-scene FPS A/B vs debug build, expect +1.5-2.5ms cpu_loop reduction.
+Note: run-as stops working on release builds — device debugging via root only.
+
+**R2 — Deferred blit (M; ~1-1.5ms wall; app glue MelonInstance.cpp).**
+blitAcceleratedFrame() blits the array texture the 3D renderer wrote THIS
+frame -> driver blocks on tiler completion. Change: keep N-buffered (2) frame
+textures; blit the PREVIOUS frame's texture (guaranteed complete, zero stall)
+and present it — one frame of added display latency, acceptable on this
+device. Keep a fence check to assert completeness rather than stall. Flag:
+runtime-selectable (debug.litev.deferblit or setting), default ON after gates.
+Gates: screenshot-compare top+bottom vs baseline (identical content, allowing
+the 1-frame shift), blit bucket -> ~0 in LITEV_PROF, no flicker over 3-lap
+race.
+
+**R3 — GL draw/state diet (M-L; ~2-4ms of the 7ms Mali time; core GL renderer,
+android branch).** Step 1 MEASURE: temporary LITEV_PROFILE counters for
+glDraw*/glBindTexture/glUseProgram/glUniform*/sampler-state calls per frame
+in-race (the compositor's ~800 tiny draws + per-batch glTexParameteri are the
+suspects). Step 2 implement in cost order: (a) redundant-state shadow cache
+(skip no-op binds/uniforms), (b) merge consecutive draws sharing full state
+(the 2D compositor's per-scanline/per-layer quads -> instanced or
+vertex-appended batches), (c) GLES sampler objects to end per-batch
+glTexParameteri churn. Gates: per-frame GL call count before/after (target
+>5x reduction), screenshot-compare exactness, in-race FPS.
+
+**R4 — Render-thread offload (L; collapses wall toward ~13.5ms core floor +
+R1-R3 savings; core+glue).** The structural fix: emulation thread never talks
+to GL. Design: (1) RunFrame produces a frame packet — 3D polygon/vertex RAM
+snapshot (the GL 3D renderer's input), 2D compositor inputs (VRAM/palette/OAM
+dirty ranges), capture requests; (2) double-buffered packet queue, depth 1
+(render N while emulating N+1); (3) render thread owns the GL context: 3D
+submission, 2D compositor, blit, present, fences; (4) emu thread blocks only
+when the queue is full (render slower than emu) — wall = max(emu, render);
+(5) savestate/pause/reset drain the queue first (coherency point); (6)
+LITEV_RENDER_THREAD flag, default OFF, app setting to enable. Correctness
+gates: golden traces untouched (render is downstream of traced state);
+screenshot-compare parity flag-ON vs OFF; 3-lap stability; input latency
+check. Bench gate: wall/frame -> max(core, render) measured by LITEV_PROF.
+Deliver design doc first (docs/r4-render-thread-design.md) reviewed against
+melonDS GL renderer object lifetimes before code.
+
+Sequencing: R1 ships independently now. R2 next (small, app-only). R3 after
+its measurement step. R4 design in parallel; implementation lands last and
+benefits from R2/R3 (less to move). Device measurement is serialized through
+one verification queue (dispatcher A/B first). Projection if all four land at
+midpoints, on top of the ~30ms baseline: ~30 - (2 + 1.2 + 3 + remaining
+serialization ~6) => ~17-18ms wall => ~55-58fps at 3x resolution, better at
+1x; with thermal headroom restored by fewer joules/frame. Reserve tier
+(ARM9 idle-skip NEW-GOLDEN, Tier-B memory stubs, hot-region recompilation)
+remains if a gap persists.
