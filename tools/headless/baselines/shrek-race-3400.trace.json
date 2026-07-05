@@ -1,0 +1,20 @@
+{
+  "trace": "shrek-race-3400.trace",
+  "format_version": 1,
+  "record_size_bytes": 192,
+  "header_size_bytes": 128,
+  "frames": 3400,
+  "mode": "jit",
+  "fixed_rtc_epoch": 946684800,
+  "rom_name": "shrek.nds",
+  "rom_path": "tools/headless/testroms/shrek.nds",
+  "rom_sha1": "11d7849ab234ac16fce8c84027ca1d5c3a2632b0",
+  "rom_xxh3_64": "0xd6d1f5b2042f1b93",
+  "input_script": "shrek-race.script",
+  "input_script_xxh3_64": "0xc5096e4b287c5f0d",
+  "trace_size_bytes": 652928,
+  "recorded_commit": "e8940bedbebbce37588671c9c939f3f16b83a257",
+  "recorded_date": "2026-07-04",
+  "recorded_with": "liteDS-headless (liteDS-v2), exact-timing config (JIT_DISPATCH+LINK, no EVENT_SLICES)",
+  "note": "IN-RACE gameplay golden trace: Shrek Smash n' Crash Racing driven from direct boot through the button-only menu path into a live Quick Race, then A held to race. Exact-timing config only; EVENT_SLICES/full configs deliberately re-time and must verify against a separate ES golden. Double-record byte-identical. Re-record command: liteDS-headless --rom tools/headless/testroms/shrek.nds --frames 3400 --input-script tools/headless/baselines/shrek-race.script --record-trace tools/headless/baselines/shrek-race-3400.trace"
+}

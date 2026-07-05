@@ -45,6 +45,40 @@ struct FrameCounters
     std::atomic<uint64_t> GPU3DNs{0};
     std::atomic<uint64_t> RunSystemNs{0};
 
+    // M6.11 RunFrame decomposition (step 1): aim the NEON geometry work by
+    // splitting the ~20ms in-race RunFrame bucket. RunFrameNs is the whole
+    // NDS::RunFrame() wall time (the parent); the child buckets above plus the
+    // DMA buckets below carve it up, and the residual (parent minus children)
+    // is scheduler/event-dispatch + slice loop overhead.
+    //
+    // Nesting note: in this melonDS core the GXFIFO command engine does NOT run
+    // synchronously inside ARM9 MMIO writes — CmdFIFOWrite only enqueues; the
+    // geometry commands drain later in GPU3D::Run() (timed by GPU3DNs, called
+    // once per scheduler slice OUTSIDE the ARM9 scope). So ARM9ExecNs already
+    // excludes geometry math and there is no parent/child double-count between
+    // ARM9 and GPU3D. What ARM9ExecNs does keep is the cheap FIFO-enqueue cost
+    // of the thousands of GXFIFO MMIO writes per frame, which is correctly
+    // ARM9-side work, not geometry. DMA is the one bucket that WAS nested: the
+    // GXFIFO/geometry-adjacent DMA9 and DMA7 runs used to sit inside the ARM9 /
+    // ARM7 scopes, so they are now timed separately and the CPU scopes wrap
+    // only ARM9.Execute / ARM7.Execute.
+    std::atomic<uint64_t> RunFrameNs{0};
+    std::atomic<uint64_t> DMA9Ns{0};
+    std::atomic<uint64_t> DMA7Ns{0};
+
+    // GXFIFO command throughput. ExecuteCommand() is called thousands of times
+    // per frame, so per-command clock_gettime would distort GPU3DNs badly — we
+    // therefore time GPU3D at the Run()/FIFO-drain batch level (GPU3DNs) and
+    // only COUNT commands here. GPU3DNs / GXCommands gives an ns/command figure
+    // whose sanity (vs. a known-cheap command) exposes timing distortion.
+    std::atomic<uint64_t> GXCommands{0};
+
+    // M6.11 step 3 (NEON geometry) scope-sizing: how often CalculateLighting()
+    // runs in the measured window. Used to decide whether the per-light
+    // normal-transform/dot-product math is worth vectorizing for a given
+    // workload (Shrek's race scene) vs. leaving it scalar. A cheap ++.
+    std::atomic<uint64_t> LightingCalls{0};
+
     // Idle-loop fast-forward hits (Unit 6): how often the existing branch-to-self
     // IdleLoop detection (ARM.cpp Execute) fast-forwards each CPU to its slice
     // target. ARM7IdleSkips additionally splits out hits attributable to the
@@ -87,6 +121,11 @@ struct FrameCounters
         ARM7WaitNs.store(0, std::memory_order_relaxed);
         GPU3DNs.store(0, std::memory_order_relaxed);
         RunSystemNs.store(0, std::memory_order_relaxed);
+        RunFrameNs.store(0, std::memory_order_relaxed);
+        DMA9Ns.store(0, std::memory_order_relaxed);
+        DMA7Ns.store(0, std::memory_order_relaxed);
+        GXCommands.store(0, std::memory_order_relaxed);
+        LightingCalls.store(0, std::memory_order_relaxed);
         ARM9IdleHits.store(0, std::memory_order_relaxed);
         ARM7IdleHits.store(0, std::memory_order_relaxed);
         ARM7IdleSkips.store(0, std::memory_order_relaxed);

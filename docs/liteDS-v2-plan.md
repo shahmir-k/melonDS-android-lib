@@ -1003,3 +1003,198 @@ LITEV_NEON_RENDERER, LITEV_SPU_FAST_INTERP, LITEV_AGGRESSIVE_SKIP.
 - **Evidence-gated, intentionally not built:** M2.4 ARM7 concurrency (ARM7 is 8.2%
   ≪ the 15% gate), M5 relaxed ARM9 timing, M1-followup hot-region recompilation,
   M3 Tier B stubs (needs slowmem-miss region histogram from the profiler).
+
+---
+
+# Appendix D — Unit 7b Findings and the 60 FPS Campaign (2026-07-05)
+
+## D.0 Why this appendix exists
+
+The original plan (and Appendix C) was drafted from v1's CPU-profiler data and
+validated against menu/boot workloads. Unit 7b (playable app) and the in-race
+device work exposed bottlenecks the plan never contained. This appendix records
+those findings and defines Milestone 6: sustained 60 FPS in-race on the RG DS
+(4xA55 / Mali-G52) with no frameskip. Beating v1's ~40 is explicitly NOT the
+bar.
+
+## D.1 Findings the original plan overlooked
+
+1. **The 3D geometry engine was never in scope.** The GL renderer offloads
+   rasterization only; the DS geometry pipeline (matrix/vertex/clip/polygon
+   setup in GPU3D.cpp) runs per-vertex on the CPU, fed by thousands of GXFIFO
+   MMIO writes per frame (Tier C exact paths by design). Menus idle it; races
+   hammer it. No unit ever measured or optimized it. DraStic's known answer:
+   hand-optimized NEON geometry.
+2. **The plan's renderer assumptions were v1-era.** Current upstream composites
+   the 2D engines ON THE GPU (full-GL compositor: giant per-pixel shader +
+   per-frame VRAM/palette/OAM texture mirroring + ~800 tiny draws + capture
+   sync). v1 ran CPU 2D (NEON) + GL 3D + a trivial layer-blend compositor.
+   On A55/Mali-class devices, upstream's architecture is structurally more
+   expensive: "v2 has the faster engine and the slower car."
+3. **App-process environment is its own platform.** LITEV_JIT_DISPATCH crashes
+   in the untrusted_app domain (SEGV_ACCERR during NDS construction; runtime
+   stub generation into JIT memory is the suspect) while running bit-exact in
+   the adb shell domain on the same silicon. Ditto the GLES port class of bugs:
+   signed/unsigned vertex-attribute mangling (the white-textures root cause),
+   glReadPixels format restrictions, empirically-placed BGRA swizzles.
+4. **Frame-time accounting, not FPS, is the decision variable.** In-race app
+   frames are a real ~30ms (no vsync involvement; 60-cap only). Emulation-only
+   in-race is ~13-16ms on the A55; the GL path adds ~14-17ms of CPU-side cost.
+   Both sides must shrink AND overlap to reach 16.6ms.
+5. **Measured-flat is workload-relative.** Dispatch/link/fastmem verdicts from
+   menu workloads did not survive in-race measurement (fastmem: menu "wash" ->
+   in-race +5-7%). All future verdicts must come from the in-race savestate
+   workload.
+
+## D.2 Milestone 6 — the 60 FPS campaign (task list)
+
+Render side (owner: GL-perf track):
+- M6.1 Frame phase breakdown in-app (RunFrame / GL-3D / compositor+uploads /
+  blit+present), with per-frame VRAM-mirroring byte volume. IN PROGRESS.
+- M6.2 Kill synchronous GL stalls (fence waits in present handshake; the
+  GLES_Compat glMapBuffer READ|WRITE whole-buffer shim; upload stalls;
+  capture-sync path).
+- M6.3 Draw-call diet: GLES sampler objects (replaces per-batch
+  glTexParameteri), consecutive same-state batch merging, redundant-state
+  shadowing.
+- M6.4 Dirty VRAM/palette/OAM uploads (v1 concept) if mirroring dominates.
+- M6.5 Emulation/render pipelining: overlap RunFrame(N+1) with render/present(N)
+  (v1 frame-queue + fences concept). Structural multiplier for everything else.
+- M6.6 HYBRID ARCHITECTURE DECISION (gated on M6.1 numbers): if GPU-2D
+  mirroring+compositor cost is structurally >5ms, evaluate soft-2D(NEON) +
+  GL-3D + lean compositor — v1's architecture on v2's core.
+- M6.7 Frameskip exposed as a user setting (real-time game speed at 30 visible
+  FPS today; does NOT count toward the 60 bar).
+- M6.8 Latent capture bug: glReadPixels 1555_REV write-back is still unfixed
+  (Shrek race never exercises it; capture-using games will). Field-exact
+  readback wrapper per the documented conversion.
+
+Emulation side (owner: core track):
+- M6.9 Dispatcher/linking in the app process: root-cause the untrusted_app
+  crash (W^X sequencing of runtime stub generation suspected), fix properly,
+  enable LITEV_JIT_DISPATCH+LINK in the app. IN PROGRESS. Worth +3-5%
+  CPU-bound; mainline cherry-pick expected.
+- M6.10 Fastmem ON in the app (handler-gating fix landed) + complete the
+  in-race full±fastmem device cells (run-race.sh) to confirm the +5-7% signal
+  and set the app default.
+- M6.11 **GPU3D geometry engine optimization (NEW MAJOR FRONT):** profile
+  GPU3D.cpp in-race on-device; NEON-ify vertex/matrix/clip math; batch GXFIFO
+  command processing to cut per-write MMIO round-trips. The largest untouched
+  slice of in-race emulation time.
+- M6.12 M5 relaxed ARM9 timing (plan §8) — elevated from "optional" to
+  "conditional on M6.9-M6.11 leaving a gap": flat cycles-per-instruction for
+  ARM9 removes per-access timing math incl. every GXFIFO write's accounting.
+  ARM7 timing stays exact (WiFi invariant).
+- M6.13 ARM7 idle port re-measure on non-Shrek titles when suite ROMs arrive
+  (WarioWare-class IPC polling was its target).
+
+Process invariants for all M6 work: in-race savestate workload for every
+measurement; golden-trace gates for every core change (both goldens + on-device
+shell-domain verify); rendering-correctness screenshot compare for every GL
+change; every flag defaults OFF upstream-identical.
+
+## D.3 Standing facts for M6 implementers
+
+- In-race device numbers (fs0): headless soft baseline 28.8 / full 32; app GL
+  31-33 real (no vsync). Menus: app 56-60.
+- Emulation-only in-race ~13-16ms (A55). 60 FPS budget: 16.6ms wall with
+  pipelining, ~12-13ms without.
+- App flags ON: EVENT_SLICES, MEM_DTCM_BLOCK, MEM_MAINRAM_LOAD, NEON, -O3.
+  OFF pending M6: JIT_DISPATCH+LINK (M6.9), fastmem (M6.10), AGGRESSIVE_SKIP
+  (M6.7 exposure), ARM7_IDLE (no Shrek value).
+- White-textures root cause on Mali: glVertexAttribIPointer GL_UNSIGNED_INT
+  into signed ivec3 mangles values >=2^31 (texcache sentinel). Fixed with
+  GL_INT (core a2fa25a4). BGRA 3D-layer swizzles are empirically placed; the
+  compensating swap's origin is undetermined — revalidate on capture-as-texture
+  paths.
+- App savestates wrap core states with a mandatory RetroAchievements section
+  (RCHV) — headless-made states are rejected by the app (cross-embedder
+  compatibility gap; make the wrapper optional someday).
+
+## D.4 — M6.1 phase breakdown results (2026-07-05): render side CLOSED
+
+On-device in-race frame (~30.5ms total, 1992MHz unthrottled): RunFrame (ARM
+emulation incl. GXFIFO/geometry/DMA/scheduler) ~20ms; 3D GL submission ~3.3ms
+(≤9ms dense); 2D compositor + VRAM/pal/OAM upload ~1.2ms (already dirty-tracked
+upstream); app blit ~2.3ms; misc ~2.5ms; GPU hardware time ~1ms (near idle).
+
+Decisions from evidence:
+- M6.2 stall kill: NO STALL EXISTS (fenceWait 0; capture readback never called
+  in-race; glMapBuffer is a small WRITE_ONLY UBO). Closed.
+- M6.3 draw diet: renderer already batch-merges; <1ms upside. Rejected.
+- M6.4 dirty uploads: already upstream. Closed.
+- M6.5 pipelining: GPU ~1ms -> nothing meaningful to overlap. Rejected for FPS
+  (may return for latency later).
+- M6.6 hybrid architecture: REJECTED — compositor slice is 1.2ms << 5ms bar;
+  soft-2D would ADD CPU raster to a saturated A55.
+- M6.7 frameskip: shipped (debug.litev.frameskip 0-3); RunFrame −6ms at skip 1;
+  net ~45 cap. M6.10 fastmem: shipped ON (stable in-race).
+- NEW: gated in-app frame-phase profiler (debug.litev.prof, zero-overhead when
+  off) — the seed of the melonDS-profiler on-device backend.
+- THERMALS: sustained racing throttles 1.992->1.8GHz at ~83C, −20% FPS. On this
+  passively-cooled device, emulation EFFICIENCY (fewer joules/frame) is part of
+  the 60 FPS problem, not just speed.
+
+The 60 FPS math: 16.6ms budget vs ~20ms of ARM emulation — even zero-cost
+rendering caps at ~40. The campaign is now entirely emulation-side, in order:
+M6.9 dispatcher-in-app (in progress), M6.11 geometry engine (requires
+decomposing the 20ms RunFrame bucket — GXFIFO/geometry share unknown), M6.12
+relaxed timing, hot-region recompilation (Appendix A follow-up).
+
+## D.5 — M6.9 + M6.11 outcomes (2026-07-05): geometry front closed, M6.12 is the path
+
+**M6.9 dispatcher-in-app: DONE.** Root cause was ABI, not W^X: LITEV_* macros
+were directory-scoped, so the app's JNI glue compiled a smaller NDS layout than
+the core constructed (SEGV at construction). Fix: LITEV_* exported as PUBLIC
+usage requirements of core (core 1ca8b152, mainline 54c7ff5c's parent). App
+with dispatcher+link ON: boots clean, in-race stable, median 33.0 FPS
+(baseline 31-33). App branch cebcf95 repins core.
+
+**M6.11 decomposition (host 54c7ff5c, device 4c166ca8):** A55 in-race,
+app-matching config, per frame: ARM9 JIT 7.55ms (55.7% of emu-compute),
+GPU3D geometry 2.29ms (16.9%), ARM7 1.95ms, DMA 1.76ms; 8,451 GX cmds/frame
+@ 271ns. Menus: 22 cmds/frame (geometry idles, as D.1 predicted). Full detail:
+docs/m6.11-runframe-decomposition-{host,device}.md.
+
+**M6.11 NEON geometry (cbaaf32e): landed flag-gated (LITEV_NEON_GEOMETRY,
+default OFF), bit-exact on all four gates, but the measured win is ~0.02ms
+(~1%) on the A55 — order of magnitude under the 1.0-1.2ms projection.**
+Verdict: the 271ns/cmd bucket is dominated by FIFO dispatch + SubmitPolygon/
+clipping/vertex-RAM writes, not transform arithmetic; single 4-wide integer
+dot products can't amortize NEON lane-move overhead on an in-order A55. The
+D.2 M6.11 "NEON-ify the math" premise is CLOSED-NEGATIVE for math-only
+vectorization; a material geometry win requires structural work (batched
+GXFIFO drain, clipping restructure) — reclassified to the same reserve tier
+as hot-region recompilation.
+
+**60 FPS path forward (evidence-ranked):** ARM9 is 7.55ms and already carries
+every landed optimization; geometry structural work is speculative. The next
+sanctioned front is **M6.12 relaxed ARM9 timing (plan §8)** — flat
+cycles-per-instruction removes per-access timing math including every GXFIFO
+write's accounting (which the decomposition shows is where geometry cost
+actually lives). Semantic change: new golden config required; ARM7 stays
+exact (WiFi invariant).
+
+## D.6 — M6.12 relaxed ARM9 timing (2026-07-05): CLOSED-NEGATIVE
+
+**Implemented, flag-gated (`LITEV_RELAXED_ARM9_TIMING`, default OFF), correct,
+deterministic, game runs a full live race under it — but a performance
+REGRESSION on both host (−6.0% FPS) and the A55 (−4.8% FPS; ARM9 bucket 7.76 →
+9.11 ms, +17.3%).** All gates pass (OFF byte-identical to both existing goldens;
+new goldens `shrek-600-relaxed9{,-full}.trace` double-record byte-identical and
+self-verify). Full report: `docs/m6.12-relaxed-arm9-device.md`.
+
+Root cause — the D.5 premise did not survive the code: **in this JIT, ARM9
+timing is baked at block-COMPILE time** (the decode loop runs the interpreter
+once to fill `CurInstr.CodeCycles/DataCycles`; the emitted block just does
+`ADD RCycles, #const`). There is **no per-access MemTimings walk in the ARM9
+runtime hot path** to remove — the 8,451 GXFIFO writes/frame each cost one baked
+constant, set at compile time; `SlowWrite9` performs the write without touching
+cycles. Relaxing the model cannot delete runtime work; it only shrinks each
+instruction's sim-time, which makes the game's status-poll/busy-wait loops
+iterate MORE per real frame (measured: ARM9 u32-load helper calls +23.6%, ARM9
+idle-loop hits +51–58%, scheduler iterations +21%) → ARM9 exec time GROWS. A
+DraStic-style timing win requires DraStic's runtime-computed-timing structure,
+which melonDS's compile-time-baking JIT does not have, so there is nothing to
+reclaim. Reclassified to the same closed-negative tier as M6.11 NEON-geometry;
+the emulation-side ARM9 bucket is not reachable by timing relaxation.

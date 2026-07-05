@@ -800,6 +800,10 @@ u32 ARMv5::CodeRead32(u32 addr, bool branch)
         return *(u32*)&ITCM[addr & (ITCMPhysicalSize - 1)];
     }
 
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    // M6.12 / plan §8: flat ARM9 code-fetch cost, no region/ICache wait states.
+    CodeCycles = kRelaxedArm9CodeCycles;
+#else
     CodeCycles = RegionCodeCycles;
     if (CodeCycles == 0xFF) // cached memory. hax
     {
@@ -810,6 +814,7 @@ u32 ARMv5::CodeRead32(u32 addr, bool branch)
 
         //return *(u32*)&CurICacheLine[addr & 0x1C];
     }
+#endif
 
     if (CodeMem.Mem) return *(u32*)&CodeMem.Mem[addr & CodeMem.Mask];
 
@@ -841,7 +846,11 @@ void ARMv5::DataRead8(u32 addr, u32* val)
     }
 
     *val = BusRead8(addr);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles = kRelaxedArm9DataCycles;
+#else
     DataCycles = MemTimings[addr >> 12][1];
+#endif
 }
 
 void ARMv5::DataRead16(u32 addr, u32* val)
@@ -870,7 +879,11 @@ void ARMv5::DataRead16(u32 addr, u32* val)
     }
 
     *val = BusRead16(addr);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles = kRelaxedArm9DataCycles;
+#else
     DataCycles = MemTimings[addr >> 12][1];
+#endif
 }
 
 void ARMv5::DataRead32(u32 addr, u32* val)
@@ -899,7 +912,11 @@ void ARMv5::DataRead32(u32 addr, u32* val)
     }
 
     *val = BusRead32(addr);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles = kRelaxedArm9DataCycles;
+#else
     DataCycles = MemTimings[addr >> 12][2];
+#endif
 }
 
 void ARMv5::DataRead32S(u32 addr, u32* val)
@@ -920,7 +937,11 @@ void ARMv5::DataRead32S(u32 addr, u32* val)
     }
 
     *val = BusRead32(addr);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles += kRelaxedArm9DataCycles;
+#else
     DataCycles += MemTimings[addr >> 12][3];
+#endif
 }
 
 void ARMv5::DataWrite8(u32 addr, u8 val)
@@ -948,7 +969,11 @@ void ARMv5::DataWrite8(u32 addr, u8 val)
     }
 
     BusWrite8(addr, val);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles = kRelaxedArm9DataCycles;
+#else
     DataCycles = MemTimings[addr >> 12][1];
+#endif
 }
 
 void ARMv5::DataWrite16(u32 addr, u16 val)
@@ -978,7 +1003,11 @@ void ARMv5::DataWrite16(u32 addr, u16 val)
     }
 
     BusWrite16(addr, val);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles = kRelaxedArm9DataCycles;
+#else
     DataCycles = MemTimings[addr >> 12][1];
+#endif
 }
 
 void ARMv5::DataWrite32(u32 addr, u32 val)
@@ -1008,7 +1037,11 @@ void ARMv5::DataWrite32(u32 addr, u32 val)
     }
 
     BusWrite32(addr, val);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles = kRelaxedArm9DataCycles;
+#else
     DataCycles = MemTimings[addr >> 12][2];
+#endif
 }
 
 void ARMv5::DataWrite32S(u32 addr, u32 val)
@@ -1032,7 +1065,11 @@ void ARMv5::DataWrite32S(u32 addr, u32 val)
     }
 
     BusWrite32(addr, val);
+#ifdef LITEV_RELAXED_ARM9_TIMING
+    DataCycles += kRelaxedArm9DataCycles;
+#else
     DataCycles += MemTimings[addr >> 12][3];
+#endif
 }
 
 void ARMv5::GetCodeMemRegion(u32 addr, MemRegion* region)

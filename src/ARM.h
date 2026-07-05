@@ -43,6 +43,19 @@ enum
     RWFlags_ForceUser = (1<<21),
 };
 
+#ifdef LITEV_RELAXED_ARM9_TIMING
+// M6.12 / plan §8 -- DraStic-style flat ARM9 timing. Under LITEV_RELAXED_ARM9_TIMING
+// the ARM9 (ARMv5) code-fetch and data-access cycle costs are these fixed constants
+// instead of a per-address MemTimings region-table walk. Both the interpreter and the
+// JIT decode loop read the resulting cpu->CodeCycles / cpu->DataCycles, so the flat
+// cost flows through AddCycles_*/Comp_AddCycles_* to ARM9Timestamp uniformly. These
+// match the existing ITCM/DTCM fast-path convention (unshifted 1 core cycle). ARM7
+// timing is NEVER affected (all use sites gate on Num==0). Named so the relaxation
+// level stays tunable if a game proves too timing-sensitive at flat 1.
+static constexpr s32 kRelaxedArm9CodeCycles = 1;
+static constexpr s32 kRelaxedArm9DataCycles = 1;
+#endif
+
 enum class CPUExecuteMode : u32
 {
     Interpreter,

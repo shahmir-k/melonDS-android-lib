@@ -25,6 +25,7 @@
 
 #include "PlatformHeadless.h"
 #include "LiteProfile.h"
+#include "InputScript.h"
 
 using namespace melonDS;
 
@@ -59,7 +60,8 @@ struct TraceHeader
     u64  romHash;         // XXH3_64bits of the ROM image
     s64  rtcEpoch;        // fixed RTC unix timestamp used
     char romName[64];     // ROM basename, NUL-padded/truncated
-    u8   reserved[16];
+    u64  scriptHash;      // xxhash of the input script (0 == no script)
+    u8   reserved[8];
 };
 
 struct TraceRecord
@@ -116,6 +118,14 @@ struct BuiltNDS
     std::unique_ptr<HeadlessHost::InstanceUserData> udata;
     u64 romHash = 0;
     u32 romSize = 0;
+    InputScript inputScript;   // optional scripted input (empty => none)
+
+    // Apply the scripted key mask for `frame` (no-op when no script loaded).
+    void ApplyInput(int frame)
+    {
+        if (inputScript.Loaded())
+            nds->SetKeyMask(inputScript.KeyMaskForFrame(frame));
+    }
 };
 
 // Build, reset, direct-boot and start an NDS from `cfg`. Returns false + err on
@@ -169,6 +179,16 @@ bool BuildAndBoot(const TraceRunConfig& cfg, std::optional<bool> jitOverride,
     out.nds->SetupDirectBoot("headless.nds");
     out.nds->Start();
     out.nds->SetKeyMask(0xFFFF); // no buttons pressed (active-low)
+
+    if (!cfg.inputScript.empty())
+    {
+        std::string serr;
+        if (!out.inputScript.LoadFile(cfg.inputScript, serr))
+        {
+            err = serr;
+            return false;
+        }
+    }
     return true;
 }
 
@@ -278,6 +298,7 @@ int RecordTrace(const TraceRunConfig& cfg, int frames, const std::string& outPat
     hdr.romSize    = b.romSize;
     hdr.romHash    = b.romHash;
     hdr.rtcEpoch   = cfg.fixedRtcEpoch;
+    hdr.scriptHash = b.inputScript.Hash();  // 0 when no script
     {
         std::string base = Basename(cfg.rom);
         strncpy(hdr.romName, base.c_str(), sizeof(hdr.romName) - 1);
@@ -291,6 +312,7 @@ int RecordTrace(const TraceRunConfig& cfg, int frames, const std::string& outPat
 
     for (int frame = 0; frame < frames; frame++)
     {
+        b.ApplyInput(frame);
         LITE_PROFILE_RESET_FRAME();
         b.nds->RunFrame();
 
@@ -368,6 +390,15 @@ int VerifyTrace(const TraceRunConfig& cfg, const std::string& tracePath)
                         " current=0x%016" PRIx64 ") - verifying anyway\n",
                 (u64)hdr.romHash, b.romHash);
 
+    // Sanity: scripted input is part of the deterministic input, so a script
+    // mismatch will almost certainly cause a frame mismatch below. Warn early
+    // so the cause is obvious rather than a cryptic register divergence.
+    if (hdr.scriptHash != b.inputScript.Hash())
+        fprintf(stderr, "warning: input-script hash differs from trace "
+                        "(trace=0x%016" PRIx64 " current=0x%016" PRIx64 ") - "
+                        "replay under the recording's script for a valid oracle\n",
+                (u64)hdr.scriptHash, b.inputScript.Hash());
+
     for (u32 frame = 0; frame < hdr.frames; frame++)
     {
         TraceRecord expected;
@@ -379,6 +410,7 @@ int VerifyTrace(const TraceRunConfig& cfg, const std::string& tracePath)
             return 1;
         }
 
+        b.ApplyInput((int)frame);
         LITE_PROFILE_RESET_FRAME();
         b.nds->RunFrame();
 
@@ -429,6 +461,8 @@ int VerifyInterpConverge(const TraceRunConfig& cfg, int frames)
 
     for (int frame = 0; frame < frames; frame++)
     {
+        jb.ApplyInput(frame);
+        ib.ApplyInput(frame);
         LITE_PROFILE_RESET_FRAME();
         jb.nds->RunFrame();
         ib.nds->RunFrame();

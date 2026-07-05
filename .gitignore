@@ -28,5 +28,11 @@ freebios/build/
 
 # liteDS-v2 headless harness
 build-host/
+build-host-*/
 headless-data/
 *.ppm
+
+# liteDS-v2 savestates: embed copyrighted RAM contents - NEVER commit.
+# Regenerate locally from the committed input script (see baselines README).
+savestates/
+*.mln

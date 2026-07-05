@@ -1,0 +1,20 @@
+{
+  "trace": "ne-multiplemodels-600-eventslices.trace",
+  "format_version": 1,
+  "record_size_bytes": 192,
+  "header_size_bytes": 128,
+  "frames": 600,
+  "mode": "jit",
+  "fixed_rtc_epoch": 946684800,
+  "rom_name": "ne-multiplemodels.nds",
+  "rom_path": "tools/headless/testroms/redistributable/ne-multiplemodels.nds",
+  "rom_sha1": "912acc15b42b7e4cb5daed34c3b65d92a329ac56",
+  "rom_sha256": "d47d3f8856438a291c0df0de599f5fc1ff98a71a141f6207716deb3733c87605",
+  "rom_size_bytes": 162880,
+  "trace_size_bytes": 115328,
+  "recorded_commit": "e8940bedbebbce37588671c9c939f3f16b83a257",
+  "recorded_date": "2026-07-04",
+  "build_config": "LITEV_JIT_DISPATCH=ON, LITEV_EVENT_SLICES=ON, LITEV_LINK_*=ON (build-es); bit-identical on the full stack (build-mem-es, +LITEV_MEM_DTCM_BLOCK +LITEV_MEM_MAINRAM_LOAD). ENABLE_OGLRENDERER=OFF, Release",
+  "recorded_with": "liteDS-headless (build-es), event-true scheduler slices",
+  "note": "Event-slices golden for the MultipleModels benchmark ROM. NOT bit-comparable to ne-multiplemodels-600.trace: uncapping the scheduler iteration cap coarsens the ARM9/ARM7 interleave (intentional, observable timing change), same as the Shrek -eventslices golden. Authoritative baseline for LITEV_EVENT_SLICES builds; verified OK on both es (build-es) and full (build-mem-es). Double-record is byte-identical. Re-record: liteDS-headless --rom tools/headless/testroms/redistributable/ne-multiplemodels.nds --frames 600 --mode jit --record-trace ne-multiplemodels-600-eventslices.trace (LITEV_EVENT_SLICES=ON build)."
+}
