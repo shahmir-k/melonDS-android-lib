@@ -362,6 +362,21 @@ bool GPU::IsDeferredSubmit() const noexcept
     return Rend && Rend->IsDeferredSubmit();
 }
 
+void GPU::SetRIRMode(bool enable) noexcept
+{
+    if (Rend) Rend->SetRIRMode(enable);
+}
+
+u64 GPU::GetRIRReplayCount() const noexcept
+{
+    return Rend ? Rend->GetRIRReplayCount() : 0;
+}
+
+u64 GPU::GetRIRInlineGL() const noexcept
+{
+    return Rend ? Rend->GetRIRInlineGL() : 0;
+}
+
 void GPU::SubmitFrame() noexcept
 {
     if (Rend) Rend->SubmitFrame();

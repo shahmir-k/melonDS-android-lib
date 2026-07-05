@@ -65,6 +65,9 @@ public:
     // which this tranche stops (packet materialization + VRAM/palette shadow).
     void SetDeferredSubmit(bool enable) override;
     bool IsDeferredSubmit() const override { return DeferSubmit; }
+    void SetRIRMode(bool enable) override { RIRMode = enable; }
+    u64 GetRIRReplayCount() const override { return RIRReplayCount; }
+    u64 GetRIRInlineGL() const override { return RIRInlineGL; }
     void SubmitFrame() override;
     void SwapBuffers() override;
 #endif
@@ -194,6 +197,19 @@ private:
     RenderLog* LogBuild = &RenderLogA;
     int LogBuildBank = 0;
     void StartFrameLog() override;   // called from GPU::StartFrame under DeferSubmit
+
+    // R4 RIR (Record-and-Immediately-Replay, recipe §8). When RIRMode is set, the
+    // converted per-scanline call sites (recipe §1.2) append a snapshot record to
+    // LogBuild and IMMEDIATELY replay it (re-issue the GL from the snapshot) at the
+    // same call site. Bit-exact by construction — same GL, same state, same moment —
+    // while proving the record/replay plumbing one call site at a time. Phase 2
+    // moves the replay to a real render thread; the record + replay bodies are the
+    // same code. RIRReplayCount/RIRInlineGL are the counter proof: in RIR mode every
+    // converted site goes through replay (RIRInlineGL stays 0; only arena overflow
+    // would force an inline fallback). Independent of DeferSubmit.
+    bool RIRMode = false;
+    u64 RIRReplayCount = 0;   // converted sites that recorded + replayed
+    u64 RIRInlineGL = 0;      // converted sites forced inline (overflow) — want 0
 #endif
 
     // The 2D final-composite GL body (per-engine composite + final pass +

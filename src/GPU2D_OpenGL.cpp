@@ -716,11 +716,25 @@ void GLRenderer2D::UpdateAndRender(int line)
             }
             int end = i * 32;
 
-            glTexSubImage2D(GL_TEXTURE_2D, 0,
-                            0, start,
-                            1024, end - start,
-                            GL_RED_INTEGER, GL_UNSIGNED_BYTE,
-                            &vram[start * 1024]);
+#ifdef LITEV_RENDER_THREAD
+            if (Parent.RIRMode)
+            {
+                // RIR (recipe §8): record the BG VRAM upload span + replay it now.
+                GLLogRecord* rec = Parent.LogBuild->Append(GLOp::UploadBGVRAM);
+                if (rec) { rec->Engine = GPU2D.Num; rec->YStart = start; rec->YEnd = end;
+                           RIRReplay(*rec); Parent.RIRReplayCount++; }
+                else     { Parent.RIRInlineGL++; DoUploadBGVRAM(start, end, vram); }
+                Parent.LogBuild->Reset();
+            }
+            else
+#endif
+            {
+                glTexSubImage2D(GL_TEXTURE_2D, 0,
+                                0, start,
+                                1024, end - start,
+                                GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                                &vram[start * 1024]);
+            }
         }
     }
 
@@ -736,9 +750,23 @@ void GLRenderer2D::UpdateAndRender(int line)
             }
         }
 
-        glBindTexture(GL_TEXTURE_2D, PalTex_BG);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV,
-                        TempPalBuffer);
+#ifdef LITEV_RENDER_THREAD
+        if (Parent.RIRMode)
+        {
+            // RIR (recipe §8): snapshot TempPalBuffer into the log + replay now.
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::UploadPalBG, TempPalBuffer, sizeof(u16) * 256 * (1 + (4*16)));
+            if (rec) { rec->Engine = GPU2D.Num; RIRReplay(*rec); Parent.RIRReplayCount++; }
+            else     { Parent.RIRInlineGL++; DoUploadPalBG(TempPalBuffer); }
+            Parent.LogBuild->Reset();
+        }
+        else
+#endif
+        {
+            glBindTexture(GL_TEXTURE_2D, PalTex_BG);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV,
+                            TempPalBuffer);
+        }
     }
 
     GPU.PaletteDirty &= ~palmask;
@@ -790,9 +818,23 @@ void GLRenderer2D::UpdateAndRender(int line)
             memcpy(&TempPalBuffer[256], pal, 256*16*2);
         }
 
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, TempPalBuffer);
+#ifdef LITEV_RENDER_THREAD
+        if (Parent.RIRMode)
+        {
+            // RIR (recipe §8): snapshot the OBJ palette + replay now.
+            GLLogRecord* rec = Parent.LogBuild->AppendWithPayload(
+                GLOp::UploadPalOBJ, TempPalBuffer, sizeof(u16) * 256 * (1 + 16));
+            if (rec) { rec->Engine = GPU2D.Num; RIRReplay(*rec); Parent.RIRReplayCount++; }
+            else     { Parent.RIRInlineGL++; DoUploadPalOBJ(TempPalBuffer); }
+            Parent.LogBuild->Reset();
+        }
+        else
+#endif
+        {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, TempPalBuffer);
+        }
 
         PrerenderSprites();
 
@@ -1903,11 +1945,25 @@ void GLRenderer2D::DrawSprites(u32 line)
         }
         int end = i * 32;
 
-        glTexSubImage2D(GL_TEXTURE_2D, 0,
-                        0, start,
-                        1024, end - start,
-                        GL_RED_INTEGER, GL_UNSIGNED_BYTE,
-                        &vram[start * 1024]);
+#ifdef LITEV_RENDER_THREAD
+        if (Parent.RIRMode)
+        {
+            // RIR (recipe §8): record the OBJ VRAM upload span + replay it now.
+            GLLogRecord* rec = Parent.LogBuild->Append(GLOp::UploadOBJVRAM);
+            if (rec) { rec->Engine = GPU2D.Num; rec->YStart = start; rec->YEnd = end;
+                       RIRReplay(*rec); Parent.RIRReplayCount++; }
+            else     { Parent.RIRInlineGL++; DoUploadOBJVRAM(start, end, vram); }
+            Parent.LogBuild->Reset();
+        }
+        else
+#endif
+        {
+            glTexSubImage2D(GL_TEXTURE_2D, 0,
+                            0, start,
+                            1024, end - start,
+                            GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                            &vram[start * 1024]);
+        }
         dirty = true;
     }
 
@@ -1924,5 +1980,83 @@ void GLRenderer2D::DrawSprites(u32 line)
     if (dirty)
         SpriteDirty = true;
 }
+
+
+#ifdef LITEV_RENDER_THREAD
+// ===========================================================================
+// R4 RIR (Record-and-Immediately-Replay, recipe §8) — 2D-owned GL bodies + replay.
+//
+// Each Do* body is the exact GL of one converted call site (recipe §1.2), taking
+// its data by pointer so the same code serves inline recording and log replay,
+// making the replayed GL command stream byte-identical to the inline stream.
+// RIRReplay() reads one record's snapshot back from the arena and issues its GL.
+// This session replays immediately at the recording site; Phase 2 drives the same
+// bodies from a render thread. VRAM uploads read live VRAM (recipe §8: no shadow
+// this phase) — bit-exact because replay is immediate, at the same moment.
+// ===========================================================================
+
+void GLRenderer2D::DoUploadPalBG(const u16* palbuf)
+{
+    glBindTexture(GL_TEXTURE_2D, PalTex_BG);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+(4*16), GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV,
+                    palbuf);
+}
+
+void GLRenderer2D::DoUploadPalOBJ(const u16* palbuf)
+{
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, PalTex_OBJ);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 1+16, GL_RGBA, GL_UNSIGNED_SHORT_1_5_5_5_REV, palbuf);
+}
+
+void GLRenderer2D::DoUploadBGVRAM(int start, int end, const u8* vrambase)
+{
+    // texture VRAMTex_BG is bound by the caller (shared once before the span loop)
+    glTexSubImage2D(GL_TEXTURE_2D, 0,
+                    0, start,
+                    1024, end - start,
+                    GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                    &vrambase[start * 1024]);
+}
+
+void GLRenderer2D::DoUploadOBJVRAM(int start, int end, const u8* vrambase)
+{
+    // texture VRAMTex_OBJ is bound by the caller (shared once before the span loop)
+    glTexSubImage2D(GL_TEXTURE_2D, 0,
+                    0, start,
+                    1024, end - start,
+                    GL_RED_INTEGER, GL_UNSIGNED_BYTE,
+                    &vrambase[start * 1024]);
+}
+
+void GLRenderer2D::RIRReplay(const GLLogRecord& r)
+{
+    switch (r.Op)
+    {
+    case GLOp::UploadPalBG:
+        DoUploadPalBG(reinterpret_cast<const u16*>(Parent.LogBuild->Payload(r)));
+        break;
+    case GLOp::UploadPalOBJ:
+        DoUploadPalOBJ(reinterpret_cast<const u16*>(Parent.LogBuild->Payload(r)));
+        break;
+    case GLOp::UploadBGVRAM:
+    {
+        u8* vram; u32 vrammask;
+        GPU2D.GetBGVRAM(vram, vrammask);
+        DoUploadBGVRAM(r.YStart, r.YEnd, vram);
+        break;
+    }
+    case GLOp::UploadOBJVRAM:
+    {
+        u8* vram; u32 vrammask;
+        GPU2D.GetOBJVRAM(vram, vrammask);
+        DoUploadOBJVRAM(r.YStart, r.YEnd, vram);
+        break;
+    }
+    default:
+        break;
+    }
+}
+#endif // LITEV_RENDER_THREAD
 
 }

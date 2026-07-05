@@ -81,6 +81,14 @@ public:
     // incomplete here). See Renderer::SubmitFrame et al.
     void SetDeferredSubmit(bool enable) noexcept;
     bool IsDeferredSubmit() const noexcept;
+    // R4 RIR (Record-and-Immediately-Replay, recipe §8): route every converted
+    // per-scanline GL call site through the command log with IMMEDIATE replay.
+    // Bit-exact by construction (same state, same moment) while proving the
+    // record/replay plumbing incrementally. Toggled by the app glue from
+    // debug.litev.rir. GLRenderer overrides; base/software = no-op.
+    void SetRIRMode(bool enable) noexcept;
+    u64 GetRIRReplayCount() const noexcept;
+    u64 GetRIRInlineGL() const noexcept;
     // Run the deferred GL-submission phase for the frame just produced by
     // RunFrame. No-op unless deferred submission is enabled AND the frame was
     // deferrable (non-capture; see CaptureActiveThisFrame). Call after RunFrame.
@@ -948,6 +956,14 @@ public:
     // consumer (incl. the out-of-tree Android frontend) shares one ABI.
     virtual void SetDeferredSubmit(bool enable) {}
     virtual bool IsDeferredSubmit() const { return false; }
+
+    // R4 RIR mode (recipe §8): converted call sites record + immediately replay.
+    // Base/software = no-op; GLRenderer overrides.
+    virtual void SetRIRMode(bool enable) {}
+    // RIR counter proof: replayed = converted GL sites routed through record+replay;
+    // inlineGL = converted sites forced inline (arena overflow) — want 0 in RIR mode.
+    virtual u64 GetRIRReplayCount() const { return 0; }
+    virtual u64 GetRIRInlineGL() const { return 0; }
 
     // Submit phase: replay the deferred GL submission for the frame just
     // captured. No-op when deferred submission is off or the frame took the

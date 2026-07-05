@@ -26,6 +26,9 @@
 namespace melonDS
 {
 class GLRenderer;
+#ifdef LITEV_RENDER_THREAD
+struct GLLogRecord;
+#endif
 
 class GLRenderer2D : public Renderer2D
 {
@@ -224,6 +227,18 @@ private:
     void RenderSprites(bool window, int ystart, int yend);
 
     void RenderScreen(int ystart, int yend);
+
+#ifdef LITEV_RENDER_THREAD
+    // R4 RIR (recipe §8) — shared GL bodies (called inline AND from replay so the
+    // replayed GL command stream is byte-identical) + the replay dispatcher.
+    void DoUploadPalBG(const u16* palbuf);          // 256 x (1+4*16)
+    void DoUploadPalOBJ(const u16* palbuf);         // 256 x (1+16)
+    void DoUploadBGVRAM(int start, int end, const u8* vrambase);
+    void DoUploadOBJVRAM(int start, int end, const u8* vrambase);
+    // RIRReplay: re-issue GL for one record from its snapshot. Immediate replay at
+    // the recording site this session; Phase 2 drives the same body off-thread.
+    void RIRReplay(const GLLogRecord& r);
+#endif
 };
 
 }
