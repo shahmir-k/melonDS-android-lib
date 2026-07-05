@@ -89,6 +89,9 @@ public:
     void SetRIRMode(bool enable) noexcept;
     u64 GetRIRReplayCount() const noexcept;
     u64 GetRIRInlineGL() const noexcept;
+    // R4 Phase 3 prep-decomposition (TEMP) forwarders.
+    u64 GetPrepFlattenNs() const noexcept;
+    u64 GetPrepCfgNs() const noexcept;
     // Run the deferred GL-submission phase for the frame just produced by
     // RunFrame. No-op unless deferred submission is enabled AND the frame was
     // deferrable (non-capture; see CaptureActiveThisFrame). Call after RunFrame.
@@ -964,6 +967,12 @@ public:
     // inlineGL = converted sites forced inline (arena overflow) — want 0 in RIR mode.
     virtual u64 GetRIRReplayCount() const { return 0; }
     virtual u64 GetRIRInlineGL() const { return 0; }
+
+    // R4 Phase 3 prep-decomposition (TEMP). Cumulative ns in the emu-thread render
+    // PREP still inside RunFrame: flatten (MakeVRAMFlat_*) vs config compute
+    // (UpdateLayerConfig/UpdateScanlineConfig/UpdateOAM). Base/software = 0.
+    virtual u64 GetPrepFlattenNs() const { return 0; }
+    virtual u64 GetPrepCfgNs() const { return 0; }
 
     // Submit phase: replay the deferred GL submission for the frame just
     // captured. No-op when deferred submission is off or the frame took the

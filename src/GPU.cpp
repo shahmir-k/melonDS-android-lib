@@ -377,6 +377,16 @@ u64 GPU::GetRIRInlineGL() const noexcept
     return Rend ? Rend->GetRIRInlineGL() : 0;
 }
 
+u64 GPU::GetPrepFlattenNs() const noexcept
+{
+    return Rend ? Rend->GetPrepFlattenNs() : 0;
+}
+
+u64 GPU::GetPrepCfgNs() const noexcept
+{
+    return Rend ? Rend->GetPrepCfgNs() : 0;
+}
+
 void GPU::SubmitFrame() noexcept
 {
     if (Rend) Rend->SubmitFrame();

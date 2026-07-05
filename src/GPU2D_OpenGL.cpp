@@ -579,6 +579,9 @@ void GLRenderer2D::UpdateAndRender(int line)
 
     if (screenon)
     {
+#ifdef LITEV_RENDER_THREAD
+        auto _litevFlat0 = std::chrono::steady_clock::now();
+#endif
         if (GPU2D.Num == 0)
         {
             bgDirty = GPU.VRAMDirty_ABG.DeriveState(GPU.VRAMMap_ABG, GPU);
@@ -601,6 +604,10 @@ void GLRenderer2D::UpdateAndRender(int line)
             objExtPalDirty = GPU.VRAMDirty_BOBJExtPal.DeriveState(&GPU.VRAMMap_BOBJExtPal, GPU);
             GPU.MakeVRAMFlat_BOBJExtPalCoherent(objExtPalDirty);
         }
+#ifdef LITEV_RENDER_THREAD
+        Parent.PrepFlattenNs += (u64) std::chrono::duration_cast<
+            std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _litevFlat0).count();
+#endif
     }
 
     // for each layer, check if the VRAM and palettes involved are dirty
@@ -688,10 +695,17 @@ void GLRenderer2D::UpdateAndRender(int line)
     EVB = GPU2D.EVB;
     EVY = GPU2D.EVY;
 
+#ifdef LITEV_RENDER_THREAD
+    auto _litevCfg0 = std::chrono::steady_clock::now();
+#endif
     if (layer_pre_dirty || LayerConfigDirty)
         UpdateLayerConfig();
 
     UpdateScanlineConfig(line);
+#ifdef LITEV_RENDER_THREAD
+    Parent.PrepCfgNs += (u64) std::chrono::duration_cast<
+        std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _litevCfg0).count();
+#endif
 
     // update VRAM and palettes
 
@@ -864,7 +878,14 @@ void GLRenderer2D::UpdateAndRender(int line)
         // TODO make this only do it over the required subsection?
         NumSprites = 0;
         SpriteUseMosaic = false;
+#ifdef LITEV_RENDER_THREAD
+        auto _litevOam0 = std::chrono::steady_clock::now();
+#endif
         UpdateOAM(0, 192);
+#ifdef LITEV_RENDER_THREAD
+        Parent.PrepCfgNs += (u64) std::chrono::duration_cast<
+            std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _litevOam0).count();
+#endif
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);

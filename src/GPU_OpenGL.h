@@ -68,6 +68,9 @@ public:
     void SetRIRMode(bool enable) override { RIRMode = enable; }
     u64 GetRIRReplayCount() const override { return RIRReplayCount; }
     u64 GetRIRInlineGL() const override { return RIRInlineGL; }
+    // R4 Phase 3 prep-decomposition (TEMP) getters — see PrepFlattenNs/PrepCfgNs.
+    u64 GetPrepFlattenNs() const override { return PrepFlattenNs; }
+    u64 GetPrepCfgNs() const override { return PrepCfgNs; }
     void Start3DRendering() override;   // RIR-routes the 3D raster (recipe §1.2 Render3D)
     void SubmitFrame() override;
     void SwapBuffers() override;
@@ -238,6 +241,17 @@ private:
     // >2.5 ms A55 kills the premise (budget <1 ms).
     u64 ShadowCopyNs = 0;
     u64 ShadowCopyBytes = 0;
+
+    // R4 Phase 3 prep-decomposition (TEMP measurement). Cumulative-since-emu-start
+    // nanoseconds spent in the emu-thread render PREP that still runs inside
+    // RunFrame under DeferReplay:
+    //   PrepFlattenNs = MakeVRAMFlat_* VRAM-flatten block (recipe §2, Stage 3a),
+    //   PrepCfgNs     = per-scanline config compute (UpdateLayerConfig +
+    //                   UpdateScanlineConfig + UpdateOAM, Stage 3b).
+    // The app glue deltas these across its 60-frame window to report the split
+    // that orders Stage 3a/3b by payoff. Removed once the split is recorded.
+    u64 PrepFlattenNs = 0;
+    u64 PrepCfgNs = 0;
 
     // Replay the whole deferred log in record order (SubmitFrame). Dispatches each
     // record to the owning engine's RIRReplay (2D ops) or ReplayFinalPass.
