@@ -23,6 +23,8 @@
 #include "GPU3D.h"
 // R3: GL per-frame call counters (after the GL headers above). See LiteProfileGL.h.
 #include "LiteProfileGL.h"
+// R3: GL redundant-state diet (after LiteProfileGL.h). See LiteGLStateCache.h.
+#include "LiteGLStateCache.h"
 
 namespace melonDS
 {

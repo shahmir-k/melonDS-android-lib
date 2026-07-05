@@ -22,6 +22,10 @@
 // R3: GL per-frame call counters. Must come AFTER the GL headers above so the
 // wrapping macros can #undef/redefine the (GLES_Compat) glTex* entry points.
 #include "LiteProfileGL.h"
+// R3: GL redundant-state diet. Must come AFTER LiteProfileGL.h so it can take
+// over the state-changing entry points (see LiteGLStateCache.h). Inert unless
+// LITEV_GL_STATE_CACHE && __ANDROID__.
+#include "LiteGLStateCache.h"
 #if LITEV_PROFILE && defined(__ANDROID__)
 #include <android/log.h>
 #endif
@@ -114,6 +118,10 @@ GLRenderer::GLRenderer(melonDS::NDS& nds, bool compute)
 bool GLRenderer::Init()
 {
     assert(glEnable != nullptr);
+
+    // R3: fresh GL context -> the state-cache shadow must start empty so its
+    // first assumptions match the real (default) context state.
+    LITEV_GL_RESET_STATE_CACHE();
 
     GLint uniloc;
 
@@ -334,6 +342,10 @@ GLRenderer::~GLRenderer()
 
 void GLRenderer::Reset()
 {
+    // R3: renderer reset may follow a context reset / savestate load; drop any
+    // stale state-cache assumptions.
+    LITEV_GL_RESET_STATE_CACHE();
+
     memset(&FinalPassConfig, 0, sizeof(FinalPassConfig));
     memset(&CaptureConfig, 0, sizeof(CaptureConfig));
 
@@ -684,6 +696,13 @@ void GLRenderer::VBlank()
     // draws). Emits the LITEV_GL logcat line every 60 frames.
     LiteVGLFrameReport();
 #endif
+
+    // R3 state-cache: VBlank is the end of this frame's core GL work and runs
+    // exactly once per frame. Resetting the shadow HERE means no bind assumption
+    // survives into the app glue's blit/present or into the next frame — so even
+    // if the app touches GL between frames, the next frame's first binds always
+    // issue. This is the staleness guard that makes the cache transparent.
+    LITEV_GL_RESET_STATE_CACHE();
 }
 
 void GLRenderer::VBlankEnd()

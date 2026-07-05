@@ -270,6 +270,22 @@ if (LITEV_RELAXED_ARM9_TIMING)
     add_compile_definitions(LITEV_RELAXED_ARM9_TIMING=1)
 endif()
 
+# R3 (Appendix D.7 §R3, "GL redundant-state diet"): CPU-side shadow of bound GL
+# state in the OpenGL renderer so a bind/param whose shadow already holds the
+# requested value is skipped (a driver-level no-op). Attacks the measured in-race
+# per-frame call medians binds=529 / texparam=251 (~411 binds are redundant even
+# at a static menu). The Mali userspace driver's ~5ms/frame command-buffer build
+# sits on the serial critical path, so fewer calls shorten the frame directly.
+# The shadow lives in LiteGLStateCache.h, which is only active on __ANDROID__
+# (the Mali target) and only included by the four OpenGL renderer .cpp files, so
+# this flag has NO effect on headless (no GL compiled) or desktop GL builds.
+# Default OFF -> byte-identical behaviour; goldens bit-exact. Set via
+# add_compile_definitions so the LITEV_* re-export loop below carries it PUBLIC.
+option(LITEV_GL_STATE_CACHE "M6.3/R3: GL redundant bind/param shadow cache (Android GL renderer)" OFF)
+if (LITEV_GL_STATE_CACHE)
+    add_compile_definitions(LITEV_GL_STATE_CACHE=1)
+endif()
+
 add_subdirectory(src)
 
 # --- liteDS-v2 core-fix: export LITEV_* configuration as a PUBLIC usage requirement ---
