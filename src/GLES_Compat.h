@@ -11,10 +11,10 @@
     Android. Desktop builds never see this file, so their behaviour is intact.
 
     NOTE (colour order): GLES3 has no GL_UNSIGNED_SHORT_1_5_5_5_REV. We alias it
-    to GL_UNSIGNED_SHORT_5_5_5_1. For textures allocated with a null data pointer
-    this is purely a format-validation token and has no visual effect. For the
-    few sites that upload real DS palette/VRAM data (BGR555) the channel order
-    differs and is compensated in the sampling shaders (see OpenGL_shaders).
+    to GL_UNSIGNED_SHORT_5_5_5_1 (fine for null-data allocations) and interpose
+    the glTexImage/glTexSubImage entry points to convert REAL u16 texel uploads
+    (DS palettes / VRAM captures) from the 1555_REV bit layout to 5_5_5_1 on the
+    fly, preserving exact component values.
 */
 #ifndef MELONDS_GLES_COMPAT_H
 #define MELONDS_GLES_COMPAT_H
@@ -27,6 +27,63 @@
 #ifndef GL_UNSIGNED_SHORT_1_5_5_5_REV
 #define GL_UNSIGNED_SHORT_1_5_5_5_REV GL_UNSIGNED_SHORT_5_5_5_1
 #endif
+
+// --- 1555_REV upload conversion ----------------------------------------------
+// Uploads of real u16 texel data in DS layout (A:1 B:5 G:5 R:5 from the MSB,
+// R in the LOW bits) would be misread with 5_5_5_1 component boundaries (R in
+// the HIGH bits). Convert such uploads to the 5_5_5_1 bit layout on the fly
+// (palettes and occasional capture syncs; small buffers).
+#include <vector>
+#include <cstddef>
+
+static inline unsigned short melonGLConv1555(unsigned short v)
+{
+    // 1555_REV -> 5551 keeping component order is a rotate-left-by-1: the
+    // alpha bit moves from MSB to LSB and each 5-bit component shifts up one
+    // bit into its 5551 position (verified on-device).
+    return (unsigned short)(((v & 0x7FFFu) << 1) | (v >> 15));
+}
+
+static inline const void* melonGLConvertIf1555(GLenum type, size_t count, const void* data)
+{
+    if (type != GL_UNSIGNED_SHORT_5_5_5_1 || data == nullptr)
+        return data;
+    static thread_local std::vector<unsigned short> scratch;
+    scratch.resize(count);
+    const unsigned short* src = (const unsigned short*)data;
+    for (size_t i = 0; i < count; i++)
+        scratch[i] = melonGLConv1555(src[i]);
+    return scratch.data();
+}
+
+static inline void melonGLTexImage2D(GLenum target, GLint level, GLint internalformat,
+    GLsizei w, GLsizei h, GLint border, GLenum format, GLenum type, const void* data)
+{
+    glTexImage2D(target, level, internalformat, w, h, border, format, type,
+                 melonGLConvertIf1555(type, (size_t)w * (size_t)h, data));
+}
+static inline void melonGLTexSubImage2D(GLenum target, GLint level, GLint xo, GLint yo,
+    GLsizei w, GLsizei h, GLenum format, GLenum type, const void* data)
+{
+    glTexSubImage2D(target, level, xo, yo, w, h, format, type,
+                    melonGLConvertIf1555(type, (size_t)w * (size_t)h, data));
+}
+static inline void melonGLTexImage3D(GLenum target, GLint level, GLint internalformat,
+    GLsizei w, GLsizei h, GLsizei d, GLint border, GLenum format, GLenum type, const void* data)
+{
+    glTexImage3D(target, level, internalformat, w, h, d, border, format, type,
+                 melonGLConvertIf1555(type, (size_t)w * (size_t)h * (size_t)d, data));
+}
+static inline void melonGLTexSubImage3D(GLenum target, GLint level, GLint xo, GLint yo, GLint zo,
+    GLsizei w, GLsizei h, GLsizei d, GLenum format, GLenum type, const void* data)
+{
+    glTexSubImage3D(target, level, xo, yo, zo, w, h, d, format, type,
+                    melonGLConvertIf1555(type, (size_t)w * (size_t)h * (size_t)d, data));
+}
+#define glTexImage2D    melonGLTexImage2D
+#define glTexSubImage2D melonGLTexSubImage2D
+#define glTexImage3D    melonGLTexImage3D
+#define glTexSubImage3D melonGLTexSubImage3D
 
 // GLES has the *f suffixed depth entry points only.
 static inline void melonGLClearDepth(double d) { glClearDepthf((float)d); }
