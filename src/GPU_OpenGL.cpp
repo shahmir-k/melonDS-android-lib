@@ -528,7 +528,11 @@ void GLRenderer::DrawScanline(u32 line)
 
     if (need_render && (line > 0))
     {
-        RenderScreen(LastLine, line);
+#ifdef LITEV_RENDER_THREAD
+        if (RIRMode) RIRRecordFinalPass(LastLine, line);
+        else
+#endif
+            RenderScreen(LastLine, line);
         LastLine = line;
     }
 
@@ -748,7 +752,11 @@ void GLRenderer::VBlankSubmit()
     Rend2D_A->VBlank();
     Rend2D_B->VBlank();
 
-    RenderScreen(LastLine, 192);
+#ifdef LITEV_RENDER_THREAD
+    if (RIRMode) RIRRecordFinalPass(LastLine, 192);
+    else
+#endif
+        RenderScreen(LastLine, 192);
 
     if (GPU.CaptureEnable)
         DoCapture(LastCapLine, 192);
@@ -1159,6 +1167,53 @@ void GLRenderer::SwapBuffers()
     if (SubmitPending)
         return;
     BackBuffer ^= 1;
+}
+
+void GLRenderer::RIRRecordFinalPass(int ystart, int yend)
+{
+    // RIR (recipe §8): snapshot the final-pass config + registers + both aux input
+    // buffers into the log, then replay RenderScreen from the snapshot immediately.
+    // vramcap / GPU.ScreensEnabled etc. RenderScreen reads live are valid because
+    // replay is immediate (same moment). Bit-exact by construction.
+    const u32 aux0Bytes = 256 * 256 * sizeof(u16);
+    const u32 aux1Bytes = 256 * 192 * sizeof(u16);
+    const u32 len = sizeof(RIRFinalPassHdr) + aux0Bytes + aux1Bytes;
+
+    GLLogRecord* rec = LogBuild->AppendWithPayload(GLOp::FinalPassSpan, nullptr, len);
+    if (rec)
+    {
+        rec->YStart = ystart;
+        rec->YEnd = yend;
+
+        u8* p = LogBuild->Payload(*rec);
+        RIRFinalPassHdr h;
+        h.FPC = FinalPassConfig;
+        h.DispCntA = DispCntA; h.DispCntB = DispCntB;
+        h.MasterBrightnessA = MasterBrightnessA; h.MasterBrightnessB = MasterBrightnessB;
+        h.AuxUsageMask = AuxUsageMask;
+        memcpy(p, &h, sizeof(h));
+        memcpy(p + sizeof(h), AuxInputBuffer[0], aux0Bytes);
+        memcpy(p + sizeof(h) + aux0Bytes, AuxInputBuffer[1], aux1Bytes);
+
+        // replay from the snapshot: restore the state RenderScreen reads, then draw
+        RIRFinalPassHdr hr;
+        memcpy(&hr, p, sizeof(hr));
+        FinalPassConfig = hr.FPC;
+        DispCntA = hr.DispCntA; DispCntB = hr.DispCntB;
+        MasterBrightnessA = hr.MasterBrightnessA; MasterBrightnessB = hr.MasterBrightnessB;
+        AuxUsageMask = (u8) hr.AuxUsageMask;
+        memcpy(AuxInputBuffer[0], p + sizeof(hr), aux0Bytes);
+        memcpy(AuxInputBuffer[1], p + sizeof(hr) + aux0Bytes, aux1Bytes);
+
+        RenderScreen(ystart, yend);
+        RIRReplayCount++;
+    }
+    else
+    {
+        RIRInlineGL++;
+        RenderScreen(ystart, yend);
+    }
+    LogBuild->Reset();
 }
 
 void GLRenderer::SubmitFrame()

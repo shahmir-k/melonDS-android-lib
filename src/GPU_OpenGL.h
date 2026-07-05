@@ -210,6 +210,20 @@ private:
     bool RIRMode = false;
     u64 RIRReplayCount = 0;   // converted sites that recorded + replayed
     u64 RIRInlineGL = 0;      // converted sites forced inline (overflow) — want 0
+
+    // FinalPassSpan snapshot header (recipe §1.1): the per-final-pass register /
+    // config state RenderScreen reads, snapshotted alongside the two aux buffers.
+    struct RIRFinalPassHdr
+    {
+        sFinalPassConfig FPC;
+        u32 DispCntA, DispCntB;
+        u16 MasterBrightnessA, MasterBrightnessB;
+        u32 AuxUsageMask;
+    };
+    // record + immediate-replay wrapper for the final-pass composite (recipe §1.2
+    // GLRenderer::RenderScreen). Snapshots FinalPassConfig + regs + aux buffers,
+    // then replays RenderScreen from the snapshot. Inline fallback on overflow.
+    void RIRRecordFinalPass(int ystart, int yend);
 #endif
 
     // The 2D final-composite GL body (per-engine composite + final pass +
