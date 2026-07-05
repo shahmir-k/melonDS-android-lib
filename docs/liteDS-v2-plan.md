@@ -1578,3 +1578,23 @@ directly: Stage A makes RunFrame emit ~zero GL, so its gated RunFrame reading IS
 the app core floor from the target build. No separate measurement needed.
 Also confirmed: debug.litev.renderthread is inert in the installed e3badc8 build
 (expected — pre-R4-seam); the R4 seam lives only in unpushed local commits.
+
+### D.7 addendum 12 — R4 Phase 1 (RIR) COMPLETE: monolith broken, full split surface proven bit-exact
+
+Pushed liteDS-v2-android c55d261d..050eaa42 (5 batches). The RIR unlock worked:
+every recipe §1.2 per-scanline GL site (BG/OBJ VRAM + palette uploads, PrerenderLayer/
+Sprites, DoRenderSprites, per-engine RenderScreen composite, final-pass FinalPass,
+Start3DRendering→Render3D) now routes through the GLLogRecord command log via
+record→immediate-replay, DEVICE-verified pixel-identical to flag-OFF per batch
+(counter proof inlineGL=0). The hard error-prone 80% — byte-exact payload snapshots
+for every op — is done and proven on-device, incrementally, no all-or-nothing.
+Host goldens bit-exact both flags. Runtime prop debug.litev.rir; flag-OFF byte-
+identical at every commit. APK apk-r4-rir.apk, glue diff r4-app-glue-rir.diff.
+
+PHASE 2 (launching): flip replay from immediate → deferred (SubmitFrame, STILL
+single-thread) + add the Stage-B VRAM/palette shadow (recipe §2) for the only two
+ops that read live VRAM (UploadBGVRAM/OBJVRAM, Render3D) — the config-driven ops
+already fully snapshot. After Phase 2, RunFrame emits ~zero GL ⇒ its flag-ON
+RunFrame reading IS the authoritative app core floor (the go/pivot number),
+still single-thread (no perf win yet — that's Phase 3's thread). PHASE 3: render
+thread + depth-1 queue = the wall→max(core,render) FPS win.
