@@ -224,3 +224,35 @@ The next agent implements §1+§2 as one atomic change behind `LITEV_RENDER_THRE
 device-screenshot-gated, then §4. This recipe + the design doc are the full spec.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+
+---
+
+## 8. STRATEGIC UNLOCK — Record-and-Immediately-Replay (RIR) breaks the monolith
+
+Two implementation sessions stalled on §0's "monolithic / no incrementally-bit-exact
+sub-piece" finding. The finding is true for the DEFERRED log, but there is an
+intermediate mode that IS incrementally verifiable and de-risks ~80% of the surface:
+
+**RIR mode** (a bring-up sub-mode of LITEV_RENDER_THREAD): each converted call site
+records its op to the log AND immediately replays it from the recorded snapshot at the
+SAME frame-point — instead of deferring to SubmitFrame. Properties:
+- Bit-exact PER OP by construction: the op runs at the same moment with the same live
+  state, merely routed through record→replay-from-snapshot. No deferral, no shadow yet
+  (VRAM is read live at the same instant).
+- Therefore you convert ONE call site at a time and device-screenshot-verify each: if
+  flag-ON+RIR still renders identical, that op's record/replay/payload-copy plumbing is
+  proven. This validates the entire error-prone mechanical surface incrementally.
+
+**Phased plan:**
+- PHASE 1 (RIR bring-up): convert every §1.2 call site to record→immediate-replay,
+  device-verifying per site / small batch. Done when flag-ON+RIR is pixel-identical and
+  ALL GL flows through the log. Most of the work, fully verifiable, no shadow.
+- PHASE 2 (deferral flip + shadow): flip replay to SubmitFrame-time; add the Stage-B
+  VRAM/palette shadow (§2). This isolates the ONE remaining risk (within-frame state
+  mutation) onto an already-proven log. After this, RunFrame emits ~zero GL → the
+  flag-ON RunFrame reading is the authoritative app core floor. Still single-thread.
+- PHASE 3 (thread): §4 render thread + depth-1 queue. Next session.
+
+RIR is a scaffold (record+immediate-replay costs a hair more than inline but is
+correctness-equivalent); it can be a runtime sub-prop used only during bring-up, or
+removed once Phase 2 lands. This is the method the next implementer uses.
