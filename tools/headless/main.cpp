@@ -463,8 +463,14 @@ int main(int argc, char** argv)
                        linkSitesEmitted=0, dispatchOnlyExits=0,
                        schedIterations=0, schedEventsFired=0,
                        arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0,
+                       runFrameNs=0, dma9Ns=0, dma7Ns=0, gxCommands=0,
                        arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0,
                        memBlock9HelperCalls=0, memRead9U32HelperCalls=0; } profTotals;
+    // Frames actually folded into profTotals. When --bench-window is set we
+    // only accumulate frames inside [start,end] so the M6.11 decomposition is
+    // window-scoped (per-frame averages divide by this). Without a window it
+    // equals opt.frames (whole-run behaviour, unchanged).
+    uint64_t profFrames = 0;
 #endif
 
     for (int frame = 0; frame < opt.frames; frame++)
@@ -488,8 +494,17 @@ int main(int argc, char** argv)
         }
 
 #if LITEV_PROFILE
+        // Window-scoped when --bench-window is set: only fold frames inside the
+        // window into the decomposition totals. Otherwise fold every frame.
+        if (!haveWindow ||
+            (frame >= opt.benchWindowStart && frame <= opt.benchWindowEnd))
         {
             using namespace melonDS::LiteProfile;
+            profFrames++;
+            profTotals.runFrameNs  += g_Frame.RunFrameNs.load(std::memory_order_relaxed);
+            profTotals.dma9Ns      += g_Frame.DMA9Ns.load(std::memory_order_relaxed);
+            profTotals.dma7Ns      += g_Frame.DMA7Ns.load(std::memory_order_relaxed);
+            profTotals.gxCommands  += g_Frame.GXCommands.load(std::memory_order_relaxed);
             profTotals.linksPatched    += g_Frame.LinksPatched.load(std::memory_order_relaxed);
             profTotals.linksUnlinked   += g_Frame.LinksUnlinked.load(std::memory_order_relaxed);
             profTotals.cppReentries    += g_Frame.CppReentries.load(std::memory_order_relaxed);
@@ -601,30 +616,62 @@ int main(int argc, char** argv)
     printf("dispatch_only_exits: %llu\n", (unsigned long long)profTotals.dispatchOnlyExits);
     printf("sched_iterations:    %llu\n", (unsigned long long)profTotals.schedIterations);
     printf("sched_events_fired:  %llu\n", (unsigned long long)profTotals.schedEventsFired);
-    printf("sched_iters_per_frame: %.2f\n",
-           opt.frames ? (double)profTotals.schedIterations / opt.frames : 0.0);
-    printf("cpp_reentries_per_frame: %.2f\n",
-           opt.frames ? (double)profTotals.cppReentries / opt.frames : 0.0);
+    // Per-frame averages divide by the number of frames folded into profTotals
+    // (window-scoped when --bench-window is set, else all frames).
+    const double pf = profFrames ? (double)profFrames : 1.0;
+    printf("prof_frames:     %llu\n", (unsigned long long)profFrames);
+    printf("sched_iters_per_frame: %.2f\n", (double)profTotals.schedIterations / pf);
+    printf("cpp_reentries_per_frame: %.2f\n", (double)profTotals.cppReentries / pf);
     {
-        uint64_t frameSumNs = profTotals.arm9ExecNs + profTotals.arm7ExecNs
-                            + profTotals.gpu3dNs + profTotals.runSystemNs;
-        double denom = frameSumNs ? (double)frameSumNs : 1.0;
+        // M6.11 RunFrame decomposition. RunFrameNs is the measured parent;
+        // ARM9/GPU3D/ARM7/DMA/RunSystem are children carved out of it; the
+        // residual (parent minus children) is scheduler/event-dispatch + slice
+        // loop overhead. Shares are % of the true parent (RunFrameNs), not of
+        // the child sum, so geometry's slice of the whole frame is honest.
+        uint64_t dmaNs   = profTotals.dma9Ns + profTotals.dma7Ns;
+        uint64_t childNs = profTotals.arm9ExecNs + profTotals.gpu3dNs
+                         + profTotals.arm7ExecNs + dmaNs + profTotals.runSystemNs;
+        uint64_t parentNs = profTotals.runFrameNs;
+        // Guard: if instrumentation ever over-counts children vs parent, clamp.
+        uint64_t residualNs = parentNs > childNs ? parentNs - childNs : 0;
+        double denom = parentNs ? (double)parentNs : 1.0;
+
+        printf("run_frame_ns:    %llu\n", (unsigned long long)parentNs);
         printf("arm9_exec_ns:    %llu\n", (unsigned long long)profTotals.arm9ExecNs);
-        printf("arm7_exec_ns:    %llu\n", (unsigned long long)profTotals.arm7ExecNs);
         printf("gpu3d_ns:        %llu\n", (unsigned long long)profTotals.gpu3dNs);
+        printf("arm7_exec_ns:    %llu\n", (unsigned long long)profTotals.arm7ExecNs);
+        printf("dma9_ns:         %llu\n", (unsigned long long)profTotals.dma9Ns);
+        printf("dma7_ns:         %llu\n", (unsigned long long)profTotals.dma7Ns);
+        printf("dma_ns:          %llu\n", (unsigned long long)dmaNs);
         printf("run_system_ns:   %llu\n", (unsigned long long)profTotals.runSystemNs);
-        printf("frame_decomp_sum_ns: %llu\n", (unsigned long long)frameSumNs);
+        printf("residual_ns:     %llu\n", (unsigned long long)residualNs);
+        printf("gx_commands:     %llu\n", (unsigned long long)profTotals.gxCommands);
+
+        // per-frame ns (over the accumulated frames)
+        printf("run_frame_ns_per_frame: %.0f\n", (double)parentNs / pf);
+        printf("arm9_exec_ns_per_frame: %.0f\n", (double)profTotals.arm9ExecNs / pf);
+        printf("gpu3d_ns_per_frame:     %.0f\n", (double)profTotals.gpu3dNs / pf);
+        printf("arm7_exec_ns_per_frame: %.0f\n", (double)profTotals.arm7ExecNs / pf);
+        printf("dma_ns_per_frame:       %.0f\n", (double)dmaNs / pf);
+        printf("run_system_ns_per_frame:%.0f\n", (double)profTotals.runSystemNs / pf);
+        printf("residual_ns_per_frame:  %.0f\n", (double)residualNs / pf);
+        printf("gx_commands_per_frame:  %.0f\n", (double)profTotals.gxCommands / pf);
+        printf("gpu3d_ns_per_gx_command: %.1f\n",
+               profTotals.gxCommands ? (double)profTotals.gpu3dNs / profTotals.gxCommands : 0.0);
+
+        // shares as % of the RunFrame parent
         printf("arm9_share_pct:  %.2f\n", 100.0 * profTotals.arm9ExecNs / denom);
-        printf("arm7_share_pct:  %.2f\n", 100.0 * profTotals.arm7ExecNs / denom);
         printf("gpu3d_share_pct: %.2f\n", 100.0 * profTotals.gpu3dNs / denom);
+        printf("arm7_share_pct:  %.2f\n", 100.0 * profTotals.arm7ExecNs / denom);
+        printf("dma_share_pct:   %.2f\n", 100.0 * dmaNs / denom);
         printf("system_share_pct:%.2f\n", 100.0 * profTotals.runSystemNs / denom);
+        printf("residual_share_pct: %.2f\n", 100.0 * residualNs / denom);
+
         printf("arm9_idle_hits:  %llu\n", (unsigned long long)profTotals.arm9IdleHits);
         printf("arm7_idle_hits:  %llu\n", (unsigned long long)profTotals.arm7IdleHits);
         printf("arm7_idle_skips: %llu\n", (unsigned long long)profTotals.arm7IdleSkips);
-        printf("arm9_idle_hits_per_frame: %.2f\n",
-               opt.frames ? (double)profTotals.arm9IdleHits / opt.frames : 0.0);
-        printf("arm7_idle_hits_per_frame: %.2f\n",
-               opt.frames ? (double)profTotals.arm7IdleHits / opt.frames : 0.0);
+        printf("arm9_idle_hits_per_frame: %.2f\n", (double)profTotals.arm9IdleHits / pf);
+        printf("arm7_idle_hits_per_frame: %.2f\n", (double)profTotals.arm7IdleHits / pf);
     }
 #endif
     fflush(stdout);
@@ -659,10 +706,15 @@ int main(int argc, char** argv)
                 "  ,\"dispatcher_misses\": %llu\n"
                 "  ,\"sched_iterations\": %llu\n"
                 "  ,\"sched_events_fired\": %llu\n"
+                "  ,\"prof_frames\": %llu\n"
+                "  ,\"run_frame_ns\": %llu\n"
                 "  ,\"arm9_exec_ns\": %llu\n"
-                "  ,\"arm7_exec_ns\": %llu\n"
                 "  ,\"gpu3d_ns\": %llu\n"
+                "  ,\"arm7_exec_ns\": %llu\n"
+                "  ,\"dma9_ns\": %llu\n"
+                "  ,\"dma7_ns\": %llu\n"
                 "  ,\"run_system_ns\": %llu\n"
+                "  ,\"gx_commands\": %llu\n"
                 "  ,\"arm9_idle_hits\": %llu\n"
                 "  ,\"arm7_idle_hits\": %llu\n"
                 "  ,\"arm7_idle_skips\": %llu\n"
@@ -691,10 +743,15 @@ int main(int argc, char** argv)
                 , (unsigned long long)profTotals.dispatcherMisses
                 , (unsigned long long)profTotals.schedIterations
                 , (unsigned long long)profTotals.schedEventsFired
+                , (unsigned long long)profFrames
+                , (unsigned long long)profTotals.runFrameNs
                 , (unsigned long long)profTotals.arm9ExecNs
-                , (unsigned long long)profTotals.arm7ExecNs
                 , (unsigned long long)profTotals.gpu3dNs
+                , (unsigned long long)profTotals.arm7ExecNs
+                , (unsigned long long)profTotals.dma9Ns
+                , (unsigned long long)profTotals.dma7Ns
                 , (unsigned long long)profTotals.runSystemNs
+                , (unsigned long long)profTotals.gxCommands
                 , (unsigned long long)profTotals.arm9IdleHits
                 , (unsigned long long)profTotals.arm7IdleHits
                 , (unsigned long long)profTotals.arm7IdleSkips
