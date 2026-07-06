@@ -1339,7 +1339,7 @@ void GLRenderer::RIRRecordFinalPass(int ystart, int yend)
 void GLRenderer::ReplayFinalPass(const GLLogRecord& r)
 {
     const u32 aux0Bytes = 256 * 256 * sizeof(u16);
-    const u8* p = LogBuild->Payload(r);
+    const u8* p = ReplaySrc()->Payload(r);   // r4-fix: replay bank, not live LogBuild
     RIRFinalPassHdr hr;
     memcpy(&hr, p, sizeof(hr));
     FinalPassConfig = hr.FPC;
@@ -1357,7 +1357,13 @@ void GLRenderer::ReplayFinalPass(const GLLogRecord& r)
 // Render3D record is skipped. Called from SubmitFrame() with SubmitReplaying set.
 void GLRenderer::ReplayLog()
 {
-    const u32 n = LogBuild->Count();
+    // r4-fix: read the command log from the REPLAY bank (the bank the packet
+    // published), NOT the live LogBuild. Under the render thread the emu thread has
+    // already run StartFrameLog for frame N+1, flipping LogBuild to the other bank;
+    // reading LogBuild here replayed the wrong bank's log (the FBHASH gate caught this
+    // as an every-other-frame blank — all bank=0 frames rendered a constant blank).
+    LogReplay = LogReplayBank ? &RenderLogB : &RenderLogA;
+    const u32 n = LogReplay->Count();
 
     // R4 STEP 2: point the deferred-raster reads at the replay bank the emu published
     // (texture-VRAM shadow + render-register snapshot) — race-free against emu frame
@@ -1377,7 +1383,7 @@ void GLRenderer::ReplayLog()
     GLRenderer3D* r3d = static_cast<GLRenderer3D*>(Rend3D.get());
     bool has3D = false;
     for (u32 i = 0; i < n; i++)
-        if (LogBuild->At(i).Op == GLOp::Render3D) { has3D = true; break; }
+        if (LogReplay->At(i).Op == GLOp::Render3D) { has3D = true; break; }
 
     if (has3D)
         r3d->RenderFrameBodyGeometry();
@@ -1391,7 +1397,7 @@ void GLRenderer::ReplayLog()
 
     for (u32 i = 0; i < n; i++)
     {
-        const GLLogRecord& r = LogBuild->At(i);
+        const GLLogRecord& r = LogReplay->At(i);
         switch (r.Op)
         {
         case GLOp::FinalPassSpan:
@@ -1410,6 +1416,7 @@ void GLRenderer::ReplayLog()
         }
     }
     GPU.SetTexReadShadow(false, 0);
+    LogReplay = nullptr;   // r4-fix: immediate RIR replay reads live LogBuild again
 }
 
 void GLRenderer::SubmitFrame()

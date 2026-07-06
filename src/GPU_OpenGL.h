@@ -203,6 +203,14 @@ private:
     RenderLog RenderLogA;
     RenderLog RenderLogB;
     RenderLog* LogBuild = &RenderLogA;
+    // r4-fix: during the deferred ReplayLog() drain, points at the REPLAY bank's log
+    // (the bank the packet published). Reads of the log records/payload during replay
+    // MUST come from here, not LogBuild — under the render thread the emu has already
+    // flipped LogBuild to the other bank for frame N+1. nullptr outside deferred replay
+    // (immediate RIR reads the live LogBuild, which is correct there). ReplaySrc()
+    // returns the right source for both paths.
+    RenderLog* LogReplay = nullptr;
+    RenderLog* ReplaySrc() { return LogReplay ? LogReplay : LogBuild; }
     int LogBuildBank = 0;
     // R4 STEP 2: the bank SubmitFrame/ReplayLog reads back (texture-VRAM shadow +
     // render-register snapshot). Single-thread this tranche: SubmitFrame sets it to

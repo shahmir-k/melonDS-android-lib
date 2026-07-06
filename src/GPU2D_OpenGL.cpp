@@ -2292,16 +2292,16 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
     switch (r.Op)
     {
     case GLOp::UploadPalBG:
-        DoUploadPalBG(reinterpret_cast<const u16*>(Parent.LogBuild->Payload(r)));
+        DoUploadPalBG(reinterpret_cast<const u16*>(Parent.ReplaySrc()->Payload(r)));
         break;
     case GLOp::UploadPalOBJ:
-        DoUploadPalOBJ(reinterpret_cast<const u16*>(Parent.LogBuild->Payload(r)));
+        DoUploadPalOBJ(reinterpret_cast<const u16*>(Parent.ReplaySrc()->Payload(r)));
         break;
     case GLOp::UploadBGVRAM:
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, VRAMTex_BG);
-        const u8* pl = Parent.LogBuild->Payload(r);
+        const u8* pl = Parent.ReplaySrc()->Payload(r);
         if (pl)
             // deferred: payload holds exactly the span bytes (Stage B snapshot)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, r.YStart, 1024, r.YEnd - r.YStart,
@@ -2318,7 +2318,7 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
     {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
-        const u8* pl = Parent.LogBuild->Payload(r);
+        const u8* pl = Parent.ReplaySrc()->Payload(r);
         if (pl)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, r.YStart, 1024, r.YEnd - r.YStart,
                             GL_RED_INTEGER, GL_UNSIGNED_BYTE, pl);
@@ -2335,7 +2335,7 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         // Restore the snapshotted LayerConfig + re-upload it to the UBO (the inline
         // path uploaded via UpdateLayerConfig, which RECOMPUTES from live registers
         // — must not be called here). Reproduce the shared layer-preshader setup.
-        memcpy(&Rpl.LayerConfig, Parent.LogBuild->Payload(r), sizeof(Rpl.LayerConfig));
+        memcpy(&Rpl.LayerConfig, Parent.ReplaySrc()->Payload(r), sizeof(Rpl.LayerConfig));
         glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(Rpl.LayerConfig), &Rpl.LayerConfig);
 
@@ -2357,7 +2357,7 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
     {
         // Restore SpriteConfig + NumSprites, re-upload SpriteConfigUBO from the
         // snapshot, reproduce the OBJ VRAM/pal texture binds, then prerender.
-        memcpy(&Rpl.SpriteConfig, Parent.LogBuild->Payload(r), sizeof(Rpl.SpriteConfig));
+        memcpy(&Rpl.SpriteConfig, Parent.ReplaySrc()->Payload(r), sizeof(Rpl.SpriteConfig));
         Rpl.NumSprites = r.I0;
         glBindBuffer(GL_UNIFORM_BUFFER, SpriteConfigUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0,
@@ -2375,7 +2375,7 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         // Restore SpriteScanlineConfig span + SpriteConfig + sprite scalars, upload
         // SpriteConfigUBO from the snapshot (DoRenderSprites uploads the scanline
         // UBO itself), then run the existing sprite-span raster.
-        const u8* p = Parent.LogBuild->Payload(r);
+        const u8* p = Parent.ReplaySrc()->Payload(r);
         memcpy(&Rpl.SpriteScanlineConfig, p, sizeof(Rpl.SpriteScanlineConfig));
         memcpy(&Rpl.SpriteConfig, p + sizeof(Rpl.SpriteScanlineConfig), sizeof(Rpl.SpriteConfig));
         Rpl.NumSprites = r.I0;
@@ -2396,7 +2396,7 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         // run the composite. RenderScreen uploads the ScanlineConfig/Compositor UBOs
         // itself; LayerConfigUBO must be re-uploaded from the span snapshot because
         // it holds end-of-frame layer state at submit time.
-        const u8* p = Parent.LogBuild->Payload(r);
+        const u8* p = Parent.ReplaySrc()->Payload(r);
         RIRCompositeRegs regs;
         memcpy(&regs, p, sizeof(regs));
         memcpy(&Rpl.ScanlineConfig, p + sizeof(regs), sizeof(Rpl.ScanlineConfig));
