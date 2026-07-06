@@ -77,10 +77,22 @@ static_assert(offsetof(ARM, R) == ARM_R_offset,
 // append pairs here AND the matching `ldr/str wNN` in ARMJIT_Linkage.S.
 static const struct { int GuestReg; Arm64Gen::ARM64Reg HostReg; } GlobalRegPins[] =
 {
+    // STEP 2: the full free callee-saved pool. AArch64 reserves x26/x27/x28/x29
+    // (RMemBase/RCPSR/RCycles/RCPU), so W19..W25 (7 regs) are the architectural
+    // maximum for a global pin here — a full DraStic r0..r14 (15-reg) pin is not
+    // representable on this host without evicting the fastmem/CPSR/cycle regs.
+    // Guest r0..r6 (never mode-banked) map to the leading NativeRegAllocOrder
+    // entries the dynamic cache used to hand out.
     { 0, Arm64Gen::W19 },
+    { 1, Arm64Gen::W20 },
+    { 2, Arm64Gen::W21 },
+    { 3, Arm64Gen::W22 },
+    { 4, Arm64Gen::W23 },
+    { 5, Arm64Gen::W24 },
+    { 6, Arm64Gen::W25 },
 };
 static constexpr int NumGlobalRegPins = sizeof(GlobalRegPins) / sizeof(GlobalRegPins[0]);
-static constexpr u16 GlobalRegPinnedMask = 0x0001; // bit set per pinned guest reg (r0)
+static constexpr u16 GlobalRegPinnedMask = 0x007F; // r0..r6
 #endif
 
 /*
