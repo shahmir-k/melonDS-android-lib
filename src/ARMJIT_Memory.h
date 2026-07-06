@@ -155,7 +155,12 @@ public:
     static constexpr u32 FastTableShift = 11;                       // 2 KB pages
     static constexpr u32 FastTableEntries = 1u << (32 - FastTableShift); // 2,097,152
     [[nodiscard]] u64* GetFastMemTable(u32 num) noexcept { return num == 0 ? FastMemTable9 : FastMemTable7; }
-    // Wipe both tables back to all-slow. Called on any mapping-geometry change.
+    // STORE-side tables (see ARM::FastMemStoreTable). Separate from the load table so
+    // loads and stores can map differently (e.g. NWRAM: load-fast, store-slow).
+    [[nodiscard]] u64* GetFastMemStoreTable(u32 num) noexcept { return num == 0 ? FastMemStoreTable9 : FastMemStoreTable7; }
+    [[nodiscard]] u64* GetFastMemStoreCodeTable(u32 num) noexcept { return num == 0 ? FastMemStoreCode9 : FastMemStoreCode7; }
+    // Wipe all fast tables (load + store) back to all-slow. Called on any
+    // mapping-geometry change.
     void FlushFastTables() noexcept;
     // Resolver side effect: if `addr` (for CPU `num`) lands in a fastmem-compatible
     // flat RAM page whose whole 2 KB page has uniform classification, compute and
@@ -203,6 +208,10 @@ private:
 #ifdef LITEV_MEM_SWTABLE
     u64* FastMemTable9 = nullptr;
     u64* FastMemTable7 = nullptr;
+    u64* FastMemStoreTable9 = nullptr;
+    u64* FastMemStoreTable7 = nullptr;
+    u64* FastMemStoreCode9 = nullptr;
+    u64* FastMemStoreCode7 = nullptr;
 #endif
 
 #if defined(__SWITCH__)

@@ -949,6 +949,13 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds, bool fastmem) : NDS(nds)
     FastMemTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
     FastMemTable7 = (u64*)calloc(FastTableEntries, sizeof(u64));
     assert(FastMemTable9 && FastMemTable7);
+    // Dedicated STORE tables: host-pointer delta (gate + raw-store base) and SMC
+    // code-bitmap base per store-eligible page. calloc zero-fills (all slow).
+    FastMemStoreTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    FastMemStoreTable7 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    FastMemStoreCode9  = (u64*)calloc(FastTableEntries, sizeof(u64));
+    FastMemStoreCode7  = (u64*)calloc(FastTableEntries, sizeof(u64));
+    assert(FastMemStoreTable9 && FastMemStoreTable7 && FastMemStoreCode9 && FastMemStoreCode7);
 #endif
 }
 
@@ -971,6 +978,10 @@ ARMJIT_Memory::~ARMJIT_Memory() noexcept
 #ifdef LITEV_MEM_SWTABLE
     free(FastMemTable9); FastMemTable9 = nullptr;
     free(FastMemTable7); FastMemTable7 = nullptr;
+    free(FastMemStoreTable9); FastMemStoreTable9 = nullptr;
+    free(FastMemStoreTable7); FastMemStoreTable7 = nullptr;
+    free(FastMemStoreCode9);  FastMemStoreCode9  = nullptr;
+    free(FastMemStoreCode7);  FastMemStoreCode7  = nullptr;
 #endif
 
 #if defined(__SWITCH__)
@@ -1074,6 +1085,16 @@ void ARMJIT_Memory::FlushFastTables() noexcept
         memset(FastMemTable9, 0, (size_t)FastTableEntries * sizeof(u64));
     if (FastMemTable7)
         memset(FastMemTable7, 0, (size_t)FastTableEntries * sizeof(u64));
+    // Store tables are populated in lockstep with the load table by InstallFastEntry,
+    // so they must be flushed together to stay coherent on every geometry change.
+    if (FastMemStoreTable9)
+        memset(FastMemStoreTable9, 0, (size_t)FastTableEntries * sizeof(u64));
+    if (FastMemStoreTable7)
+        memset(FastMemStoreTable7, 0, (size_t)FastTableEntries * sizeof(u64));
+    if (FastMemStoreCode9)
+        memset(FastMemStoreCode9, 0, (size_t)FastTableEntries * sizeof(u64));
+    if (FastMemStoreCode7)
+        memset(FastMemStoreCode7, 0, (size_t)FastTableEntries * sizeof(u64));
 }
 
 void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
@@ -1131,7 +1152,46 @@ void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
     // Store delta so that host(a) = delta + a  for every a in the page.
     u8* backingBase = MemoryBase + OffsetsPerRegion[region] + memoryOffset;
     u64 delta = (u64)(uintptr_t)backingBase - (u64)mirrorStart;
-    table[addr >> FastTableShift] = delta;
+    u32 page = addr >> FastTableShift;
+    table[page] = delta;
+
+    // ---- STORE-side eligibility -------------------------------------------
+    // A raw host store is bit-exact to SlowWrite ONLY for plain writable flat RAM
+    // whose backing byte IS `delta + a`. That is MainRAM, DTCM, SharedWRAM and WRAM7.
+    // NWRAM is EXCLUDED even though it is fastmem-compatible for LOADS: a DSi NWRAM
+    // bank write mirrors the value into every mapped part (DSi::ARM9Write32 loops over
+    // NWRAMMap), so a single raw store would miss the other parts. Leaving its store
+    // entry 0 keeps NWRAM writes on the exact SlowWrite path. Everything else already
+    // failed IsFastmemCompatible above and never reaches here.
+    bool storeSafe = region == memregion_MainRAM
+                  || region == memregion_DTCM
+                  || region == memregion_SharedWRAM
+                  || region == memregion_WRAM7;
+    if (storeSafe)
+    {
+        u64* storeTable = num == 0 ? FastMemStoreTable9 : FastMemStoreTable7;
+        u64* storeCode  = num == 0 ? FastMemStoreCode9  : FastMemStoreCode7;
+
+        // SMC (self-modifying-code) bitmap base for this page. For a code-bearing
+        // region the store fast path must reproduce CheckAndInvalidate<num,region>
+        // exactly: index CodeMemRegions[region] by the page-local address. DTCM is
+        // never executable (CodeMemRegions[DTCM] == NULL) so it needs no SMC check ->
+        // codeBase 0. Every store-safe region localises page-aligned to a 2 KB-aligned
+        // local offset (low 11 bits == 0), so the whole page's 4 x 512-byte AddressRange
+        // entries are the 4 consecutive entries starting at codeBase.
+        u64 codeBase = 0;
+        AddressRange* cmr = NDS.JIT.CodeMemRegions[region];
+        if (cmr)
+        {
+            u32 localBase = LocaliseAddress(region, num, pageStart);
+            codeBase = (u64)(uintptr_t)&cmr[(localBase & 0x7FFFFFF) / 512];
+        }
+
+        // Publish delta and codeBase together: the JIT reads storeTable as the gate,
+        // so codeBase must already be in place when a non-zero delta becomes visible.
+        storeCode[page]  = codeBase;
+        storeTable[page] = delta;
+    }
 }
 #endif
 

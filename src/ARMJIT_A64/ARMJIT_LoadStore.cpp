@@ -258,20 +258,62 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
     }
     else
     {
-        // store: exact SlowWrite helper (no fast path -> invalidation untouched).
-        PushRegs(false, false);
+        // ---- STORE fast path (branchless software page table) ---------------
+        // Bit-exact by construction. A non-zero FastMemStoreTable entry means the page
+        // is plain writable flat RAM (MainRAM/DTCM/SharedWRAM/WRAM7) whose backing byte
+        // is exactly (delta + addr) -- the same host location fault-based fastmem writes
+        // and the same one SlowWrite reaches, so the raw store's bytes are identical.
+        // SMC/JIT invalidation is PRESERVED exactly: after the raw store we reproduce
+        // CheckAndInvalidate<num,region> inline against the real Code bitmap (via the
+        // per-page base in FastMemStoreCodeTable) and, only when a code bit is actually
+        // set, fall through to the exact SlowWrite (which re-stores idempotently and runs
+        // the real InvalidateByAddr). Store<->invalidate order is irrelevant: the store
+        // touches guest RAM, the invalidation touches JIT block metadata -- disjoint.
+        // W0 = access address (preserved). Scratch: W1/W2/W3/W5/X6/W7 (rdMapped may be
+        // W4, and W8+/W19+ hold guest regs, so those are avoided).
+        static_assert(sizeof(AddressRange) == 16, "store SMC check assumes 16-byte AddressRange");
+
+        LDR(INDEX_UNSIGNED, X1, RCPU, offsetof(ARM, FastMemStoreTable));
+        LSR(W2, W0, ARMJIT_Memory::FastTableShift);
+        LDR(X3, X1, ArithOption(W2, true));           // ldr x3, [x1, w2, uxtw #3]  (delta)
+        FixupBranch slow = CBZ(X3);                    // 0 => not store-eligible (incl NWRAM)
+
+        // fast raw store: host = (addr & alignMask) + delta ; *(T*)host = rd
+        if (size > 8)
+            ANDI2R(W5, W0, addressMask);
+        else
+            MOV(W5, W0);                               // W5 = aligned address
+        ADD(X6, X5, X3);                               // X6 = host pointer
+        STRGeneric(size, INDEX_UNSIGNED, rdMapped, X6, 0);
+
+        // SMC: reproduce CheckAndInvalidate<num,region>(alignedAddr) exactly.
+        LDR(INDEX_UNSIGNED, X1, RCPU, offsetof(ARM, FastMemStoreCodeTable));
+        LDR(X3, X1, ArithOption(W2, true));           // X3 = code-bitmap base (0 for DTCM)
+        FixupBranch doneNoSMC = CBZ(X3);              // DTCM: never executable -> no check
+        UBFX(W7, W5, 9, 2);                            // blockIdx = (localAddr >> 9) & 3
+        ADD(X3, X3, X7, ArithOption(X7, ST_LSL, 4));  // &AddressRange[blockIdx]  (*16)
+        LDR(INDEX_UNSIGNED, W7, X3, offsetof(AddressRange, Code));
+        UBFX(W1, W5, 4, 5);                            // bit = (localAddr & 0x1FF) >> 4
+        LSRV(W7, W7, W1);
+        FixupBranch doneNoBit = TBZ(W7, 0);           // no code in this 16-byte granule
+        // code present: fall through into the exact SlowWrite (re-store + invalidate).
+
+        SetJumpTarget(slow);
+        // allowUnload=false: the fast paths above bypass this Push/Pop, so evicting a
+        // mapped reg here would desync the register cache at the merge point.
+        PushRegs(false, false, false);
         if (Num == 0)
         {
             MOV(X1, RCPU);
             MOV(W2, rdMapped);
             switch (size | NDS.ConsoleType)
             {
-            case 32: QuickCallFunction(X3, SlowWrite9<u32, 0>); break;
-            case 33: QuickCallFunction(X3, SlowWrite9<u32, 1>); break;
-            case 16: QuickCallFunction(X3, SlowWrite9<u16, 0>); break;
-            case 17: QuickCallFunction(X3, SlowWrite9<u16, 1>); break;
-            case 8:  QuickCallFunction(X3, SlowWrite9<u8,  0>); break;
-            case 9:  QuickCallFunction(X3, SlowWrite9<u8,  1>); break;
+            case 32: QuickCallFunction(X3, SlowWrite9SW<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite9SW<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite9SW<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite9SW<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite9SW<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite9SW<u8,  1>); break;
             }
         }
         else
@@ -279,15 +321,18 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
             MOV(W1, rdMapped);
             switch (size | NDS.ConsoleType)
             {
-            case 32: QuickCallFunction(X3, SlowWrite7<u32, 0>); break;
-            case 33: QuickCallFunction(X3, SlowWrite7<u32, 1>); break;
-            case 16: QuickCallFunction(X3, SlowWrite7<u16, 0>); break;
-            case 17: QuickCallFunction(X3, SlowWrite7<u16, 1>); break;
-            case 8:  QuickCallFunction(X3, SlowWrite7<u8,  0>); break;
-            case 9:  QuickCallFunction(X3, SlowWrite7<u8,  1>); break;
+            case 32: QuickCallFunction(X3, SlowWrite7SW<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite7SW<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite7SW<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite7SW<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite7SW<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite7SW<u8,  1>); break;
             }
         }
         PopRegs(false, false);
+
+        SetJumpTarget(doneNoSMC);                      // fast paths merge here
+        SetJumpTarget(doneNoBit);
     }
 #else
     u32 expectedTarget = Num == 0

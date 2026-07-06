@@ -229,6 +229,20 @@ public:
     // Placed AFTER the offset-critical hot fields (Cycles/StopExecution/CPSR/
     // CyclesBudget) so it cannot disturb their hard-coded/static_asserted offsets.
     u64* FastMemPageTable = nullptr;
+
+    // STORE-side branchless page tables (liteDS-v2). Loads and stores map
+    // DIFFERENTLY: a page is store-eligible (non-zero FastMemStoreTable entry =
+    // host-pointer delta) ONLY when a raw host store there is byte-for-byte identical
+    // to the exact SlowWrite helper -- i.e. plain writable flat RAM (MainRAM/DTCM/
+    // SharedWRAM/WRAM7). NWRAM is deliberately EXCLUDED (a DSi NWRAM bank write mirrors
+    // into every mapped part, so a single raw store is NOT equivalent); IO/VRAM/ITCM/
+    // BIOS are excluded by not being fastmem-compatible. FastMemStoreCodeTable holds,
+    // per store-eligible page, a pointer to that page's first AddressRange in the JIT
+    // SMC bitmap (or 0 for DTCM, which is never executable), so the JIT can inline the
+    // exact CheckAndInvalidate bit test after the raw store and divert to the exact
+    // SlowWrite (which re-stores idempotently + invalidates) only when code is present.
+    u64* FastMemStoreTable = nullptr;
+    u64* FastMemStoreCodeTable = nullptr;
 #endif
 
     static const u32 ConditionTable[16];
