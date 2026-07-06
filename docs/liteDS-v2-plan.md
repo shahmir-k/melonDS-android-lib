@@ -1990,3 +1990,36 @@ boundary savings. This CONFIRMS addendum 22's measured null-prediction — now w
 a real bit-exact implementation and A55 measurement, not a within-block
 simulation. The flag is landed OFF by default for optional widening/experiment;
 the real FPS lever remains R4 render-thread overlap (addenda 23/24).
+
+### D.7 addendum 26 — ★ DraStic branchless fastmem + widened register pin: −7.4% ARM9 on device (MEASURED, bit-exact) ★
+
+The coupled DraStic core architecture, built + torture-gated + measured on the A55.
+This CONTRADICTED my own "core is at its floor / per-access check will be net-negative"
+prediction — the coupling (memory model frees a reg → widens the register pin) is what
+makes it pay off, exactly why the pieces measured small in isolation.
+
+STEP 1 (c0b750ab, LITEV_MEM_SWTABLE, default OFF): DraStic branchless software page-table
+fastmem on the JIT LOAD hot path. Flat per-CPU 2KB-page delta table (2^21 x 8B),
+load = LSR/LDR/CBZ/ADD/LDR — one predicated branch, no SIGSEGV handler. Bit-exact by
+construction (delta = the same host pointer fault-based fastmem maps; lazy-installed on
+miss returning the exact SlowRead; loads-only so SMC/JIT invalidation untouched; table
+flushed on DTCM/SWRAM/NWRAM remap+ITCM resize+reset). Table base in ARM::FastMemPageTable
+loaded per-access from context — NOT a reserved host reg (the key: frees MemBase x26).
+
+STEP 2 (d3a0ddfa): with the sw-table, x26/RMemBase is unused → freed and added to the
+LITEV_JIT_GLOBALREG pin as the 8th reg (guest r7 → W26), the AArch64 max.
+
+MEASURED A55 (arm9_exec_ns_per_frame, in-race window 60:960, fault-based baseline
+--fastmem on vs sw-table --fastmem off, interleaved 3-rep, ~83C/1.6GHz):
+  baseline 11.56ms → sw-table 10.73ms (−7.2%) → sw-table+pin 10.69ms (−7.4%).
+Slow u32 load-helper calls 1.54M → 0.28M/frame (branchless table inlines ~82% of the
+loads fault-based left on the slow path — WHY it wins on the in-order A55). Host arm64
+flat (OoO absorbs it — device is the truth). All 5 torture goldens (incl armwrestler/
+rockwrestler WITH scripts) bit-exact at every commit, RE-VERIFIED by orchestrator;
+default byte-identical.
+
+This is the first MEASURED emulation-core win of real size, and it's the DraStic memory
+model + register ABI working together. Honest follow-on (not yet done): store-side
+sw-table + SMC write-table (STEP 1 is loads-only), and whether the ~−7% ARM9 (~0.5-0.8ms
+of the frame) plus store-side compounds to a felt FPS change on the heavy scene — to be
+measured end-to-end in the app.
