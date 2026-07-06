@@ -1650,3 +1650,28 @@ flight: (A) headless pure-emulation floor on the race savestate; (B) app
 RunFrame FULLY partitioned (emulation vs ALL 2D render CPU vs 3D vs flatten vs
 config vs recording) — instrumenting the 2D per-scanline path the prior agent
 missed. That split is the definitive go/no-go for the R4 investment.
+
+### D.7 addendum 15 — CONFIRMED: emulation floor ~22ms; R4 caps ~42fps; 60 needs BOTH fronts
+
+Device-measured, in-race, three ways agreeing:
+| mode | runFrame | wall | fps |
+|---|---|---|---|
+| norender (pure emulation floor) | ~22.5ms | ~24 | ~42 |
+| full inline render (current, flag OFF) | ~30.4ms | ~32 | ~31 |
+| deferred single-thread | ~28.5ms | ~34 | ~29 |
+Render CPU on emu thread ≈ 8ms (2D per-scanline 4.7 + 3D raster 3.7 + flatten 0.4 + cfg 0.2).
+
+The ~22ms floor = ARM9 7.5 + GPU3D-geom 2.3 + ARM7 1.9 + DMA 1.7 + SPU + per-scanline
+event dispatch (the ~8.7ms the emu-compute buckets exclude). The earlier "13.5ms"
+was ONLY the ARM9/GPU3D/ARM7/DMA sub-buckets, not the full emulation.
+
+DECISION (final, both required for 60fps@3x, matching DraStic):
+- FRONT 1 R4 render thread: wall→max(22, 8)≈22ms ⇒ ~42fps. +35% over 31. Necessary,
+  not sufficient. The gating build is deferring the inline 3D RenderFrame — three
+  agents scoped-not-built it (texcache edge-dirty hazard, device-only-verifiable).
+  Unlock: apply the RIR method (record→immediate-replay 3D first, bit-exact,
+  device-verifiable) that already broke the 2D monolith, THEN shadow+defer, THEN thread.
+- FRONT 2 emulation core: cut the 22ms floor → ≤16.6ms (need ~5.5ms). DraStic's edge
+  is its JIT (fixed register alloc + hardware NZCV + condition folding, teardown §6) +
+  lean SPU. This is the 42→60 lever. Golden-gated, WiFi/MP untouched (DraStic speed
+  WITH multiplayer is the whole goal). Running.
