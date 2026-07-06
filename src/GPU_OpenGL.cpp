@@ -742,14 +742,16 @@ void GLRenderer::VBlank()
     // to the inline path, verified by on-device screenshot parity.
     if (DeferReplay)
     {
-        // Phase 2 full deferred submit. Capture the 3D color output NOW (the
-        // VBlank point, VCount 192) — before the inline VCount-215 Start3DRendering
-        // overwrites the single OutputTex3D — so the deferred 2D composites can read
-        // it at SubmitFrame (SubmitReplaying picks the shadow). Then RECORD the
+        // R4 STEP 1 — zero-GL RunFrame. Phase 2 full deferred submit. Since Stage 1b
+        // the 3D raster is itself deferred and (recorded at VCount 215) replays LAST
+        // in the log, AFTER these VBlank 2D composites. So at SubmitFrame the 2D
+        // composites read the live OutputTex3D still holding the PREVIOUS frame's 3D
+        // — identical to the inline path — and the VBlank-point 3D snapshot blit
+        // (Submit_Snapshot3D) is redundant and REMOVED. With it gone this DeferReplay
+        // VBlank issues NO GL: the whole RunFrame is now GL-free, which is what lets
+        // the render thread own OutputTex3D (and all GL) exclusively. RECORD the
         // VBlank-span 2D work (per-engine sprite raster + composite, and the final
-        // pass) into the log; no GL is issued. The whole log replays at
-        // SubmitFrame(), where the buffer swap + per-frame GL bookkeeping also run.
-        Submit_Snapshot3D();
+        // pass) into the log; no GL is issued. The whole log replays at SubmitFrame().
         Rend2D_A->VBlank();                 // records RenderSpritesSpan + Composite2D
         Rend2D_B->VBlank();
         RIRRecordFinalPass(LastLine, 192);  // records FinalPassSpan

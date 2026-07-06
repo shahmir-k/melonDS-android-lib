@@ -1970,12 +1970,17 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
         if ((i == 0) && (DispCnt & (1<<3)))
         {
 #ifdef LITEV_RENDER_THREAD
-            // R4 deferred submit: during SubmitFrame replay the live OutputTex3D
-            // has already been overwritten by the next frame's Start3DRendering,
-            // so read the snapshot taken at the VBlank point instead.
+            // R4 STEP 1 (zero-GL RunFrame): under the full DeferReplay path the 3D
+            // raster is itself deferred (Stage 1b) and replays LAST in the log, so
+            // when these 2D composites replay the live OutputTex3D still holds the
+            // PREVIOUS frame's 3D output — exactly what the inline path reads — and
+            // no VBlank-point snapshot is needed. Read OutputTex3D live. The legacy
+            // narrow-deferral bring-up path (final-composite-only, 3D still inline at
+            // VCount 215) still needs the VBlank snapshot, so it keeps the shadow.
             glBindTexture(GL_TEXTURE_2D,
-                          Parent.SubmitReplaying ? Parent.SubmitShadow3DTex
-                                                 : Parent.OutputTex3D);
+                          (Parent.SubmitReplaying && !Parent.DeferReplay)
+                              ? Parent.SubmitShadow3DTex
+                              : Parent.OutputTex3D);
 #else
             glBindTexture(GL_TEXTURE_2D, Parent.OutputTex3D);
 #endif
