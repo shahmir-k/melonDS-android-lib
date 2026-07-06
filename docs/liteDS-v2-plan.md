@@ -1723,3 +1723,29 @@ it's a broken oracle providing zero protection. TODO: regenerate both from the
 current default build (or delete) so the ARM torture oracle is real again. Any
 agent citing "armwrestler/rockwrestler pass" was verifying a circular/regenerated
 copy — trust only shrek-600 + shrek-race-3400 + shrek-600-eventslices until fixed.
+
+### D.7 addendum 18 — R4 STEP 1+2 landed (concurrency foundation); THERMAL is the sustained-60 constraint
+
+Pushed liteDS-v2-android e3074445: STEP 1 (zero-GL RunFrame — removed the last
+VBlank blit; 2D reads live OutputTex3D, safe since Render3D replays last) + STEP 2
+(double-buffered the replay-read state: VRAMFlat_Texture/TexPalShadow[2] + a
+RenderRegs3D snapshot bank keyed to LogBuildBank; copy cost 0.19ms/336KB, flag-OFF
+byte-identical). Device-verified screenshot-clean both steps, host goldens both flags.
+Prep is only ~2ms (full2D 1.6 + flatten 0.34 + cfg 0.19) — most of RunFrame is core.
+
+**THERMAL FINDING (load-bearing for the goal):** the RG DS SoC throttles to ~80C
+within ~1min of racing (min-freq pinned 1.992GHz but the chip caps regardless).
+- COOL: threaded wall ≈ 15ms ⇒ ~60fps.  THROTTLED: wall ≈ 23ms ⇒ ~43fps.
+So the threaded 60fps is REAL but only sustained if the device stays cool. On a
+passively-cooled handheld, sustained racing throttles. IMPLICATION: matching DraStic
+for SUSTAINED play needs BOTH (a) R4 thread (peak 60) AND (b) emulation-core
+efficiency (FIXEDREG etc. = fewer joules/frame = less throttle = holds 60 longer).
+The emulation-core work is NO LONGER just headroom — it is required for sustained 60.
+Also: the STEP-3 FPS gate MUST be measured on a COOLED device (force-stop between
+runs, wait <60C) or it reads the throttled ~43 and undercounts the real win.
+
+STEP 3 (the render thread) is the only remaining R4 piece — foundation done, precise
+handoff in docs/r4-step3-handoff.md: context share-group, runFrame GL touchpoints to
+relocate, mutex+condvar depth-1 handshake, early-bank-release at GPU3D_OpenGL.cpp:1516,
+drain protocol (capture/pause/savestate/reset), and the one remaining 2D-config
+staging race (LayerConfig/ScanlineConfig live members → render-thread-private).
