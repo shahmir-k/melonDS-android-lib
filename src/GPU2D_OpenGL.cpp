@@ -1714,28 +1714,45 @@ void GLRenderer2D::UpdateOAM(int ystart, int yend)
 
 void GLRenderer2D::UpdateCompositorConfig()
 {
+#ifdef LITEV_RENDER_THREAD
+    const u8&  _LayerEnable = RIRReplaying ? Rpl.LayerEnable : LayerEnable;
+    const u16* _BGCnt       = RIRReplaying ? Rpl.BGCnt       : BGCnt;
+    const u32& _DispCnt     = RIRReplaying ? Rpl.DispCnt     : DispCnt;
+    const u16& _BlendCnt    = RIRReplaying ? Rpl.BlendCnt    : BlendCnt;
+    const u8&  _EVA         = RIRReplaying ? Rpl.EVA         : EVA;
+    const u8&  _EVB         = RIRReplaying ? Rpl.EVB         : EVB;
+    const u8&  _EVY         = RIRReplaying ? Rpl.EVY         : EVY;
+#else
+    const u8&  _LayerEnable = LayerEnable;
+    const u16* _BGCnt       = BGCnt;
+    const u32& _DispCnt     = DispCnt;
+    const u16& _BlendCnt    = BlendCnt;
+    const u8&  _EVA         = EVA;
+    const u8&  _EVB         = EVB;
+    const u8&  _EVY         = EVY;
+#endif
     // compositor info buffer
     for (int i = 0; i < 4; i++)
         CompositorConfig.uBGPrio[i] = -1;
 
     for (int layer = 0; layer < 4; layer++)
     {
-        if (!(LayerEnable & (1 << layer)))
+        if (!(_LayerEnable & (1 << layer)))
             continue;
 
-        int prio = BGCnt[layer] & 0x3;
+        int prio = _BGCnt[layer] & 0x3;
         CompositorConfig.uBGPrio[layer] = prio;
     }
 
-    CompositorConfig.uEnableOBJ = !!(LayerEnable & (1<<4));
+    CompositorConfig.uEnableOBJ = !!(_LayerEnable & (1<<4));
 
-    CompositorConfig.uEnable3D = !!(DispCnt & (1<<3));
+    CompositorConfig.uEnable3D = !!(_DispCnt & (1<<3));
 
-    CompositorConfig.uBlendCnt = BlendCnt;
-    CompositorConfig.uBlendEffect = (BlendCnt >> 6) & 0x3;
-    CompositorConfig.uBlendCoef[0] = EVA;
-    CompositorConfig.uBlendCoef[1] = EVB;
-    CompositorConfig.uBlendCoef[2] = EVY;
+    CompositorConfig.uBlendCnt = _BlendCnt;
+    CompositorConfig.uBlendEffect = (_BlendCnt >> 6) & 0x3;
+    CompositorConfig.uBlendCoef[0] = _EVA;
+    CompositorConfig.uBlendCoef[1] = _EVB;
+    CompositorConfig.uBlendCoef[2] = _EVY;
 
     glBindBuffer(GL_UNIFORM_BUFFER, CompositorConfigUBO);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(CompositorConfig), &CompositorConfig);
@@ -1744,12 +1761,19 @@ void GLRenderer2D::UpdateCompositorConfig()
 
 void GLRenderer2D::PrerenderSprites()
 {
+#ifdef LITEV_RENDER_THREAD
+    const int&           _NumSprites   = RIRReplaying ? Rpl.NumSprites   : NumSprites;
+    const sSpriteConfig& _SpriteConfig = RIRReplaying ? Rpl.SpriteConfig : SpriteConfig;
+#else
+    const int&           _NumSprites   = NumSprites;
+    const sSpriteConfig& _SpriteConfig = SpriteConfig;
+#endif
     u16* vtxbuf = SpritePreVtxData;
     int vtxnum = 0;
 
-    for (int i = 0; i < NumSprites; i++)
+    for (int i = 0; i < _NumSprites; i++)
     {
-        auto& sprite = SpriteConfig.uOAM[i];
+        auto& sprite = _SpriteConfig.uOAM[i];
         if (sprite.Type >= 3)
             continue;
 
@@ -1787,7 +1811,12 @@ void GLRenderer2D::PrerenderSprites()
 
 void GLRenderer2D::PrerenderLayer(int layer)
 {
-    auto& cfg = LayerConfig.uBGConfig[layer];
+#ifdef LITEV_RENDER_THREAD
+    const sLayerConfig& _LayerConfig = RIRReplaying ? Rpl.LayerConfig : LayerConfig;
+#else
+    const sLayerConfig& _LayerConfig = LayerConfig;
+#endif
+    auto& cfg = _LayerConfig.uBGConfig[layer];
 
     if (cfg.Type >= 6)
         return;
@@ -1808,7 +1837,16 @@ void GLRenderer2D::PrerenderLayer(int layer)
 
 void GLRenderer2D::DoRenderSprites(int line)
 {
-    int ystart = LastSpriteLine;
+#ifdef LITEV_RENDER_THREAD
+    const int&                   _LastSpriteLine       = RIRReplaying ? Rpl.LastSpriteLine       : LastSpriteLine;
+    const sSpriteScanlineConfig& _SpriteScanlineConfig = RIRReplaying ? Rpl.SpriteScanlineConfig : SpriteScanlineConfig;
+    const bool&                  _SpriteUseMosaic      = RIRReplaying ? Rpl.SpriteUseMosaic      : SpriteUseMosaic;
+#else
+    const int&                   _LastSpriteLine       = LastSpriteLine;
+    const sSpriteScanlineConfig& _SpriteScanlineConfig = SpriteScanlineConfig;
+    const bool&                  _SpriteUseMosaic      = SpriteUseMosaic;
+#endif
+    int ystart = _LastSpriteLine;
     int yend = line;
 
     glUseProgram(SpriteShader);
@@ -1824,7 +1862,7 @@ void GLRenderer2D::DoRenderSprites(int line)
     glBufferSubData(GL_UNIFORM_BUFFER,
                     ystart * sizeof(s32),
                     (yend - ystart) * sizeof(s32),
-                    &SpriteScanlineConfig.uMosaicLine[ystart]);
+                    &_SpriteScanlineConfig.uMosaicLine[ystart]);
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, OBJLayerFB);
@@ -1856,7 +1894,7 @@ void GLRenderer2D::DoRenderSprites(int line)
     glColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_FALSE);
 
-    if (SpriteUseMosaic)
+    if (_SpriteUseMosaic)
     {
         glUniform1i(SpriteRenderTransULoc, 1);
         glColorMaski(1, GL_FALSE, GL_TRUE, GL_FALSE, GL_TRUE);
@@ -1882,18 +1920,30 @@ void GLRenderer2D::DoRenderSprites(int line)
 
 void GLRenderer2D::RenderSprites(bool window, int ystart, int yend)
 {
+#ifdef LITEV_RENDER_THREAD
+    // GPU2D.DispCnt is live emu state; under deferred replay it belongs to frame
+    // N+1. Read the OBJ-window enable from the per-span snapshot (Rpl.SpriteDispCnt)
+    // instead, so the render thread never samples a moving emu register.
+    const u32            _SpriteDispCnt = RIRReplaying ? Rpl.SpriteDispCnt : GPU2D.DispCnt;
+    const int&           _NumSprites    = RIRReplaying ? Rpl.NumSprites    : NumSprites;
+    const sSpriteConfig& _SpriteConfig  = RIRReplaying ? Rpl.SpriteConfig  : SpriteConfig;
+#else
+    const u32            _SpriteDispCnt = GPU2D.DispCnt;
+    const int&           _NumSprites    = NumSprites;
+    const sSpriteConfig& _SpriteConfig  = SpriteConfig;
+#endif
     if (window)
     {
-        if (!(GPU2D.DispCnt & (1<<15)))
+        if (!(_SpriteDispCnt & (1<<15)))
             return;
     }
 
     u16* vtxbuf = SpriteVtxData;
     int vtxnum = 0;
 
-    for (int i = 0; i < NumSprites; i++)
+    for (int i = 0; i < _NumSprites; i++)
     {
-        auto& sprite = SpriteConfig.uOAM[i];
+        auto& sprite = _SpriteConfig.uOAM[i];
 
         bool iswin = (sprite.OBJMode == 2);
         if (iswin != window)
@@ -1948,6 +1998,19 @@ void GLRenderer2D::RenderSprites(bool window, int ystart, int yend)
 
 void GLRenderer2D::RenderScreen(int ystart, int yend)
 {
+#ifdef LITEV_RENDER_THREAD
+    const u8&              _ForcedBlank    = RIRReplaying ? Rpl.ForcedBlank    : ForcedBlank;
+    const bool&           _UnitEnabled     = RIRReplaying ? Rpl.UnitEnabled    : UnitEnabled;
+    const sScanlineConfig& _ScanlineConfig = RIRReplaying ? Rpl.ScanlineConfig : ScanlineConfig;
+    const sLayerConfig&    _LayerConfig    = RIRReplaying ? Rpl.LayerConfig    : LayerConfig;
+    const u32&             _DispCnt        = RIRReplaying ? Rpl.DispCnt        : DispCnt;
+#else
+    const u8&              _ForcedBlank    = ForcedBlank;
+    const bool&           _UnitEnabled     = UnitEnabled;
+    const sScanlineConfig& _ScanlineConfig = ScanlineConfig;
+    const sLayerConfig&    _LayerConfig    = LayerConfig;
+    const u32&             _DispCnt        = DispCnt;
+#endif
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, OutputFB);
 
@@ -1962,9 +2025,9 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
     glEnable(GL_SCISSOR_TEST);
     glScissor(0, ystart * ScaleFactor, ScreenW, (yend-ystart) * ScaleFactor);
 
-    if (ForcedBlank || !UnitEnabled)
+    if (_ForcedBlank || !_UnitEnabled)
     {
-        if (!UnitEnabled)
+        if (!_UnitEnabled)
         {
             if (GPU2D.Num)
                 glClearColor(1, 1, 1, 1);
@@ -1990,7 +2053,7 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
     glBufferSubData(GL_UNIFORM_BUFFER,
                     ystart * sizeof(sScanlineConfig::sScanline),
                     (yend - ystart) * sizeof(sScanlineConfig::sScanline),
-                    &ScanlineConfig.uScanline[ystart]);
+                    &_ScanlineConfig.uScanline[ystart]);
 
     UpdateCompositorConfig();
 
@@ -1998,7 +2061,7 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
     {
         glActiveTexture(GL_TEXTURE0 + i);
 
-        if ((i == 0) && (DispCnt & (1<<3)))
+        if ((i == 0) && (_DispCnt & (1<<3)))
         {
 #ifdef LITEV_RENDER_THREAD
             // R4 STEP 1 (zero-GL RunFrame): under the full DeferReplay path the 3D
@@ -2019,7 +2082,7 @@ void GLRenderer2D::RenderScreen(int ystart, int yend)
         else
             glBindTexture(GL_TEXTURE_2D, BGLayerTex[i]);
 
-        GLint wrapmode = LayerConfig.uBGConfig[i].Clamp ? GL_CLAMP_TO_BORDER : GL_REPEAT;
+        GLint wrapmode = _LayerConfig.uBGConfig[i].Clamp ? GL_CLAMP_TO_BORDER : GL_REPEAT;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapmode);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapmode);
     }
@@ -2220,6 +2283,12 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
     // idempotent, so the same body serves both. VRAM ops read the record's byte
     // snapshot when present (Stage B, deferred); RIR records carry no payload and
     // read live VRAM at the (same-moment) immediate replay.
+    //
+    // STEP A: config-driven cases stage their arena snapshot into the render-private
+    // Rpl.* copies (never the emu-owned live members), and the draw bodies below read
+    // config through their RIRReplaying-selected aliases. RIRReplaying is set for the
+    // whole dispatch so every draw invoked from here reads Rpl.
+    RIRReplaying = true;
     switch (r.Op)
     {
     case GLOp::UploadPalBG:
@@ -2266,9 +2335,9 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         // Restore the snapshotted LayerConfig + re-upload it to the UBO (the inline
         // path uploaded via UpdateLayerConfig, which RECOMPUTES from live registers
         // — must not be called here). Reproduce the shared layer-preshader setup.
-        memcpy(&LayerConfig, Parent.LogBuild->Payload(r), sizeof(LayerConfig));
+        memcpy(&Rpl.LayerConfig, Parent.LogBuild->Payload(r), sizeof(Rpl.LayerConfig));
         glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(LayerConfig), &LayerConfig);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(Rpl.LayerConfig), &Rpl.LayerConfig);
 
         glUseProgram(LayerPreShader);
         glDisable(GL_DEPTH_TEST);
@@ -2288,12 +2357,12 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
     {
         // Restore SpriteConfig + NumSprites, re-upload SpriteConfigUBO from the
         // snapshot, reproduce the OBJ VRAM/pal texture binds, then prerender.
-        memcpy(&SpriteConfig, Parent.LogBuild->Payload(r), sizeof(SpriteConfig));
-        NumSprites = r.I0;
+        memcpy(&Rpl.SpriteConfig, Parent.LogBuild->Payload(r), sizeof(Rpl.SpriteConfig));
+        Rpl.NumSprites = r.I0;
         glBindBuffer(GL_UNIFORM_BUFFER, SpriteConfigUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0,
-                        offsetof(sSpriteConfig, uOAM) + (NumSprites * sizeof(SpriteConfig.uOAM[0])),
-                        &SpriteConfig);
+                        offsetof(sSpriteConfig, uOAM) + (Rpl.NumSprites * sizeof(Rpl.SpriteConfig.uOAM[0])),
+                        &Rpl.SpriteConfig);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
         glActiveTexture(GL_TEXTURE1);
@@ -2307,15 +2376,17 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         // SpriteConfigUBO from the snapshot (DoRenderSprites uploads the scanline
         // UBO itself), then run the existing sprite-span raster.
         const u8* p = Parent.LogBuild->Payload(r);
-        memcpy(&SpriteScanlineConfig, p, sizeof(SpriteScanlineConfig));
-        memcpy(&SpriteConfig, p + sizeof(SpriteScanlineConfig), sizeof(SpriteConfig));
-        NumSprites = r.I0;
-        SpriteUseMosaic = (r.I1 != 0);
-        LastSpriteLine = r.YStart;
+        memcpy(&Rpl.SpriteScanlineConfig, p, sizeof(Rpl.SpriteScanlineConfig));
+        memcpy(&Rpl.SpriteConfig, p + sizeof(Rpl.SpriteScanlineConfig), sizeof(Rpl.SpriteConfig));
+        Rpl.NumSprites = r.I0;
+        Rpl.SpriteUseMosaic = (r.I1 & 1) != 0;
+        // I1 bit1 carries the snapshot of GPU2D.DispCnt's OBJ-window enable (bit 15).
+        Rpl.SpriteDispCnt = (r.I1 & 2) ? (1u << 15) : 0;
+        Rpl.LastSpriteLine = r.YStart;
         glBindBuffer(GL_UNIFORM_BUFFER, SpriteConfigUBO);
         glBufferSubData(GL_UNIFORM_BUFFER, 0,
-                        offsetof(sSpriteConfig, uOAM) + (NumSprites * sizeof(SpriteConfig.uOAM[0])),
-                        &SpriteConfig);
+                        offsetof(sSpriteConfig, uOAM) + (Rpl.NumSprites * sizeof(Rpl.SpriteConfig.uOAM[0])),
+                        &Rpl.SpriteConfig);
         DoRenderSprites(r.YEnd);
         break;
     }
@@ -2328,24 +2399,25 @@ void GLRenderer2D::RIRReplay(const GLLogRecord& r)
         const u8* p = Parent.LogBuild->Payload(r);
         RIRCompositeRegs regs;
         memcpy(&regs, p, sizeof(regs));
-        memcpy(&ScanlineConfig, p + sizeof(regs), sizeof(ScanlineConfig));
-        memcpy(&LayerConfig, p + sizeof(regs) + sizeof(ScanlineConfig), sizeof(LayerConfig));
-        DispCnt = regs.DispCnt;
-        LayerEnable = regs.LayerEnable;
-        OBJEnable = regs.OBJEnable;
-        ForcedBlank = regs.ForcedBlank;
-        UnitEnabled = (regs.UnitEnabled != 0);
-        memcpy(BGCnt, regs.BGCnt, sizeof(BGCnt));
-        BlendCnt = regs.BlendCnt;
-        EVA = regs.EVA; EVB = regs.EVB; EVY = regs.EVY;
+        memcpy(&Rpl.ScanlineConfig, p + sizeof(regs), sizeof(Rpl.ScanlineConfig));
+        memcpy(&Rpl.LayerConfig, p + sizeof(regs) + sizeof(Rpl.ScanlineConfig), sizeof(Rpl.LayerConfig));
+        Rpl.DispCnt = regs.DispCnt;
+        Rpl.LayerEnable = regs.LayerEnable;
+        Rpl.OBJEnable = regs.OBJEnable;
+        Rpl.ForcedBlank = regs.ForcedBlank;
+        Rpl.UnitEnabled = (regs.UnitEnabled != 0);
+        memcpy(Rpl.BGCnt, regs.BGCnt, sizeof(Rpl.BGCnt));
+        Rpl.BlendCnt = regs.BlendCnt;
+        Rpl.EVA = regs.EVA; Rpl.EVB = regs.EVB; Rpl.EVY = regs.EVY;
         glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
-        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(LayerConfig), &LayerConfig);
+        glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(Rpl.LayerConfig), &Rpl.LayerConfig);
         RenderScreen(r.YStart, r.YEnd);
         break;
     }
     default:
         break;
     }
+    RIRReplaying = false;
 }
 
 void GLRenderer2D::RIRRecordRenderSprites(int line)
@@ -2361,7 +2433,9 @@ void GLRenderer2D::RIRRecordRenderSprites(int line)
         rec->YStart = LastSpriteLine;
         rec->YEnd = line;
         rec->I0 = NumSprites;
-        rec->I1 = SpriteUseMosaic ? 1 : 0;
+        // bit0 = SpriteUseMosaic; bit1 = snapshot of GPU2D.DispCnt OBJ-window enable
+        // (bit 15) so the deferred RenderSprites reads it from the record, not live.
+        rec->I1 = (SpriteUseMosaic ? 1 : 0) | ((GPU2D.DispCnt & (1u<<15)) ? 2 : 0);
         Parent.RIRReplayCount++;
         if (Parent.RIRMode) { RIRReplay(*rec); Parent.LogBuild->Reset(); }
         // else deferred: replayed by ReplayLog() at SubmitFrame.

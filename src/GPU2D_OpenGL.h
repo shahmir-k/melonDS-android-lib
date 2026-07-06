@@ -229,6 +229,36 @@ private:
     void RenderScreen(int ystart, int yend);
 
 #ifdef LITEV_RENDER_THREAD
+    // R4 STEP A — render-thread-private replay staging.
+    // In the deferred/threaded path the render thread runs RIRReplay while the emu
+    // thread is already building frame N+1 (whose DrawScanline/UpdateLayerConfig/…
+    // rewrite the LIVE LayerConfig/ScanlineConfig/SpriteConfig/… members). Before
+    // STEP A, RIRReplay staged each record's arena snapshot back INTO those live
+    // members and the draw bodies read them there — a data race the moment the bank
+    // is released early (STEP C). STEP A gives replay its own copies (Rpl) and the
+    // shared draw bodies read config through an `RIRReplaying`-selected alias, so the
+    // render thread never touches emu-owned state. Bit-exact: flag-OFF compiles this
+    // out and the aliases resolve to the live members; flag-ON inline (RIRReplaying
+    // == false) also reads the live members — identical read expressions either way.
+    struct ReplayCfg2D
+    {
+        sLayerConfig          LayerConfig;
+        sScanlineConfig       ScanlineConfig;
+        sSpriteConfig         SpriteConfig;
+        sSpriteScanlineConfig SpriteScanlineConfig;
+        int  NumSprites;
+        bool SpriteUseMosaic;
+        int  LastSpriteLine;
+        u32  DispCnt;
+        u8   LayerEnable, OBJEnable, ForcedBlank;
+        bool UnitEnabled;
+        u16  BGCnt[4];
+        u16  BlendCnt;
+        u8   EVA, EVB, EVY;
+        u32  SpriteDispCnt;   // snapshot of GPU2D.DispCnt (OBJ-window bit 15) for RenderSprites
+    } Rpl;
+    bool RIRReplaying = false;   // render-thread-local: true only while inside RIRReplay
+
     // R4 RIR (recipe §8) — shared GL bodies (called inline AND from replay so the
     // replayed GL command stream is byte-identical) + the replay dispatcher.
     void DoUploadPalBG(const u16* palbuf);          // 256 x (1+4*16)
