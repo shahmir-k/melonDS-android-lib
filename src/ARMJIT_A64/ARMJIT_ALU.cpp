@@ -189,6 +189,29 @@ void Compiler::Comp_RetriveFlags(bool retriveCV)
     }
 }
 
+#ifdef LITEV_JIT_FIXEDREG
+void Compiler::Comp_MaterializeFlags()
+{
+    // Flush guest flags resident in host NZCV back into the RCPSR word. This is
+    // the deferred half of Comp_RetriveFlags(true): the SAME CSET/BFI per live
+    // flag bit reading the SAME host NZCV, so the resulting RCPSR is bit-exact to
+    // what the producer would have extracted in place. CSET/BFI do not modify host
+    // PSTATE, so callers (e.g. CheckCondition) may still branch natively on the
+    // resident flags after materializing.
+    if (!NZCVDeferred)
+        return;
+
+    u8 m = NZCVDeferred;
+    NZCVDeferred = 0;
+    CPSRDirty = true;
+
+    if (m & 0x4) { CSET(W0, CC_EQ); BFI(RCPSR, W0, 30, 1); } // Z
+    if (m & 0x8) { CSET(W0, CC_MI); BFI(RCPSR, W0, 31, 1); } // N
+    if (m & 0x2) { CSET(W0, CC_CS); BFI(RCPSR, W0, 29, 1); } // C
+    if (m & 0x1) { CSET(W0, CC_VS); BFI(RCPSR, W0, 28, 1); } // V
+}
+#endif
+
 void Compiler::Comp_Logical(int op, bool S, ARM64Reg rd, ARM64Reg rn, Op2 op2)
 {
     if (S && !CurInstr.SetFlags)
@@ -427,8 +450,23 @@ void Compiler::Comp_Arithmetic(int op, bool S, ARM64Reg rd, ARM64Reg rn, Op2 op2
         {
             BFI(RCPSR, W2, 29, 1);
             BFI(RCPSR, W3, 28, 1);
+            Comp_RetriveFlags(false);
         }
-        Comp_RetriveFlags(!CVInGPR);
+        else
+        {
+#ifdef LITEV_JIT_FIXEDREG
+            // SUB/RSB/ADD host op (SUBS/ADDS) sets host NZCV == full guest NZCV.
+            // For an UNCONDITIONAL instruction (always executes, so host NZCV is
+            // unambiguously current on the single path) keep the flags resident and
+            // skip the RCPSR extraction. Conditional producers must stay on the
+            // extract path: the host op runs only on the taken side, so a compile-
+            // time "resident" claim would be wrong on the skipped side.
+            if (op >= 0x2 && op <= 0x4 && (Thumb || CurInstr.Cond() == 0xE))
+                NZCVDeferred = CurInstr.SetFlags & 0xF;
+            else
+#endif
+                Comp_RetriveFlags(true);
+        }
     }
 }
 
@@ -469,6 +507,15 @@ void Compiler::Comp_Compare(int op, ARM64Reg rn, Op2 op2)
         break;
     }
 
+#ifdef LITEV_JIT_FIXEDREG
+    // CMP/CMN (arithmetic compares) set host NZCV == full guest NZCV. Defer when
+    // unconditional; TST/TEQ (logical, op 8/9) keep the baseline extraction.
+    if ((op == 0xA || op == 0xB) && (Thumb || CurInstr.Cond() == 0xE))
+    {
+        NZCVDeferred = CurInstr.SetFlags & 0xF;
+        return;
+    }
+#endif
     Comp_RetriveFlags(op >= 0xA);
 }
 

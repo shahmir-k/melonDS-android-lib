@@ -196,6 +196,21 @@ public:
 
     void Comp_RetriveFlags(bool retriveCV);
 
+#ifdef LITEV_JIT_FIXEDREG
+    // liteDS-v2 Stage 1 (DraStic teardown 01 §6.1: guest CPSR flags = host NZCV).
+    // An UNCONDITIONAL flag-setting ADD/SUB/RSB/CMP/CMN leaves its guest NZCV in
+    // the host PSTATE (the SUBS/ADDS already computed them there) instead of
+    // extracting them into the RCPSR word. NZCVDeferred records which flag bits
+    // (encoded like CurInstr.SetFlags: N=8,Z=4,C=2,V=1) are currently resident in
+    // host NZCV and NOT yet written back to RCPSR. Comp_MaterializeFlags re-runs
+    // the exact deferred extraction (byte-identical CSET/BFI sequence to
+    // Comp_RetriveFlags) at every consumer / host-NZCV-clobber / block boundary;
+    // it does NOT touch host PSTATE, so a CheckCondition can still branch on the
+    // resident flags immediately afterwards.
+    u8 NZCVDeferred = 0;
+    void Comp_MaterializeFlags();
+#endif
+
     Arm64Gen::FixupBranch CheckCondition(u32 cond);
 
     void Comp_JumpTo(Arm64Gen::ARM64Reg addr, bool switchThumb, bool restoreCPSR = false);
