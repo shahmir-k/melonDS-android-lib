@@ -315,6 +315,29 @@ if (LITEV_MEM_MAINRAM_BLOCK)
     endif()
 endif()
 
+# DraStic memory model (docs/drastic-teardown/02-memory.md §2): a BRANCHLESS
+# software page table replacing melonDS's fault-based (SIGSEGV) fastmem on the
+# single-access load hot path. Each JIT guest load indexes a flat per-CPU table
+# of packed host-pointer deltas by (addr >> 11) (2 KB pages, 2M entries, 16 MB),
+# tests the entry, and on a non-zero delta reads the backing store directly with
+# one predicated branch; a zero entry diverts to a resolver that lazily installs
+# the delta (for fastmem-compatible flat RAM: MainRAM/DTCM/SharedWRAM/ARM7WRAM)
+# and returns the exact SlowRead value. LOADS-only in this first tranche (stores
+# keep the exact SlowWrite helper, so JIT/SMC invalidation is completely
+# untouched). The table pointer lives in the ARM context (loaded per-access from
+# RCPU), NOT in a permanently-reserved host reg, so it does not consume the
+# MemBase reg that fault-based fastmem pins -- STEP 2 (LITEV_JIT_GLOBALREG) frees
+# x26 and widens the global pin. Default OFF -> emission-identical to upstream.
+option(LITEV_MEM_SWTABLE "DraStic-style branchless software page-table fastmem (load hot path, AArch64)" OFF)
+if (LITEV_MEM_SWTABLE)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_MEM_SWTABLE=1)
+    else()
+        message(FATAL_ERROR "LITEV_MEM_SWTABLE requires an AArch64 target "
+                            "(the software page table is emitted by ARMJIT_A64).")
+    endif()
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)

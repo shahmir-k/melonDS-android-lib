@@ -141,6 +141,28 @@ public:
 
     static bool IsFastMemSupported();
 
+#ifdef LITEV_MEM_SWTABLE
+    // DraStic-style branchless software page table (docs/drastic-teardown/02-memory.md
+    // §2). 2 KB pages (shift 11) over the full 32-bit guest space => 2^21 entries of
+    // 8 bytes = 16 MB per CPU. Entry = (host_backing_base - mirrorStart), so a JIT
+    // load computes host = entry + (addr & alignMask) with one predicated branch;
+    // entry 0 => resolver (slow path). Lazily filled: the resolver installs a page's
+    // delta on first miss for fastmem-compatible flat RAM only, and flushes the whole
+    // table whenever a mapping's geometry changes (DTCM/SWRAM/NWRAM remap, ITCM
+    // resize, reset). Bit-exact by construction: the delta is the SAME host pointer
+    // fault-based fastmem maps (via GetMirrorLocation), and every non-installed access
+    // falls through to the exact Slow* helpers.
+    static constexpr u32 FastTableShift = 11;                       // 2 KB pages
+    static constexpr u32 FastTableEntries = 1u << (32 - FastTableShift); // 2,097,152
+    [[nodiscard]] u64* GetFastMemTable(u32 num) noexcept { return num == 0 ? FastMemTable9 : FastMemTable7; }
+    // Wipe both tables back to all-slow. Called on any mapping-geometry change.
+    void FlushFastTables() noexcept;
+    // Resolver side effect: if `addr` (for CPU `num`) lands in a fastmem-compatible
+    // flat RAM page whose whole 2 KB page has uniform classification, compute and
+    // store its host-pointer delta so subsequent accesses hit the fast path.
+    void InstallFastEntry(u32 num, u32 addr) noexcept;
+#endif
+
     static void RegisterFaultHandler();
     static void UnregisterFaultHandler();
 
@@ -177,6 +199,11 @@ private:
     void* FastMem9Start;
     void* FastMem7Start;
     u8* MemoryBase = nullptr;
+
+#ifdef LITEV_MEM_SWTABLE
+    u64* FastMemTable9 = nullptr;
+    u64* FastMemTable7 = nullptr;
+#endif
 
 #if defined(__SWITCH__)
     VirtmemReservation* FastMem9Reservation, *FastMem7Reservation;

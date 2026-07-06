@@ -535,6 +535,11 @@ void ARMJIT_Memory::SetCodeProtection(int region, u32 offset, bool protect) noex
 
 void ARMJIT_Memory::RemapDTCM(u32 newBase, u32 newSize) noexcept
 {
+#ifdef LITEV_MEM_SWTABLE
+    // DTCM geometry change: every installed delta (MainRAM pages the window may now
+    // shadow, or old DTCM pages) could be stale. Wipe -> lazily re-resolved.
+    FlushFastTables();
+#endif
     // this first part could be made more efficient
     // by unmapping DTCM first and then map the holes
     u32 oldDTCMBase = NDS.ARM9.DTCMBase;
@@ -586,6 +591,10 @@ void ARMJIT_Memory::RemapNWRAM(int num) noexcept
     if (NDS.ConsoleType == 0)
         return;
 
+#ifdef LITEV_MEM_SWTABLE
+    FlushFastTables();
+#endif
+
     auto* dsi = static_cast<DSi*>(&NDS);
     for (int i = 0; i < Mappings[memregion_SharedWRAM].Length;)
     {
@@ -610,6 +619,9 @@ void ARMJIT_Memory::RemapNWRAM(int num) noexcept
 
 void ARMJIT_Memory::RemapSWRAM() noexcept
 {
+#ifdef LITEV_MEM_SWTABLE
+    FlushFastTables();
+#endif
     Log(LogLevel::Debug, "remapping SWRAM\n");
     for (int i = 0; i < Mappings[memregion_WRAM7].Length;)
     {
@@ -930,6 +942,14 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds, bool fastmem) : NDS(nds)
     // effectively enabled. When it is off (or unsupported), no handler is
     // registered so unrelated faults are never intercepted.
     SetFastMemHandler(fastmem && IsFastMemSupported());
+
+#ifdef LITEV_MEM_SWTABLE
+    // DraStic software page tables: one flat 16 MB (2M x 8-byte) delta table per
+    // CPU. calloc zero-fills (all entries slow); entries are installed lazily.
+    FastMemTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    FastMemTable7 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    assert(FastMemTable9 && FastMemTable7);
+#endif
 }
 
 void ARMJIT_Memory::SetFastMemHandler(bool enabled) noexcept
@@ -947,6 +967,11 @@ void ARMJIT_Memory::SetFastMemHandler(bool enabled) noexcept
 ARMJIT_Memory::~ARMJIT_Memory() noexcept
 {
     SetFastMemHandler(false);
+
+#ifdef LITEV_MEM_SWTABLE
+    free(FastMemTable9); FastMemTable9 = nullptr;
+    free(FastMemTable7); FastMemTable7 = nullptr;
+#endif
 
 #if defined(__SWITCH__)
     virtmemLock();
@@ -1036,7 +1061,79 @@ void ARMJIT_Memory::Reset() noexcept
     }
 
     Log(LogLevel::Debug, "done resetting jit mem\n");
+
+#ifdef LITEV_MEM_SWTABLE
+    FlushFastTables();
+#endif
 }
+
+#ifdef LITEV_MEM_SWTABLE
+void ARMJIT_Memory::FlushFastTables() noexcept
+{
+    if (FastMemTable9)
+        memset(FastMemTable9, 0, (size_t)FastTableEntries * sizeof(u64));
+    if (FastMemTable7)
+        memset(FastMemTable7, 0, (size_t)FastTableEntries * sizeof(u64));
+}
+
+void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
+{
+    u64* table = num == 0 ? FastMemTable9 : FastMemTable7;
+    if (!table)
+        return;
+
+    int region = num == 0 ? ClassifyAddress9(addr) : ClassifyAddress7(addr);
+
+    // Only flat, contiguous, MemoryBase-backed RAM regions are eligible -- exactly
+    // the set fault-based fastmem maps (OffsetsPerRegion != UINT32_MAX): MainRAM,
+    // DTCM, SharedWRAM, ARM7WRAM (+ DSi NWRAM). ITCM/BIOS/VRAM/IO stay slow.
+    if (!IsFastmemCompatible(region))
+        return;
+
+    const u32 pageMask = (1u << FastTableShift) - 1;       // 0x7FF
+    u32 pageStart = addr & ~pageMask;
+    u32 pageEnd   = pageStart + (pageMask + 1);             // exclusive
+
+    // Guarantee the WHOLE 2 KB page has a single backing, so one delta is valid for
+    // every byte the fast path may compute. The DTCM overlay is the only movable
+    // window that can split a page at a finer granularity than the region ranges.
+    if (num == 0)
+    {
+        u32 dtcmStart = NDS.ARM9.DTCMBase;
+        u32 dtcmSize  = ~NDS.ARM9.DTCMMask + 1;             // 0 when DTCM disabled
+        if (dtcmSize)
+        {
+            u32 dtcmEnd = dtcmStart + dtcmSize;
+            if (region == memregion_DTCM)
+            {
+                // page must lie entirely inside the DTCM window
+                if (!(pageStart >= dtcmStart && pageEnd <= dtcmEnd))
+                    return;
+            }
+            else
+            {
+                // page must not touch the DTCM window at all
+                if (dtcmStart < pageEnd && dtcmEnd > pageStart)
+                    return;
+            }
+        }
+    }
+
+    u32 memoryOffset, mirrorStart, mirrorSize;
+    if (!GetMirrorLocation(region, num, addr, memoryOffset, mirrorStart, mirrorSize))
+        return;
+
+    // page must be wholly contained in the contiguous mirror
+    if (!(pageStart >= mirrorStart && pageEnd <= mirrorStart + mirrorSize))
+        return;
+
+    // host(a) = MemoryBase + OffsetsPerRegion[region] + memoryOffset + (a - mirrorStart)
+    // Store delta so that host(a) = delta + a  for every a in the page.
+    u8* backingBase = MemoryBase + OffsetsPerRegion[region] + memoryOffset;
+    u64 delta = (u64)(uintptr_t)backingBase - (u64)mirrorStart;
+    table[addr >> FastTableShift] = delta;
+}
+#endif
 
 bool ARMJIT_Memory::IsFastmemCompatible(int region) const noexcept
 {

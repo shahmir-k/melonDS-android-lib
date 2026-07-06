@@ -142,6 +142,27 @@ T SlowRead7(u32 addr)
         return val;
 }
 
+#ifdef LITEV_MEM_SWTABLE
+// DraStic software page-table resolver (loads). Emitted by the JIT as the slow-path
+// call when a guest load's page-table entry is 0. Side effect: install the page's
+// host-pointer delta so the NEXT access to that page hits the branchless fast path.
+// The returned value comes verbatim from the exact SlowRead helper, so the resolver
+// never changes memory semantics -- the table is purely a host-pointer cache.
+template <typename T, int ConsoleType>
+T SlowRead9SW(u32 addr, ARMv5* cpu)
+{
+    cpu->NDS.JIT.Memory.InstallFastEntry(0, addr);
+    return SlowRead9<T, ConsoleType>(addr, cpu);
+}
+
+template <typename T, int ConsoleType>
+T SlowRead7SW(u32 addr)
+{
+    NDS::Current->JIT.Memory.InstallFastEntry(1, addr);
+    return SlowRead7<T, ConsoleType>(addr);
+}
+#endif
+
 template <typename T, int ConsoleType>
 void SlowWrite9(u32 addr, ARMv5* cpu, u32 val)
 {
@@ -234,8 +255,22 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     template void SlowBlockTransfer7<false, consoleType>(u32 addr, u64* data, u32 num); \
     template void SlowBlockTransfer7<true, consoleType>(u32 addr, u64* data, u32 num); \
 
+#ifdef LITEV_MEM_SWTABLE
+#define INSTANTIATE_SWTABLE(consoleType) \
+    template u32 SlowRead9SW<u32, consoleType>(u32, ARMv5*); \
+    template u16 SlowRead9SW<u16, consoleType>(u32, ARMv5*); \
+    template u8  SlowRead9SW<u8,  consoleType>(u32, ARMv5*); \
+    template u32 SlowRead7SW<u32, consoleType>(u32); \
+    template u16 SlowRead7SW<u16, consoleType>(u32); \
+    template u8  SlowRead7SW<u8,  consoleType>(u32);
+#else
+#define INSTANTIATE_SWTABLE(consoleType)
+#endif
+
 INSTANTIATE_SLOWMEM(0)
 INSTANTIATE_SLOWMEM(1)
+INSTANTIATE_SWTABLE(0)
+INSTANTIATE_SWTABLE(1)
 
 ARMJIT::~ARMJIT() noexcept
 {

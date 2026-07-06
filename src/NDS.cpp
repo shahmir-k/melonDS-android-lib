@@ -133,6 +133,13 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
     MainRAM = JIT.Memory.GetMainRAM();
     SharedWRAM = JIT.Memory.GetSharedWRAM();
     ARM7WRAM = JIT.Memory.GetARM7WRAM();
+
+#ifdef LITEV_MEM_SWTABLE
+    // Point each CPU's context at its DraStic software page table so JIT loads can
+    // fetch the table base per access (LDR from RCPU), freeing the MemBase host reg.
+    ARM9.FastMemPageTable = JIT.Memory.GetFastMemTable(0);
+    ARM7.FastMemPageTable = JIT.Memory.GetFastMemTable(1);
+#endif
 }
 
 NDS::~NDS() noexcept
