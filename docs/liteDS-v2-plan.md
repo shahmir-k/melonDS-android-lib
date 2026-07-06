@@ -1857,3 +1857,38 @@ levers keep measuring small/null. The big remaining wins are R4 render-thread
 overlap (building) and — only if A55 data justifies its risk — cross-block
 register residency. FIXEDREG 1/2a/2b flag-traffic win (70% fewer spills) is real
 but A55-magnitude is device-pending.
+
+### D.7 addendum 23 — ★ R4 RENDER-THREAD OVERLAP LANDED: 34 → 55 fps cooled (+60%), holds 52 throttled ★
+
+THE WIN. Pushed liteDS-v2-android ed57f886 (STEP A ed8062d8 + STEP C ed57f886 on
+the STEP-3 seam cc026cef). The render thread now OVERLAPS the next frame's core:
+the geometry+texcache consume moved BEFORE the early bank release, so only ~3.75ms
+(the deep-consume) gates the emu thread; the ~15ms 2D replay + raster overlaps.
+
+Device, in-race 3x, cooled first-window medians:
+| config | cpu_loop | gate | wall | FPS |
+|---|---|---|---|---|
+| THREADED (rt=1 overlapped) | 17.7 | 3.75 | 18.1ms | **55.2** |
+| SERIAL (rtserial=1) | 29.0 | 16.0 | 29.2ms | 34.3 |
+| FLAG-OFF (inline) | 28.7 | — | 28.8ms | 34.7 |
+THROTTLED (74-75C, 5-min): threaded holds 52.5fps / wall 19.0ms — WIN SURVIVES
+THERMAL (serial/OFF stay ~34). The `gate` collapsed 14.8→3.75ms — the overlap.
+
+STEP C is core-only: split RenderFrameBody → RenderFrameBodyGeometry (consumes
+RenderPolygonRAM + GetTexture into render-private VBOs) + RenderFrameBodyRaster;
+ReplayLog runs Geometry → fires early bank release → replays 2D log + raster.
+STEP B (texcache double-buffer) proved UNNECESSARY: geometry-before-release makes
+texcache access strictly alternate Geometry(N)→Update(N+1), never concurrent.
+
+Gates ALL PASS: host golden shrek-600 bit-exact flag OFF+ON; app builds both;
+device screenshot-parity clean (bottom byte-identical, top 99.986% sub-pixel dither
+only, no garbling) across start-line/splash/menu under active overlap; 6/6 stability
+cycles 0 crash/tear/deadlock, 2 savestate-load stresses survived. flag-OFF byte-
+identical. App glue: docs/r4-app-glue-final.diff (626 lines, MelonInstance).
+
+RESULT vs GOAL: R4 render-thread offload = DraStic's core architecture (render off
+the emu thread), now DELIVERED — 34→55 cooled, matching DraStic's render model.
+Remaining gap to 60: wall 18.1ms vs 16.6ms = ~1.5ms, in the render/gate + thermal.
+The banked emulation-core efficiency (FIXEDREG flag traffic, device-pending) + the
+residual overlap headroom (runFrame was 14ms at 63-70C, ~11ms cold) close it. This
+is the headline win of the campaign.
