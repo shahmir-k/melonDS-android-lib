@@ -1920,3 +1920,73 @@ GXFIFO+mem-tiers, all flags ON). Device has the correct build.
 NEXT: close the 2 early-release races (now that the FBHASH gate exists to prove
 them) → reclaim ~55fps proven-correct. That is the path to the fast AND correct
 build; the delayed-release ~40-45 build is the safe correct floor meanwhile.
+
+### D.7 addendum 25 — GLOBALREG: DraStic cross-block register residency BUILT + bit-exact, but the lever is mis-aimed (ARM9 is 18% of the frame, not 50%+); measured ARM9 cut ~3-5% ≈ <1% frame
+
+THE AIM (STEP 0, heavy 8-kart in-race savestate, window 60:960). Decomposed
+runFrame with LITEV_PROFILE, HOST (Apple M-series) and DEVICE (RG DS / A55, the
+real in-order target). Shares of runFrame:
+| bucket        | host % | device % (A55) |
+|---------------|-------:|---------------:|
+| ARM9 exec     | 13.1   | **18.6**       |
+| GPU3D geom    |  6.5   |  5.1           |
+| ARM7 exec     |  4.4   |  4.0           |
+| DMA           |  4.3   |  3.7           |
+| RunSystem     | 60.4   | **63.2**       |
+| residual      | 11.3   |  5.4           |
+RunSystem (scheduler event handlers: 2D software-raster scanline events + SPU mix
++ timers/DMA scheduling; ~2935 events/frame) DOMINATES; ARM9 is only ~18% even on
+the in-order A55. ARM9 is ALSO ~1373 idle-hits/frame (main loop idle-waits). So
+the register lever targets ≤18% of the frame, and register-boundary traffic is a
+sub-fraction of that — the lever is mis-aimed for THIS workload (as STEP 0's own
+go/no-go anticipated). NB the headless RunSystem includes software 2D raster that
+the real app runs on the GL render thread (R4), so on-app the ARM9 share is even
+smaller relative to the wall.
+
+THE LEVER, BUILT ANYWAY (the mandate was to attempt the real thing). New flag
+LITEV_JIT_GLOBALREG (default OFF, on FIXEDREG+DISPATCH). Design that fits melonDS:
+guest r0..r6 pinned to callee-saved host w19..w25, LOADED ONCE at ARM_Dispatch
+(slice entry) + SPILLED ONCE at ARM_Ret (slice exit); kept live across every
+block / the emitted dispatcher / linked chains (callee-saved => preserved for
+free, incl. across C helper BLs). The per-block RegisterCache no longer
+reload-on-first-use or spill-at-block-end the pinned regs (UnloadRegister/
+PrepareExit no-op them; Prepare's evictor skips them) — removing the block-
+boundary traffic DraStic eliminates (~49k first-loads + ~117k writebacks/frame).
+KEY SIMPLIFICATION: pin only the never-mode-banked regs (r0..r7), so mode/
+exception switches (which reorder the register file) never relocate them — the
+SOLE file-coherence point is the interpreter fallback, bracketed spill-before/
+reload-after. Block transfers stay coherent via MapReg; literal folding writes
+the host reg before PutLiteral.
+
+REGISTER-BUDGET CEILING (structural, aarch64): x26/x27/x28/x29 are reserved
+(RMemBase/RCPSR/RCycles/RCPU), leaving exactly 7 free callee-saved regs. DraStic's
+full r0..r14 (15-reg) global pin is NOT representable on this host without evicting
+the fastmem base / CPSR / cycle counter. 7 regs (r0..r6) is the architectural
+maximum here, and STEP 2 reaches it.
+
+GATE — ALL bit-exact flag-ON, every commit, torture-with-script, host arm64 =
+shipped ARMJIT_A64 backend: shrek-600, shrek-race-3400, armwrestler-arm-600
+(+script), rockwrestler-600 (+script), shrek-600-eventslices. Flag-OFF unchanged.
+DEVICE: GLOBALREG final-frame hashes byte-identical to the FIXEDREG baseline every
+run (5d5920a469598405/a432f5f7e3b7bfa6) — bit-exact on the A55 too.
+
+MEASURED ARM9 delta (arm9_exec_ns/frame, in-race window):
+- HOST, event-slices ON (A/B, noisy): OFF ~516us → ON ~484us ≈ -6% ARM9.
+  (event-slices OFF makes ON *slower*: tiny fixed-cap slices => ARM_Dispatch/Ret
+  fires ~3600x/frame and the 7-reg load+spill outweighs the few-blocks-per-slice
+  boundary savings. The lever only pays with large slices.)
+- DEVICE A55 (full+ES stack, throttled ~83C, matched back-to-back pairs):
+  pair1 10521→10009us (-4.9%), pair2 10884→10604us (-2.6%). ~3-5% of ARM9 exec.
+Since ARM9 exec is ~18.6% of the frame, that is ~0.6-0.9% of total frame time;
+wall/FPS flat within device thermal noise (17.16→17.58, 16.55→16.56).
+
+VERDICT. The lever is CONSTRUCTIBLE and BIT-EXACT (5 torture goldens host + device
+hash parity) — DraStic's #1 core technique, actually built on melonDS, not
+simulated. But its payoff is <1% of frame for this workload, bounded by THREE
+independent walls: (a) ARM9 is only ~18% of the frame here (STEP 0 — the lever is
+mis-aimed); (b) aarch64 caps the pin at 7 regs, not DraStic's 15; (c) the per-
+reentry ARM_Dispatch/ARM_Ret spill (~3600 reentries/frame) claws back ~30% of the
+boundary savings. This CONFIRMS addendum 22's measured null-prediction — now with
+a real bit-exact implementation and A55 measurement, not a within-block
+simulation. The flag is landed OFF by default for optional widening/experiment;
+the real FPS lever remains R4 render-thread overlap (addenda 23/24).
