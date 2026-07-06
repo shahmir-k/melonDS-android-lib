@@ -1358,6 +1358,37 @@ void GLRenderer::ReplayFinalPass(const GLLogRecord& r)
 void GLRenderer::ReplayLog()
 {
     const u32 n = LogBuild->Count();
+
+    // R4 STEP 2: point the deferred-raster reads at the replay bank the emu published
+    // (texture-VRAM shadow + render-register snapshot) — race-free against emu frame
+    // N+1 recording into the other bank. Held across the whole replay so both the early
+    // geometry consume and the late 3D raster read the same bank.
+    GPU.SetTexReadShadow(true, LogReplayBank);
+    GPU.GPU3D.SetRenderRegs3DReadBank(LogReplayBank);
+
+    // R4 STEP C — consume the frame's 3D geometry + texcache UP FRONT (before the 2D
+    // replay), then release the geometry bank early. RenderFrameBodyGeometry walks
+    // RenderPolygonRAM and calls Texcache.GetTexture, producing render-private
+    // PolygonList/VBOs and writing NO OutputTex3D. Doing it here — before the emu
+    // thread is released — means GetTexture never runs concurrently with the emu's
+    // next-frame Texcache.Update (this is why no separate texcache double-buffer is
+    // needed). The Render3D record below then only rasters into OutputTex3D, after the
+    // 2D composites have read the PREVIOUS frame's complete 3D output.
+    GLRenderer3D* r3d = static_cast<GLRenderer3D*>(Rend3D.get());
+    bool has3D = false;
+    for (u32 i = 0; i < n; i++)
+        if (LogBuild->At(i).Op == GLOp::Render3D) { has3D = true; break; }
+
+    if (has3D)
+        r3d->RenderFrameBodyGeometry();
+
+    // Early bank release (design §4.2): geometry + texcache now fully consumed into
+    // render-private state, so the emu thread may run frame N+1 concurrently with the
+    // 2D replay + 3D raster below — the overlap that turns gate+core into max(core,
+    // render). Idempotent: the app guards double-release, and for a frame with no 3D
+    // record the app's post-submit fallback still counts the release.
+    if (BankReleaseCB) BankReleaseCB();
+
     for (u32 i = 0; i < n; i++)
     {
         const GLLogRecord& r = LogBuild->At(i);
@@ -1367,24 +1398,10 @@ void GLRenderer::ReplayLog()
             ReplayFinalPass(r);
             break;
         case GLOp::Render3D:
-        {
-            // R4 Stage 1b (recipe §2): replay the deferred 3D raster. Point the
-            // texture-VRAM reads at the VCount-215 shadow, issue the GL raster body,
-            // then restore. Recorded after the VBlank 2D records, so it runs last in
-            // the log — the 2D composites above have already read OutputTex3D holding
-            // the PREVIOUS frame's 3D (what they want); this raster now writes THIS
-            // frame's 3D into OutputTex3D for the next frame. clrBitmapDirty was
-            // captured at prepare time into I0.
-            GLRenderer3D* r3d = static_cast<GLRenderer3D*>(Rend3D.get());
-            // R4 STEP 2: read the texture-VRAM shadow AND the render-register snapshot
-            // from the replay bank the emu thread published — race-free against emu
-            // frame N+1 recording into the other bank.
-            GPU.SetTexReadShadow(true, LogReplayBank);
-            GPU.GPU3D.SetRenderRegs3DReadBank(LogReplayBank);
-            r3d->RenderFrameBody((u8) r.I0);
-            GPU.SetTexReadShadow(false, 0);
+            // OutputTex3D-writing raster half; geometry already consumed above.
+            // clrBitmapDirty was captured at prepare time into I0.
+            r3d->RenderFrameBodyRaster((u8) r.I0);
             break;
-        }
         default:
             // Rend2D_{A,B} are unique_ptr<Renderer2D>; under the GL renderer they
             // are always GLRenderer2D (created in Init). RIRReplay is GL-specific.
@@ -1392,6 +1409,7 @@ void GLRenderer::ReplayLog()
             break;
         }
     }
+    GPU.SetTexReadShadow(false, 0);
 }
 
 void GLRenderer::SubmitFrame()

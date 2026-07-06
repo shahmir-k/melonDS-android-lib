@@ -49,6 +49,16 @@ public:
     // the GL raster (reading the VCount-215 texture-VRAM shadow) at SubmitFrame.
     bool PrepareDeferred3D(u8& clrBitmapDirtyOut);
     void RenderFrameBody(u8 clrBitmapDirty);
+    // R4 STEP C: RenderFrameBody split so the deferred ReplayLog can consume the
+    // frame's geometry + texcache (RenderFrameBodyGeometry — reads RenderPolygonRAM
+    // and calls Texcache.GetTexture, producing render-private PolygonList/VBOs;
+    // touches no OutputTex3D) BEFORE the 2D replay and then release the geometry bank
+    // early, while the OutputTex3D-writing half (RenderFrameBodyRaster — clear +
+    // RenderSceneChunk) runs at the Render3D record after the 2D composites have read
+    // the previous frame's 3D. Because GetTexture runs in the pre-release Geometry
+    // phase, the texcache Cache is never touched concurrently by the emu thread.
+    void RenderFrameBodyGeometry();
+    void RenderFrameBodyRaster(u8 clrBitmapDirty);
 #else
     void RenderFrameBody(u8 clrBitmapDirty);
 #endif

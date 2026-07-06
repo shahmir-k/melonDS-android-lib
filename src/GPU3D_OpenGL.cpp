@@ -1329,19 +1329,71 @@ bool GLRenderer3D::PrepareDeferred3D(u8& clrBitmapDirtyOut)
 }
 #endif
 
-void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
-{
-    // R4 STEP 2: RR aliases the small render-register source (recorded snapshot bank
-    // under deferred replay, live GPU3D otherwise); see RenderSceneChunk. Geometry
-    // (RenderNumPolygons/RenderPolygonRAM) stays live — bank-gated by depth-1.
 #ifdef LITEV_RENDER_THREAD
-    const RenderRegs3D& RR = *GPU3D.RenderRegs3DRead;
-#else
-    const melonDS::GPU3D& RR = GPU3D;
-#endif
+// R4 STEP C: geometry + texcache consume. Reads live RenderPolygonRAM (bank r) and
+// calls Texcache.GetTexture, producing the render-private PolygonList + vertex/index
+// VBOs. Writes NO OutputTex3D, so the deferred ReplayLog runs this BEFORE the 2D
+// replay and releases the geometry bank early; GetTexture therefore never runs
+// concurrently with the emu thread's next-frame Texcache.Update (subsumes STEP B).
+void GLRenderer3D::RenderFrameBodyGeometry()
+{
     // figure out which chunks of texture memory contain display captures
     int captureinfo[16];
     GPU.GetCaptureInfo_Texture(captureinfo);
+
+    if (GPU3D.RenderNumPolygons)
+    {
+        int npolys = 0;
+        int firsttrans = -1;
+        for (u32 i = 0; i < GPU3D.RenderNumPolygons; i++)
+        {
+            if (GPU3D.RenderPolygonRAM[i]->Degenerate) continue;
+
+            SetupPolygon(&PolygonList[npolys], GPU3D.RenderPolygonRAM[i]);
+            if (firsttrans < 0 && GPU3D.RenderPolygonRAM[i]->Translucent)
+                firsttrans = npolys;
+
+            npolys++;
+        }
+        NumFinalPolys = npolys;
+        NumOpaqueFinalPolys = firsttrans;
+
+        BuildPolygons(&PolygonList[0], npolys, captureinfo);
+        glBindBuffer(GL_ARRAY_BUFFER, VertexBufferID);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, NumVertices*7*4, VertexBuffer);
+
+        // bind to access the index buffer
+        glBindVertexArray(VertexArrayID);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, NumIndices * 2, IndexBuffer);
+        glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
+    }
+}
+
+// Standalone entry (inline-overflow raster, RIR immediate replay): consume geometry
+// then raster in one shot. Bit-exact with the original monolithic body — same GL
+// draws; the geometry build merely precedes the clear, which rebinds every piece of
+// GL state it uses, so the output is identical.
+void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
+{
+    RenderFrameBodyGeometry();
+    RenderFrameBodyRaster(clrBitmapDirty);
+}
+
+// The OutputTex3D-writing half: clear (plane/bitmap) + the deferred 3D raster. In the
+// deferred ReplayLog path this runs at the Render3D record, AFTER the 2D composites
+// have read the previous frame's complete 3D output from OutputTex3D.
+void GLRenderer3D::RenderFrameBodyRaster(u8 clrBitmapDirty)
+{
+    // R4 STEP 2: RR aliases the small render-register source (recorded snapshot bank).
+    const RenderRegs3D& RR = *GPU3D.RenderRegs3DRead;
+#else
+void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
+{
+    const melonDS::GPU3D& RR = GPU3D;
+    // figure out which chunks of texture memory contain display captures
+    int captureinfo[16];
+    GPU.GetCaptureInfo_Texture(captureinfo);
+#endif
 
     // if we're using a clear bitmap, set that up
     ClearBitmapDirty |= clrBitmapDirty;
@@ -1521,6 +1573,14 @@ void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
     glBindVertexArray(ClearVertexArrayID);
     glDrawArrays(GL_TRIANGLES, 0, 2*3);
 
+#ifdef LITEV_RENDER_THREAD
+    // R4 STEP C: the geometry was already consumed + uploaded by
+    // RenderFrameBodyGeometry() (before the 2D replay, at which point the geometry
+    // bank was released early). This raster half only draws the scene from the
+    // render-private PolygonList/VBOs built there.
+    if (GPU3D.RenderNumPolygons)
+        RenderSceneChunk(0, 192);
+#else
     if (GPU3D.RenderNumPolygons)
     {
         int npolys = 0;
@@ -1547,18 +1607,9 @@ void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, NumIndices * 2, IndexBuffer);
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
 
-#ifdef LITEV_RENDER_THREAD
-        // R4 STEP 3 early bank release (design §4.2): the frame's geometry
-        // (RenderPolygonRAM walk + BuildPolygons) has now been fully consumed and
-        // uploaded to GL. Everything RenderSceneChunk reads below is STEP-2 banked
-        // (RR.Render* via the render-register bank + the texture-VRAM shadow), so the
-        // emu thread may resume frame N+1 now. This runs inside the render thread's
-        // SubmitFrame->ReplayLog->Render3D. The callback is idempotent (app guards it).
-        if (Parent.BankReleaseCB) Parent.BankReleaseCB();
-#endif
-
         RenderSceneChunk(0, 192);
     }
+#endif
 }
 
 u32* GLRenderer3D::GetLine(int line)
