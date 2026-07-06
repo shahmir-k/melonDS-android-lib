@@ -182,6 +182,15 @@ if (LITEV_AGGRESSIVE_SKIP)
     target_compile_definitions(core PUBLIC LITEV_AGGRESSIVE_SKIP)
 endif()
 
+if (LITEV_GXFIFO_BATCH)
+    # DraStic-style threaded-code GXFIFO command dispatch (GPU3D geometry).
+    # Replaces the per-command switch in GPU3D::ExecuteCommand() with a flat
+    # 256-entry computed-goto label table. Bit-exact geometry + identical
+    # cycle accounting; a dispatch-mechanism change only. GNU computed goto
+    # is supported by GCC and Clang (the shipped host + Android toolchains).
+    target_compile_definitions(core PUBLIC LITEV_GXFIFO_BATCH)
+endif()
+
 set(MELONDS_VERSION_SUFFIX "$ENV{MELONDS_VERSION_SUFFIX}" CACHE STRING "Suffix to add to displayed melonDS version")
 option(MELONDS_EMBED_BUILD_INFO "Embed detailed build info into the binary" OFF)
 set(MELONDS_GIT_BRANCH "$ENV{MELONDS_GIT_BRANCH}" CACHE STRING "The Git branch used for this build")
