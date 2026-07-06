@@ -77,6 +77,14 @@ config_flags() {
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON" ;;
     full)
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON" ;;
+    swtable)
+      # DraStic branchless software page-table fastmem on the load hot path
+      # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`
+      # (fault-based fastmem, --fastmem on) isolates the sw-table load-path delta.
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_MEM_SWTABLE=ON" ;;
+    swtable-pin)
+      # STEP 2: sw-table + widened global register pin (frees the MemBase reg).
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_MEM_SWTABLE=ON -DLITEV_JIT_FIXEDREG=ON -DLITEV_JIT_GLOBALREG=ON" ;;
     full-neon)
       # M6.11 step 3: the app-matching `full` stack + integer-NEON GPU3D geometry.
       # A/B against `full` isolates the LITEV_NEON_GEOMETRY delta on the A55.

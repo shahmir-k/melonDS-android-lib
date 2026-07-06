@@ -90,9 +90,25 @@ static const struct { int GuestReg; Arm64Gen::ARM64Reg HostReg; } GlobalRegPins[
     { 4, Arm64Gen::W23 },
     { 5, Arm64Gen::W24 },
     { 6, Arm64Gen::W25 },
+#ifdef LITEV_MEM_SWTABLE
+    // STEP 2 (coupled DraStic ABI): the software page table loads pt_base from the
+    // ARM context per access, so it does NOT need the permanently-reserved MemBase
+    // host reg (x26) that fault-based fastmem pins. With LITEV_MEM_SWTABLE the load
+    // path never touches RMemBase, so x26/W26 is freed and joins the global pin as
+    // the 8th entry: guest r7 -> W26. This is only sound when fault-based fastmem is
+    // NOT the mechanism (run --fastmem off): the block prologue's MemBase load and
+    // the block-transfer fastmem path (the only other RMemBase users) are suppressed
+    // under this configuration so W26 stays exclusively guest r7. ARM_Dispatch/Ret
+    // load/spill w26 in lockstep (ARMJIT_Linkage.S, same guard).
+    { 7, Arm64Gen::W26 },
+#endif
 };
 static constexpr int NumGlobalRegPins = sizeof(GlobalRegPins) / sizeof(GlobalRegPins[0]);
+#ifdef LITEV_MEM_SWTABLE
+static constexpr u16 GlobalRegPinnedMask = 0x00FF; // r0..r7 (x26 freed by sw-table)
+#else
 static constexpr u16 GlobalRegPinnedMask = 0x007F; // r0..r6
+#endif
 #endif
 
 /*
@@ -1030,8 +1046,14 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
     LastInstrCompiledNonBranch = false;
 #endif
 
+#if defined(LITEV_MEM_SWTABLE) && defined(LITEV_JIT_GLOBALREG)
+    // STEP 2: x26 is now pinned to guest r7 (the sw-table load path does not use
+    // RMemBase). Do NOT clobber it with the fault-based MemBase; the sw-table is the
+    // load mechanism and the block-transfer fastmem path is suppressed below.
+#else
     if (hasMemInstr)
         MOVP2R(RMemBase, Num == 0 ? NDS.JIT.Memory.FastMem9Start : NDS.JIT.Memory.FastMem7Start);
+#endif
 
     for (int i = 0; i < instrsCount; i++)
     {

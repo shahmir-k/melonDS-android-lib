@@ -657,6 +657,14 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     bool compileFastPath = NDS.JIT.FastMemoryEnabled()
         && store && !usermode && (CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget));
 
+#if defined(LITEV_MEM_SWTABLE) && defined(LITEV_JIT_GLOBALREG)
+    // STEP 2: x26/RMemBase is pinned to guest r7. The block-transfer fastmem path is
+    // the only remaining RMemBase user (ADD X1, RMemBase, X0); suppress it so W26 is
+    // never clobbered. Block transfers use the exact SlowBlockTransfer helper (as
+    // they already do under --fastmem off, the sw-table regime).
+    compileFastPath = false;
+#endif
+
     {
         s32 offset = decrement
             ? -regsCount * 4 + (preinc ? 0 : 4)

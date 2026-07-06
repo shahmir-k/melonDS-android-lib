@@ -59,6 +59,10 @@ ARM_Dispatch:
     ldr w23, [RCPU, ARM_R_offset + 16]
     ldr w24, [RCPU, ARM_R_offset + 20]
     ldr w25, [RCPU, ARM_R_offset + 24]
+#if defined(LITEV_MEM_SWTABLE)
+    // STEP 2: sw-table frees x26 (no reserved MemBase reg) -> pin guest r7 -> w26.
+    ldr w26, [RCPU, ARM_R_offset + 28]
+#endif
 #endif
 
     br x1
@@ -85,6 +89,9 @@ ARM_Ret:
     str w23, [RCPU, ARM_R_offset + 16]
     str w24, [RCPU, ARM_R_offset + 20]
     str w25, [RCPU, ARM_R_offset + 24]
+#if defined(LITEV_MEM_SWTABLE)
+    str w26, [RCPU, ARM_R_offset + 28]
+#endif
 #endif
     str RCycles, [RCPU, ARM_Cycles_offset]
     str RCPSR, [RCPU, ARM_CPSR_offset]
