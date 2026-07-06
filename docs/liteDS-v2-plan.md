@@ -1828,3 +1828,32 @@ max(core~11, render~15) ≈ 15ms overlap ⇒ ~55-60fps cool. The thread is built
 stable; this is purely completing the double-buffering the foundation missed.
 Runtime toggle debug.litev.rtserial (default off) forces serialization for A/B.
 Glue: docs/r4-app-glue-step3.diff (614 insertions). Device is now FREE for measurement.
+
+### D.7 addendum 22 — FIXEDREG 2c CLOSED-NEGATIVE (proven): within-block register map is a dead lever; melonDS cache already block-resident
+
+Instrumented proof (LITEV_REGCACHE_STATS, host, reverted): melonDS's RegisterCache
+is ALREADY block-resident — Prepare() loads a guest reg on first use and it stays
+resident the whole block, evicted only under genuine pressure or when dead. There
+is NO per-instruction spill for a fixed map to bypass; the DraStic §6.1 "per-instr
+load/spill" premise is false here. The target ALU tri-op reg,reg,reg-no-shift class
+already emits a SINGLE spill-free host instruction. On shrek-race that class = 1496
+loads + 1202 saves = 2698 of 192653 total reg-mem-ops (1.4%), all irreducible
+first-materializations/dirty-writebacks — net removable ≈ 0, predicted ARM9 delta in
+the noise. Simulated pinning (pool 15→12→8) LEFT traffic unchanged / +1.5% worse
+(register pressure is a non-issue: working set ~8 live regs). The interop is
+constructible+bit-exact but POINTLESS. FIXEDREG stays at Stage 2b (landed).
+
+Where the REAL DraStic register win lives: cross-block residency — a global
+guest→host register ABI kept live ACROSS the dispatch loop (the block-boundary
+traffic is the dominant 49472 first-loads + 117375 writebacks/shrek-race). That
+touches the dispatcher/linkage/every stub/interp-fallback/mode-switch/exception —
+a separate, far larger, highest-regression-risk unit. NOT pursued now (EV unclear
+without A55 measurement; R4 is the real FPS lever).
+
+PATTERN (twice-confirmed, GXFIFO + 2c): melonDS is ALREADY a strong JIT (block-
+resident cache, backward liveness, jump-table dispatch, baked timing). Most
+teardown-headline "gaps" are already closed in this codebase, so emulation-core
+levers keep measuring small/null. The big remaining wins are R4 render-thread
+overlap (building) and — only if A55 data justifies its risk — cross-block
+register residency. FIXEDREG 1/2a/2b flag-traffic win (70% fewer spills) is real
+but A55-magnitude is device-pending.
