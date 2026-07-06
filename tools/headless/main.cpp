@@ -462,7 +462,7 @@ int main(int argc, char** argv)
                        cppReentries=0, dispatcherMisses=0,
                        linkSitesEmitted=0, dispatchOnlyExits=0,
                        schedIterations=0, schedEventsFired=0,
-                       arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0,
+                       arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0, spuMixNs=0,
                        runFrameNs=0, dma9Ns=0, dma7Ns=0, gxCommands=0, lightingCalls=0,
                        arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0,
                        memBlock9HelperCalls=0, memRead9U32HelperCalls=0; } profTotals;
@@ -518,6 +518,7 @@ int main(int argc, char** argv)
             profTotals.arm7ExecNs   += g_Frame.ARM7ExecNs.load(std::memory_order_relaxed);
             profTotals.gpu3dNs      += g_Frame.GPU3DNs.load(std::memory_order_relaxed);
             profTotals.runSystemNs  += g_Frame.RunSystemNs.load(std::memory_order_relaxed);
+            profTotals.spuMixNs     += g_Frame.SPUMixNs.load(std::memory_order_relaxed);
             profTotals.arm9IdleHits += g_Frame.ARM9IdleHits.load(std::memory_order_relaxed);
             profTotals.arm7IdleHits += g_Frame.ARM7IdleHits.load(std::memory_order_relaxed);
             profTotals.arm7IdleSkips+= g_Frame.ARM7IdleSkips.load(std::memory_order_relaxed);
@@ -645,6 +646,7 @@ int main(int argc, char** argv)
         printf("dma7_ns:         %llu\n", (unsigned long long)profTotals.dma7Ns);
         printf("dma_ns:          %llu\n", (unsigned long long)dmaNs);
         printf("run_system_ns:   %llu\n", (unsigned long long)profTotals.runSystemNs);
+        printf("spu_mix_ns:      %llu\n", (unsigned long long)profTotals.spuMixNs);
         printf("residual_ns:     %llu\n", (unsigned long long)residualNs);
         printf("gx_commands:     %llu\n", (unsigned long long)profTotals.gxCommands);
 
@@ -655,6 +657,7 @@ int main(int argc, char** argv)
         printf("arm7_exec_ns_per_frame: %.0f\n", (double)profTotals.arm7ExecNs / pf);
         printf("dma_ns_per_frame:       %.0f\n", (double)dmaNs / pf);
         printf("run_system_ns_per_frame:%.0f\n", (double)profTotals.runSystemNs / pf);
+        printf("spu_mix_ns_per_frame:   %.0f\n", (double)profTotals.spuMixNs / pf);
         printf("residual_ns_per_frame:  %.0f\n", (double)residualNs / pf);
         printf("gx_commands_per_frame:  %.0f\n", (double)profTotals.gxCommands / pf);
         printf("lighting_calls:  %llu\n", (unsigned long long)profTotals.lightingCalls);
