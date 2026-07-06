@@ -200,6 +200,12 @@ private:
     RenderLog RenderLogB;
     RenderLog* LogBuild = &RenderLogA;
     int LogBuildBank = 0;
+    // R4 STEP 2: the bank SubmitFrame/ReplayLog reads back (texture-VRAM shadow +
+    // render-register snapshot). Single-thread this tranche: SubmitFrame sets it to
+    // the bank the frame was just recorded into (LogBuildBank). Under the render
+    // thread (STEP 3) the packet carries the bank the emu thread published, so the
+    // render thread reads bank r while the emu thread records into bank 1-r.
+    int LogReplayBank = 0;
     void StartFrameLog() override;   // called from GPU::StartFrame under DeferSubmit
 
     // R4 RIR (Record-and-Immediately-Replay, recipe §8). When RIRMode is set, the

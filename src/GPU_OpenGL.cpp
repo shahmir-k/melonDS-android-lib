@@ -1166,6 +1166,12 @@ void GLRenderer::StartFrameLog()
     // thread replay bank r while the emu thread fills bank 1-r. Single-thread
     // this tranche: SubmitFrame consumes the same bank immediately, so the flip
     // is harmless and keeps the A/B plumbing exercised.
+    // R4 STEP 2: alternate the build bank every frame so the A/B replay-read state
+    // (RenderLog arena, texture-VRAM shadow, render-register snapshot) actually
+    // ping-pongs. Single-thread it is harmless (SubmitFrame reads the same bank back
+    // immediately); under the render thread it is what keeps emu frame N+1's writes
+    // off the bank the render thread is reading for frame N.
+    LogBuildBank ^= 1;
     LogBuild = LogBuildBank ? &RenderLogB : &RenderLogA;
     LogBuild->Reset();
 
@@ -1232,14 +1238,26 @@ void GLRenderer::Start3DRendering()
         u8 clrBitmapDirty = 0;
         if (r3d->PrepareDeferred3D(clrBitmapDirty))
         {
-            GPU.SnapshotTexShadow();
+            // R4 STEP 2: snapshot the texture-VRAM AND the small render registers into
+            // the build bank so the deferred raster replay reads a render-thread-owned
+            // copy. Timed into the Stage-B copy-cost accounting (kill-criterion <1ms).
+            auto ts0 = std::chrono::steady_clock::now();
+            GPU.SnapshotTexShadow(LogBuildBank);
+            GPU.GPU3D.SnapshotRenderRegs3D(LogBuildBank);
+            auto ts1 = std::chrono::steady_clock::now();
+            ShadowCopyNs += (u64) std::chrono::duration_cast<std::chrono::nanoseconds>(ts1 - ts0).count();
+            ShadowCopyBytes += sizeof(GPU.VRAMFlat_Texture) + sizeof(GPU.VRAMFlat_TexPal)
+                             + sizeof(RenderRegs3D);
             GLLogRecord* rec = LogBuild->Append(GLOp::Render3D);
             if (rec) { rec->I0 = clrBitmapDirty; RIRReplayCount++; }
             else
             {
-                // Record overflow: raster inline now (bit-exact, live 215 VRAM) so the
-                // frame is never dropped — it just forgoes the offload this frame.
+                // Record overflow: raster inline now (bit-exact, live 215 VRAM/regs) so
+                // the frame is never dropped — it just forgoes the offload this frame.
+                // The just-snapshotted bank holds the live registers, so point the read
+                // there; texture reads stay live (SetTexReadShadow default off).
                 RIRInlineGL++;
+                GPU.GPU3D.SetRenderRegs3DReadBank(LogBuildBank);
                 r3d->RenderFrameBody(clrBitmapDirty);
             }
         }
@@ -1358,9 +1376,13 @@ void GLRenderer::ReplayLog()
             // frame's 3D into OutputTex3D for the next frame. clrBitmapDirty was
             // captured at prepare time into I0.
             GLRenderer3D* r3d = static_cast<GLRenderer3D*>(Rend3D.get());
-            GPU.SetTexReadShadow(true);
+            // R4 STEP 2: read the texture-VRAM shadow AND the render-register snapshot
+            // from the replay bank the emu thread published — race-free against emu
+            // frame N+1 recording into the other bank.
+            GPU.SetTexReadShadow(true, LogReplayBank);
+            GPU.GPU3D.SetRenderRegs3DReadBank(LogReplayBank);
             r3d->RenderFrameBody((u8) r.I0);
-            GPU.SetTexReadShadow(false);
+            GPU.SetTexReadShadow(false, 0);
             break;
         }
         default:
@@ -1378,6 +1400,11 @@ void GLRenderer::SubmitFrame()
         return;
 
     SubmitPending = false;
+
+    // R4 STEP 2 (single-thread this tranche): replay the bank the frame was just
+    // recorded into. Under the render thread (STEP 3) the packet carries the bank the
+    // emu thread published and this is set from it instead.
+    LogReplayBank = LogBuildBank;
 
     SubmitReplaying = true;
     if (DeferReplay)

@@ -1615,14 +1615,15 @@ bool GPU::MakeVRAMFlat_TexPalCoherent(NonStupidBitField<128*1024/VRAMDirtyGranul
 }
 
 #ifdef LITEV_RENDER_THREAD
-void GPU::SnapshotTexShadow() noexcept
+void GPU::SnapshotTexShadow(int bank) noexcept
 {
     // R4 Stage 1b (recipe §2): snapshot the VCount-215 flat texture VRAM so the
     // deferred 3D raster can read it at SubmitFrame. Called right after the texcache
     // made the flat mirrors coherent, so these bytes are exactly what the inline
     // raster would have seen. ~640 KB/frame (~0.1 ms on the A55) — within the §3 budget.
-    memcpy(VRAMFlat_TextureShadow, VRAMFlat_Texture, sizeof(VRAMFlat_Texture));
-    memcpy(VRAMFlat_TexPalShadow, VRAMFlat_TexPal, sizeof(VRAMFlat_TexPal));
+    // R4 STEP 2: written to the A/B bank the render thread is not reading (see GPU.h).
+    memcpy(VRAMFlat_TextureShadow[bank], VRAMFlat_Texture, sizeof(VRAMFlat_Texture));
+    memcpy(VRAMFlat_TexPalShadow[bank], VRAMFlat_TexPal, sizeof(VRAMFlat_TexPal));
 }
 #endif
 

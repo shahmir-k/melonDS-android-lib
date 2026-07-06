@@ -21,6 +21,7 @@
 
 #include <array>
 #include <memory>
+#include <cstring>
 
 #include "Savestate.h"
 #include "FIFO.h"
@@ -28,6 +29,32 @@
 namespace melonDS
 {
 class GPU;
+
+#ifdef LITEV_RENDER_THREAD
+// R4 STEP 2 (docs/r4-render-thread-design.md §3.1 item 4): a per-frame snapshot of
+// the small 3D render registers RenderFrameBody/RenderSceneChunk read. Field names
+// MATCH the live GPU3D members so the GL raster reads `R.RenderDispCnt` etc. where R
+// aliases either the live GPU3D (flag path) or a snapshot bank (deferred replay) —
+// the read expressions are identical in both, keeping flag-OFF byte-for-byte. Held
+// A/B (keyed to LogBuildBank) so, under the render thread, emu frame N+1's VBlank
+// re-latch of the live registers cannot corrupt the values the render thread is
+// still reading for frame N. Geometry (RenderPolygonRAM/RenderNumPolygons) is NOT
+// here — it is depth-1 bank-gated (early bank release), not snapshotted.
+struct RenderRegs3D
+{
+    u32 RenderDispCnt;
+    u8  RenderAlphaRef;
+    u16 RenderToonTable[32];
+    u16 RenderEdgeTable[8];
+    u32 RenderFogColor;
+    u32 RenderFogOffset;
+    u32 RenderFogShift;
+    u8  RenderFogDensityTable[34];
+    u32 RenderClearAttr1;
+    u32 RenderClearAttr2;
+    u16 RenderXPos;
+};
+#endif
 
 struct Vertex
 {
@@ -262,6 +289,32 @@ public:
     bool RenderFrameIdentical = false; // not part of the hardware state, don't serialize
 
     u16 RenderXPos = 0;
+
+#ifdef LITEV_RENDER_THREAD
+    // R4 STEP 2: A/B snapshot of the small render registers (see RenderRegs3D above).
+    // SnapshotRenderRegs3D(bank) latches the live values into bank at record time
+    // (emu thread, VCount 215); the GL raster reads *RenderRegs3DRead, which the
+    // deferred replay points at the recorded bank and the inline path points at a
+    // freshly-snapshotted bank[0]. Never null when the raster runs.
+    RenderRegs3D RenderRegs3DBank[2] {};
+    const RenderRegs3D* RenderRegs3DRead = nullptr;
+    void SnapshotRenderRegs3D(int bank) noexcept
+    {
+        RenderRegs3D& b = RenderRegs3DBank[bank];
+        b.RenderDispCnt   = RenderDispCnt;
+        b.RenderAlphaRef  = RenderAlphaRef;
+        memcpy(b.RenderToonTable, RenderToonTable, sizeof(RenderToonTable));
+        memcpy(b.RenderEdgeTable, RenderEdgeTable, sizeof(RenderEdgeTable));
+        b.RenderFogColor  = RenderFogColor;
+        b.RenderFogOffset = RenderFogOffset;
+        b.RenderFogShift  = RenderFogShift;
+        memcpy(b.RenderFogDensityTable, RenderFogDensityTable, sizeof(RenderFogDensityTable));
+        b.RenderClearAttr1 = RenderClearAttr1;
+        b.RenderClearAttr2 = RenderClearAttr2;
+        b.RenderXPos       = RenderXPos;
+    }
+    void SetRenderRegs3DReadBank(int bank) noexcept { RenderRegs3DRead = &RenderRegs3DBank[bank]; }
+#endif
 
     bool AbortFrame = false;
 

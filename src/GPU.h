@@ -802,15 +802,20 @@ public:
     // the VCount-215 bytes, making the deferred raster bit-exact with the inline one.
     // In the headless/software build the pointers are never redirected (the GL raster
     // is not compiled), so ReadVRAMFlat_* stays byte-identical to the live buffer.
-    alignas(u64) u8 VRAMFlat_TextureShadow[512*1024] {};
-    alignas(u64) u8 VRAMFlat_TexPalShadow[128*1024] {};
+    // R4 STEP 2: A/B double buffer keyed to LogBuildBank. Emu frame N+1's VCount-215
+    // SnapshotTexShadow(1-r) writes the bank the render thread is NOT reading while it
+    // replays frame N's raster from bank r — so the concurrent snapshot can no longer
+    // corrupt the bytes in flight. Single-buffered before, the sole reason the raster
+    // could not yet run on a separate thread.
+    alignas(u64) u8 VRAMFlat_TextureShadow[2][512*1024] {};
+    alignas(u64) u8 VRAMFlat_TexPalShadow[2][128*1024] {};
     u8* VRAMFlat_TextureRead = VRAMFlat_Texture;
     u8* VRAMFlat_TexPalRead  = VRAMFlat_TexPal;
-    void SnapshotTexShadow() noexcept;
-    void SetTexReadShadow(bool on) noexcept
+    void SnapshotTexShadow(int bank) noexcept;
+    void SetTexReadShadow(bool on, int bank) noexcept
     {
-        VRAMFlat_TextureRead = on ? VRAMFlat_TextureShadow : VRAMFlat_Texture;
-        VRAMFlat_TexPalRead  = on ? VRAMFlat_TexPalShadow  : VRAMFlat_TexPal;
+        VRAMFlat_TextureRead = on ? VRAMFlat_TextureShadow[bank] : VRAMFlat_Texture;
+        VRAMFlat_TexPalRead  = on ? VRAMFlat_TexPalShadow[bank]  : VRAMFlat_TexPal;
     }
 #endif
 
