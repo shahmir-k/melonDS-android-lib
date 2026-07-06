@@ -1801,3 +1801,30 @@ gateable on ALU/shift/LDR-STR/LDM-STM/condition patterns, so the only open quest
 for those is the on-device (A55) WIN, not correctness. Golden set to trust going
 forward: shrek-600, shrek-race-3400, shrek-600-eventslices, armwrestler-arm-600
 (+script), rockwrestler-600 (+script).
+
+### D.7 addendum 21 — R4 render thread BUILT + stable, but overlap blocked; the win needs 2 more double-buffers
+
+Pushed liteDS-v2-android cc026cef: full render-thread seam (dedicated GL context in
+the emu EGL share-group; renderer GL objects created ON the render context — Mali
+does NOT share FBOs/VAOs across contexts; monotonic-counter SPSC depth-1 handshake;
+early-release callback; drain protocol; GL-free RunFrame — the deferred path was
+issuing ungated setup GL on the emu thread, gated now). Correctness/stability ALL
+PASS: host golden both flags, device screenshot pixel-clean threaded-vs-sync, 5-min
+in-race + rapid-input/pause/savestate stress 0 crash/deadlock. flag-OFF byte-identical.
+
+BUT NO FPS WIN: threaded 38.2 vs synchronous 38.7 cool (wash). The offload WORKS —
+emu RunFrame dropped 16.3→10.8ms (GL fully off the core) — but wall = gate(15) +
+core(10.8) ≈ 26ms, NOT max(core, render), because the geometry bank must release
+LATE (after the ~15ms 2D replay), forced by TWO still-single-buffered structures:
+(1) the 2D config members LayerConfig/ScanlineConfig/SpriteConfig, (2) the 3D
+texcache `Cache`. Emu's next-frame DrawScanline/Texcache.Update would race the
+render's replay/GetTexture. STEP 2's foundation was INCOMPLETE (it double-buffered
+the texture-VRAM shadow + 3D render registers but NOT these two — the "concurrency-
+safe state already exists" claim was wrong).
+
+THE WIN (final tranche): double-buffer the 2D config members + the texcache Cache,
+then release the geometry bank at PICKUP (early, ~0.16ms deep-copy) → full
+max(core~11, render~15) ≈ 15ms overlap ⇒ ~55-60fps cool. The thread is built and
+stable; this is purely completing the double-buffering the foundation missed.
+Runtime toggle debug.litev.rtserial (default off) forces serialization for A/B.
+Glue: docs/r4-app-glue-step3.diff (614 insertions). Device is now FREE for measurement.
