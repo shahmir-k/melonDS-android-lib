@@ -1290,6 +1290,28 @@ void GLRenderer3D::RenderFrame()
         return;
     }
 
+    RenderFrameBody(clrBitmapDirty);
+}
+
+#ifdef LITEV_RENDER_THREAD
+// R4 Stage 1b (recipe §2): CPU-side front half of the 3D raster, run inline at
+// VCount 215 under deferred mode. Runs the texcache coherence (consuming the VRAM
+// dirty state at the correct moment) + the RenderFrameIdentical early-out. Returns
+// true if there is 3D to raster (caller then snapshots texture VRAM and records a
+// Render3D op); false if the frame is identical (record nothing, OutputTex3D
+// unchanged — same result as the inline early-out). The GL half (RenderFrameBody,
+// reading the VCount-215 texture-VRAM shadow) is replayed at SubmitFrame.
+bool GLRenderer3D::PrepareDeferred3D(u8& clrBitmapDirtyOut)
+{
+    u8 clrBitmapDirty;
+    bool changed = Texcache.Update(clrBitmapDirty);
+    clrBitmapDirtyOut = clrBitmapDirty;
+    return changed || !GPU3D.RenderFrameIdentical;
+}
+#endif
+
+void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
+{
     // figure out which chunks of texture memory contain display captures
     int captureinfo[16];
     GPU.GetCaptureInfo_Texture(captureinfo);
@@ -1300,7 +1322,11 @@ void GLRenderer3D::RenderFrame()
     {
         if (ClearBitmapDirty & (1<<0))
         {
+#ifdef LITEV_RENDER_THREAD
+            const u16* vram = (const u16*)&GPU.VRAMFlat_TextureRead[0x40000];
+#else
             u16* vram = (u16*)&GPU.VRAMFlat_Texture[0x40000];
+#endif
             for (int i = 0; i < 256*256; i++)
             {
                 u16 color = vram[i];
@@ -1318,7 +1344,11 @@ void GLRenderer3D::RenderFrame()
 
         if (ClearBitmapDirty & (1<<1))
         {
+#ifdef LITEV_RENDER_THREAD
+            const u16* vram = (const u16*)&GPU.VRAMFlat_TextureRead[0x60000];
+#else
             u16* vram = (u16*)&GPU.VRAMFlat_Texture[0x60000];
+#endif
             for (int i = 0; i < 256*256; i++)
             {
                 u16 val = vram[i];

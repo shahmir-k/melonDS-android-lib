@@ -1216,6 +1216,34 @@ void GLRenderer::Start3DRendering()
         else     { RIRInlineGL++; Rend3D->RenderFrame(); }
         LogBuild->Reset();
     }
+#ifdef LITEV_RENDER_THREAD
+    else if (DeferReplay)
+    {
+        // R4 Stage 1b (recipe §2): DEFER the 3D raster itself. Run only the CPU-side
+        // texcache coherence NOW (VCount 215) so the VRAM dirty state is consumed at
+        // the correct moment and the flat texture mirrors reflect 215-state; snapshot
+        // that into the Stage-B shadow; record a Render3D op. The GL raster is replayed
+        // at SubmitFrame (ReplayLog) reading the shadow — so RunFrame issues no 3D GL,
+        // and the deferred raster is bit-exact with the inline VCount-215 one even
+        // though the CPU mutates texture VRAM during 215->262.
+        GLRenderer3D* r3d = static_cast<GLRenderer3D*>(Rend3D.get());
+        u8 clrBitmapDirty = 0;
+        if (r3d->PrepareDeferred3D(clrBitmapDirty))
+        {
+            GPU.SnapshotTexShadow();
+            GLLogRecord* rec = LogBuild->Append(GLOp::Render3D);
+            if (rec) { rec->I0 = clrBitmapDirty; RIRReplayCount++; }
+            else
+            {
+                // Record overflow: raster inline now (bit-exact, live 215 VRAM) so the
+                // frame is never dropped — it just forgoes the offload this frame.
+                RIRInlineGL++;
+                r3d->RenderFrameBody(clrBitmapDirty);
+            }
+        }
+        // else: RenderFrameIdentical — nothing to raster, OutputTex3D unchanged.
+    }
+#endif
     else
     {
 #if LITEV_PROFILE && defined(__ANDROID__)
@@ -1319,7 +1347,20 @@ void GLRenderer::ReplayLog()
             ReplayFinalPass(r);
             break;
         case GLOp::Render3D:
-            break;   // raster issued inline; not deferred this tranche
+        {
+            // R4 Stage 1b (recipe §2): replay the deferred 3D raster. Point the
+            // texture-VRAM reads at the VCount-215 shadow, issue the GL raster body,
+            // then restore. Recorded after the VBlank 2D records, so it runs last in
+            // the log — the 2D composites above have already read OutputTex3D holding
+            // the PREVIOUS frame's 3D (what they want); this raster now writes THIS
+            // frame's 3D into OutputTex3D for the next frame. clrBitmapDirty was
+            // captured at prepare time into I0.
+            GLRenderer3D* r3d = static_cast<GLRenderer3D*>(Rend3D.get());
+            GPU.SetTexReadShadow(true);
+            r3d->RenderFrameBody((u8) r.I0);
+            GPU.SetTexReadShadow(false);
+            break;
+        }
         default:
             // Rend2D_{A,B} are unique_ptr<Renderer2D>; under the GL renderer they
             // are always GLRenderer2D (created in Init). RIRReplay is GL-specific.

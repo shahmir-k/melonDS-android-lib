@@ -43,6 +43,15 @@ public:
     [[nodiscard]] int GetScaleFactor() const noexcept { return ScaleFactor; }
 
     void RenderFrame() override;
+#ifdef LITEV_RENDER_THREAD
+    // R4 Stage 1b (recipe §2): deferred 3D-raster split. PrepareDeferred3D runs the
+    // CPU-side texcache coherence + early-out at VCount 215; RenderFrameBody issues
+    // the GL raster (reading the VCount-215 texture-VRAM shadow) at SubmitFrame.
+    bool PrepareDeferred3D(u8& clrBitmapDirtyOut);
+    void RenderFrameBody(u8 clrBitmapDirty);
+#else
+    void RenderFrameBody(u8 clrBitmapDirty);
+#endif
     u32* GetLine(int line) override;
 
 private:

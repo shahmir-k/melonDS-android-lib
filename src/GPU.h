@@ -618,12 +618,25 @@ public:
     template <typename T>
     inline T ReadVRAMFlat_Texture(u32 addr) const
     {
+#ifdef LITEV_RENDER_THREAD
+        // R4 Stage 1b (recipe §2): during the deferred 3D raster's SubmitFrame
+        // replay VRAMFlat_TextureRead points at the VCount-215 shadow, so the raster
+        // reads texture VRAM exactly as it was when it would have run inline — even
+        // though the CPU has since mutated the live buffer (VCount 215->262). Outside
+        // replay the pointer equals VRAMFlat_Texture, so this is a no-op.
+        return *(T*)&VRAMFlat_TextureRead[addr & 0x7FFFF];
+#else
         return *(T*)&VRAMFlat_Texture[addr & 0x7FFFF];
+#endif
     }
     template <typename T>
     inline T ReadVRAMFlat_TexPal(u32 addr) const
     {
+#ifdef LITEV_RENDER_THREAD
+        return *(T*)&VRAMFlat_TexPalRead[addr & 0x1FFFF];
+#else
         return *(T*)&VRAMFlat_TexPal[addr & 0x1FFFF];
+#endif
     }
 
     void SetPowerCnt(u32 val) noexcept;
@@ -779,6 +792,27 @@ public:
 
     alignas(u64) u8 VRAMFlat_Texture[512*1024] {};
     alignas(u64) u8 VRAMFlat_TexPal[128*1024] {};
+
+#ifdef LITEV_RENDER_THREAD
+    // R4 Stage 1b (docs/r4-full-split-recipe.md §2): texture-VRAM input shadow for
+    // the deferred 3D raster. At VCount 215 (GLRenderer::Start3DRendering, deferred
+    // mode) SnapshotTexShadow() copies the freshly-coherent flat texture VRAM here;
+    // during the raster's SubmitFrame replay SetTexReadShadow(true) points the *Read
+    // pointers at the shadow so GLRenderer3D::RenderFrameBody and the texcache read
+    // the VCount-215 bytes, making the deferred raster bit-exact with the inline one.
+    // In the headless/software build the pointers are never redirected (the GL raster
+    // is not compiled), so ReadVRAMFlat_* stays byte-identical to the live buffer.
+    alignas(u64) u8 VRAMFlat_TextureShadow[512*1024] {};
+    alignas(u64) u8 VRAMFlat_TexPalShadow[128*1024] {};
+    u8* VRAMFlat_TextureRead = VRAMFlat_Texture;
+    u8* VRAMFlat_TexPalRead  = VRAMFlat_TexPal;
+    void SnapshotTexShadow() noexcept;
+    void SetTexReadShadow(bool on) noexcept
+    {
+        VRAMFlat_TextureRead = on ? VRAMFlat_TextureShadow : VRAMFlat_Texture;
+        VRAMFlat_TexPalRead  = on ? VRAMFlat_TexPalShadow  : VRAMFlat_TexPal;
+    }
+#endif
 
     u32 OAMDirty = 0;
     u32 PaletteDirty = 0;

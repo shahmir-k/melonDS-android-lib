@@ -259,14 +259,25 @@ public:
             }
         }
 
+        // R4 Stage 1b (recipe §2): hash the shadow during the deferred raster's
+        // replay so the cache entry's hash matches the bytes it was decoded from
+        // (VCount-215 state). Outside replay *Read == the live buffer, so this is a
+        // no-op. sizeof still refers to the live array (the buffers are the same size).
+#ifdef LITEV_RENDER_THREAD
+        u8* texHashBase = GPU.VRAMFlat_TextureRead;
+        u8* palHashBase = GPU.VRAMFlat_TexPalRead;
+#else
+        u8* texHashBase = GPU.VRAMFlat_Texture;
+        u8* palHashBase = GPU.VRAMFlat_TexPal;
+#endif
         for (int i = 0; i < 2; i++)
         {
             if (entry.TextureRAMSize[i])
-                entry.TextureHash[i] = MaskedHash(GPU.VRAMFlat_Texture, sizeof(GPU.VRAMFlat_Texture),
+                entry.TextureHash[i] = MaskedHash(texHashBase, sizeof(GPU.VRAMFlat_Texture),
                     entry.TextureRAMStart[i], entry.TextureRAMSize[i]);
         }
         if (entry.TexPalSize)
-            entry.TexPalHash = MaskedHash(GPU.VRAMFlat_TexPal, sizeof(GPU.VRAMFlat_TexPal),
+            entry.TexPalHash = MaskedHash(palHashBase, sizeof(GPU.VRAMFlat_TexPal),
                 entry.TexPalStart, entry.TexPalSize);
 
         auto& texArrays = TexArrays[widthLog2][heightLog2];
