@@ -210,6 +210,107 @@ void Compiler::Comp_MaterializeFlags()
     if (m & 0x2) { CSET(W0, CC_CS); BFI(RCPSR, W0, 29, 1); } // C
     if (m & 0x1) { CSET(W0, CC_VS); BFI(RCPSR, W0, 28, 1); } // V
 }
+
+// liteDS-v2 Stage 2b: is the CURRENT instruction body flag-transparent, i.e. does it
+// leave host PSTATE NZCV completely untouched AND read no guest CPSR flag? Only such
+// bodies may run with the resident flags kept alive in host NZCV. This is the hand
+// classifier the Stage-2a handoff flagged as required: Info.WriteFlags/ReadFlags
+// alone cannot express the shift-helper's scratch CMP (a non-S `LSL rd,rn,rs` writes
+// ZERO guest flags yet Comp_RegShiftReg emits a `CMP` that clobbers host NZCV) --
+// exactly the hazard armwrestler/rockwrestler torture.
+//
+// The check is conservatively FALSE (spill) for anything not proven transparent.
+bool Compiler::Comp_BodyIsNZCVTransparent(u16 kind, u8 writeFlags, u8 readFlags)
+{
+    using namespace ARMInstrInfo;
+
+    // A transparent body neither produces guest flags nor reads them. (A body that
+    // sets flags necessarily writes host NZCV; a body that reads flags needs a
+    // canonical RCPSR.) This is necessary but not sufficient -- WriteFlags==0 bodies
+    // can still scratch-clobber host NZCV, filtered per-kind below.
+    if (writeFlags != 0 || readFlags != 0)
+        return false;
+
+    if (Thumb)
+    {
+        // The only WriteFlags==0/ReadFlags==0 Thumb bodies that touch NEITHER host
+        // NZCV nor memory (no scratch CMP, no stub BL) are the non-flag hi-reg / SP /
+        // PC-relative address forms. Everything else with no flags is a load/store or
+        // a branch -> spill.
+        switch (kind)
+        {
+        case tk_ADD_HIREG: case tk_MOV_HIREG:
+        case tk_ADD_PCREL: case tk_ADD_SPREL: case tk_ADD_SP:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // ARM. Data-processing ALU ops occupy [ak_AND_REG_LSL_IMM .. ak_MVN_IMM_S], 18
+    // kinds per op in the fixed ak_ALU() order: op-relative 0..3 = immediate-shifted
+    // register, 4..7 = REGISTER-specified shift, 8 = immediate, 9..17 = the S forms.
+    // A register-specified shift amount routes op2 through Comp_RegShiftReg, whose
+    // `CMP W1,32/31` clobbers host NZCV even when the instruction is non-S -- so only
+    // the immediate / immediate-shift forms (rel 0,1,2,3,8) are transparent. The RRX
+    // form (rel 3, ROR #0) reads guest C and is already excluded by readFlags!=0.
+    if (kind <= ak_MVN_IMM_S)
+    {
+        u32 rel = kind % 18;
+        return rel == 0 || rel == 1 || rel == 2 || rel == 3 || rel == 8;
+    }
+
+    // CLZ writes only a GPR. The non-S long/short multiplies (MUL..SMLAL; WriteFlags
+    // is 0 here, so the S-form with its host TST is already excluded) write only GPRs
+    // on ARM9, or a GPR via CLS/CLZ on ARM7 -- host NZCV is untouched. The SMLAxy /
+    // SMLAWy family (> ak_SMLAL) emits `ADDS` and is deliberately NOT included.
+    if (kind == ak_CLZ)
+        return true;
+    if (kind >= ak_MUL && kind <= ak_SMLAL)
+        return true;
+
+    // Memory, SMLAxy family, QADD/QSUB, MSR/MRS, branches, coprocessor, unknown: any
+    // of these may clobber host PSTATE (stub BL, scratch ADDS, CPSR write) -> spill.
+    return false;
+}
+
+// liteDS-v2 Stage 2b reconcile: called before each unconditional / Thumb instruction
+// body in place of the Stage-1 unconditional Comp_MaterializeFlags. Spills the flags
+// resident in host NZCV to RCPSR ONLY when the upcoming body forces it; otherwise the
+// flags stay canonical in host PSTATE across the body (the block-wide-NZCV win).
+void Compiler::Comp_ReconcileFlags()
+{
+    if (!NZCVDeferred)
+        return;
+
+    const u8 read = CurInstr.Info.ReadFlags;
+    const u8 wf   = CurInstr.Info.WriteFlags;
+    const u16 kind = CurInstr.Info.Kind;
+
+    // (A) body reads a guest flag that is currently deferred -> RCPSR must be canonical
+    // for that read (e.g. ADC/SBC/RSC read C, RRX reads C, MRS reads all).
+    if (read & NZCVDeferred)
+    {
+        Comp_MaterializeFlags();
+        return;
+    }
+
+    // (B) full-NZCV arithmetic producer: the host SUBS/ADDS/CMP/CMN sets N,Z,C,V ALWAYS
+    // (low nibble of WriteFlags == 0xF, only arithmetic compares/add/sub reach this),
+    // wholesale overwriting host NZCV and re-establishing the guest condition. The
+    // resident flags -- which (A) proved this body does not read -- are thereby dead
+    // (a real consumer would have read them via (A) first). Let the producer run; it
+    // re-defers / re-extracts a complete, self-consistent flag state. No spill.
+    if ((wf & 0x0F) == 0x0F)
+        return;
+
+    // (C)/(D): keep resident iff the body is flag-transparent, else spill before it
+    // clobbers host NZCV (partial producers, register-shift scratch CMP, stubs, ...).
+    if (Comp_BodyIsNZCVTransparent(kind, wf, read))
+        return;
+
+    Comp_MaterializeFlags();
+}
 #endif
 
 void Compiler::Comp_Logical(int op, bool S, ARM64Reg rd, ARM64Reg rn, Op2 op2)

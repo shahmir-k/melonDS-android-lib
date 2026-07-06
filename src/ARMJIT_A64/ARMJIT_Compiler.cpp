@@ -1038,11 +1038,12 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
         if (Thumb)
         {
 #ifdef LITEV_JIT_FIXEDREG
-            // Thumb instructions carry no per-instruction main-loop CheckCondition,
-            // so reconcile any deferred host flags before the body (which may clobber
-            // host NZCV or read RCPSR). The producer→conditional-branch native win is
-            // taken by ARM code; Thumb keeps correctness only here.
-            Comp_MaterializeFlags();
+            // Thumb instructions carry no per-instruction main-loop CheckCondition, so
+            // reconcile any deferred host flags before the body. Stage 2b: spill ONLY
+            // when this body forces it (reads a deferred flag, or clobbers host NZCV
+            // without being a full producer); a transparent Thumb body keeps the flags
+            // resident in host PSTATE across it.
+            Comp_ReconcileFlags();
 #endif
             if (comp == NULL)
             {
@@ -1086,9 +1087,10 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
                     skipExecute = CheckCondition(cond);
 #ifdef LITEV_JIT_FIXEDREG
                 else
-                    // Unconditional (AL) body: no CheckCondition ran, so reconcile
-                    // deferred flags before the body executes.
-                    Comp_MaterializeFlags();
+                    // Unconditional (AL) body: no CheckCondition ran. Stage 2b: keep
+                    // the resident flags alive across the body unless it reads a
+                    // deferred flag or clobbers host NZCV without being a full producer.
+                    Comp_ReconcileFlags();
 #endif
 
                 if (comp == NULL)

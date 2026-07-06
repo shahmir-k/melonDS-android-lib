@@ -219,6 +219,19 @@ public:
     // Otherwise the consumer materializes N,Z into RCPSR and uses the RCPSR path.
     bool NZCVCondValid = false;
     void Comp_MaterializeFlags();
+
+    // liteDS-v2 Stage 2b: host NZCV as the SOLE canonical block-wide flag store.
+    // Instead of spilling the resident flags into RCPSR before EVERY next instruction
+    // body (the conservative Stage-1/2a reconcile), Comp_ReconcileFlags classifies the
+    // upcoming body and spills ONLY when it must: when the body READS a currently-
+    // deferred guest flag, or CLOBBERS host NZCV without fully re-establishing the
+    // guest condition there (partial producers, register-specified-shift scratch CMPs,
+    // memory stub BLs, helpers). A full-NZCV arithmetic producer (SUBS/ADDS/CMP/CMN)
+    // and a flag-transparent body keep the flags resident with no RCPSR round trip.
+    // Comp_BodyIsNZCVTransparent is the hand classifier the Stage-2a handoff required
+    // (Info.WriteFlags/ReadFlags cannot express the shift-helper's scratch clobber).
+    void Comp_ReconcileFlags();
+    bool Comp_BodyIsNZCVTransparent(u16 kind, u8 writeFlags, u8 readFlags);
 #endif
 
     Arm64Gen::FixupBranch CheckCondition(u32 cond);
