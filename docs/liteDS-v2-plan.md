@@ -1892,3 +1892,31 @@ Remaining gap to 60: wall 18.1ms vs 16.6ms = ~1.5ms, in the render/gate + therma
 The banked emulation-core efficiency (FIXEDREG flag traffic, device-pending) + the
 residual overlap headroom (runFrame was 14ms at 63-70C, ~11ms cold) close it. This
 is the headline win of the campaign.
+
+### D.7 addendum 24 — R4 render CORRECTNESS solved via framebuffer-hash gate; correct build ~40-45fps, early-release ~55 still racy
+
+The flicker root cause (found by the FBHASH gate, invisible to eyes/screenshots):
+the deferred ReplayLog read the LIVE LogBuild pointer, which StartFrameLog flips to
+the emu's NEXT bank every frame — so under the render thread it drained the WRONG
+bank (every bank=0 frame blank, bank=1 correct) = the every-other-frame flicker.
+Fixed (core 4492c0e1: ReplaySrc reads the true replay bank; app 8440dc09) + removed
+a 2nd bug (updateRenderer re-registering the early-release callback).
+
+THE GATE (the missing tool all along): debug.litev.fbhash=1 → glReadPixels the
+composited output → per-frame hash → logcat (works on the HW-overlay SurfaceView
+screencap can't read; RTC pinned + frame-index reset at loadState for determinism;
+zero cost off). Proves correctness WITHOUT the user: same deterministic savestate,
+serial vs threaded hashes must match under the fixed 1-frame offset. RESULT:
+threaded==serial 274/274 frames bit-exact. The threaded render is PROVABLY correct.
+
+HONEST SPEED: the shipped gate-PASSING build uses DELAYED release (emu freed only
+after SubmitFrame's emu-state reads finish; only GPU present overlaps, gate ~8ms):
+~31fps throttled / ~40-45 cooled. The ~55fps figure was EARLY release — which the
+gate proves STILL has 2 residual races (systematic 3D-latency shift + a
+non-deterministic 2D live-race), so it was NOT shipped (correctness-first). Pushed
+liteDS-v2-android 4492c0e1 + liteDS-v2-app-r4 8440dc09 (full-stack: R4+FIXEDREG+
+GXFIFO+mem-tiers, all flags ON). Device has the correct build.
+
+NEXT: close the 2 early-release races (now that the FBHASH gate exists to prove
+them) → reclaim ~55fps proven-correct. That is the path to the fast AND correct
+build; the delayed-release ~40-45 build is the safe correct floor meanwhile.
