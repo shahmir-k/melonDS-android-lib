@@ -75,6 +75,18 @@ private:
     {
         Polygon* PolyData;
 
+        // r4-fix: render-private snapshot of the Polygon fields the RASTER phase
+        // (RenderSceneChunk) reads. PolyData points into emu-owned RenderPolygonRAM,
+        // which the emu thread overwrites for frame N+1 during the overlap window (after
+        // the early bank release). SetupPolygon copies these at geometry time (before the
+        // release) so the raster never dereferences a mutated Polygon. Flag-OFF: the
+        // snapshot equals the live value (taken in the same synchronous call chain), so
+        // the rendered output is byte-identical.
+        u32  PolyAttr;
+        bool PolyTranslucent;
+        bool PolyIsShadowMask;
+        bool PolyIsShadow;
+
         u32 NumIndices;
         u32 IndicesOffset;
         GLuint PrimType;
@@ -141,6 +153,15 @@ private:
 
     GLuint ShaderConfigUBO {};
     int NumFinalPolys {}, NumOpaqueFinalPolys {};
+
+#ifdef LITEV_RENDER_THREAD
+    // R4 r4-fix: the raster half (RenderFrameBodyRaster/RenderSceneChunk) runs AFTER the
+    // early bank release, concurrently with the emu thread building frame N+1. It must
+    // NOT read live GPU3D.RenderNumPolygons / RenderPolygonRAM (both unbanked — emu N+1
+    // overwrites them). RenderFrameBodyGeometry snapshots the per-frame W-buffer flag
+    // here (from RenderPolygonRAM[0], read before the release) and the raster reads it.
+    bool RenderWBuffer {};
+#endif
 
     GLuint ClearVertexBufferID = 0, ClearVertexArrayID {};
     GLint ClearUniformLoc[4] {};

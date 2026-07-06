@@ -384,6 +384,13 @@ void GLRenderer3D::SetupPolygon(GLRenderer3D::RendererPolygon* rp, Polygon* poly
 {
     rp->PolyData = polygon;
 
+    // r4-fix: snapshot the fields the raster phase reads, so RenderSceneChunk never
+    // dereferences PolyData (emu-owned, overwritten by frame N+1 after early release).
+    rp->PolyAttr         = polygon->Attr;
+    rp->PolyTranslucent  = polygon->Translucent;
+    rp->PolyIsShadowMask = polygon->IsShadowMask;
+    rp->PolyIsShadow     = polygon->IsShadow;
+
     // render key: depending on what we're drawing
     // opaque polygons:
     // - depthfunc
@@ -889,10 +896,15 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
     // depth-1 bank-gated, read before the early bank release.
 #ifdef LITEV_RENDER_THREAD
     const RenderRegs3D& RR = *GPU3D.RenderRegs3DRead;
+    // r4-fix: read the W-buffer flag from the render-private snapshot taken in
+    // RenderFrameBodyGeometry (before the early bank release). Reading live
+    // GPU3D.RenderPolygonRAM[0]->WBuffer here would race the emu thread's frame N+1,
+    // which has already overwritten RenderPolygonRAM by the time the raster runs.
+    bool flags = RenderWBuffer;
 #else
     const melonDS::GPU3D& RR = GPU3D;
-#endif
     bool flags = GPU3D.RenderPolygonRAM[0]->WBuffer;
+#endif
     UseRenderShader(flags);
 
     //if (h != 192) glScissor(0, y<<ScaleFactor, 256<<ScaleFactor, h<<ScaleFactor);
@@ -940,15 +952,15 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
     {
         RendererPolygon* rp = &PolygonList[i];
 
-        if (rp->PolyData->IsShadowMask) { i++; continue; }
-        if (rp->PolyData->Translucent) { i++; continue; }
+        if (rp->PolyIsShadowMask) { i++; continue; }
+        if (rp->PolyTranslucent) { i++; continue; }
 
-        if (rp->PolyData->Attr & (1<<14))
+        if (rp->PolyAttr & (1<<14))
             glDepthFunc(GL_LEQUAL);
         else
             glDepthFunc(GL_LESS);
 
-        u32 polyattr = rp->PolyData->Attr;
+        u32 polyattr = rp->PolyAttr;
         u32 polyid = (polyattr >> 24) & 0x3F;
 
         glStencilFunc(GL_ALWAYS, polyid, 0xFF);
@@ -979,7 +991,7 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
         {
             RendererPolygon* rp = &PolygonList[i];
 
-            if (rp->PolyData->IsShadowMask) { i++; continue; }
+            if (rp->PolyIsShadowMask) { i++; continue; }
 
             i += RenderPolygonEdgeBatch(i);
         }
@@ -1010,7 +1022,7 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
             {
                 RendererPolygon* rp = &PolygonList[i];
 
-                if (rp->PolyData->IsShadowMask)
+                if (rp->PolyIsShadowMask)
                 {
                     // draw actual shadow mask
 
@@ -1030,11 +1042,11 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
 
                     i += RenderPolygonBatch(i);
                 }
-                else if (rp->PolyData->Translucent)
+                else if (rp->PolyTranslucent)
                 {
-                    bool needopaque = ((rp->PolyData->Attr & 0x001F0000) == 0x001F0000);
+                    bool needopaque = ((rp->PolyAttr & 0x001F0000) == 0x001F0000);
 
-                    u32 polyattr = rp->PolyData->Attr;
+                    u32 polyattr = rp->PolyAttr;
                     u32 polyid = (polyattr >> 24) & 0x3F;
 
                     if (polyattr & (1<<14))
@@ -1066,7 +1078,7 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
                     if (!(polyattr & (1<<15))) transfog = fogenable;
                     else                       transfog = GL_FALSE;
 
-                    if (rp->PolyData->IsShadow)
+                    if (rp->PolyIsShadow)
                     {
                         // shadow against clear-plane will only pass if its polyID matches that of the clear plane
                         u32 clrpolyid = (RR.RenderClearAttr1 >> 24) & 0x3F;
@@ -1119,7 +1131,7 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
         {
             RendererPolygon* rp = &PolygonList[i];
 
-            if (rp->PolyData->IsShadowMask)
+            if (rp->PolyIsShadowMask)
             {
                 // clear shadow bits in stencil buffer
 
@@ -1142,11 +1154,11 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
 
                 i += RenderPolygonBatch(i);
             }
-            else if (rp->PolyData->Translucent)
+            else if (rp->PolyTranslucent)
             {
-                bool needopaque = ((rp->PolyData->Attr & 0x001F0000) == 0x001F0000);
+                bool needopaque = ((rp->PolyAttr & 0x001F0000) == 0x001F0000);
 
-                u32 polyattr = rp->PolyData->Attr;
+                u32 polyattr = rp->PolyAttr;
                 u32 polyid = (polyattr >> 24) & 0x3F;
 
                 if (polyattr & (1<<14))
@@ -1178,7 +1190,7 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
                 if (!(polyattr & (1<<15))) transfog = fogenable;
                 else                       transfog = GL_FALSE;
 
-                if (rp->PolyData->IsShadow)
+                if (rp->PolyIsShadow)
                 {
                     glDisable(GL_BLEND);
                     glColorMaski(0, GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
@@ -1341,8 +1353,21 @@ void GLRenderer3D::RenderFrameBodyGeometry()
     int captureinfo[16];
     GPU.GetCaptureInfo_Texture(captureinfo);
 
+    // r4-fix: always publish the render-private poly count (0 when there is no
+    // geometry this frame). The raster half guards on NumFinalPolys — NOT on live
+    // GPU3D.RenderNumPolygons — so a stale count from a previous frame can never leak
+    // once the emu thread has resumed (early bank release) and overwritten the live one.
+    NumFinalPolys = 0;
+    NumOpaqueFinalPolys = -1;
+
     if (GPU3D.RenderNumPolygons)
     {
+        // r4-fix: snapshot the per-frame W-buffer flag here (geometry runs BEFORE the
+        // early bank release, so RenderPolygonRAM[0] is still frame N's). RenderSceneChunk
+        // reads this snapshot instead of live GPU3D.RenderPolygonRAM[0]->WBuffer, which
+        // emu frame N+1 would have already overwritten by raster time.
+        RenderWBuffer = GPU3D.RenderPolygonRAM[0]->WBuffer;
+
         int npolys = 0;
         int firsttrans = -1;
         for (u32 i = 0; i < GPU3D.RenderNumPolygons; i++)
@@ -1578,7 +1603,11 @@ void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
     // RenderFrameBodyGeometry() (before the 2D replay, at which point the geometry
     // bank was released early). This raster half only draws the scene from the
     // render-private PolygonList/VBOs built there.
-    if (GPU3D.RenderNumPolygons)
+    // r4-fix: guard on the render-private NumFinalPolys (published by
+    // RenderFrameBodyGeometry before the early bank release), NOT live
+    // GPU3D.RenderNumPolygons — the emu thread has resumed frame N+1 and may already
+    // have overwritten the live count/polygon RAM by the time this raster runs.
+    if (NumFinalPolys)
         RenderSceneChunk(0, 192);
 #else
     if (GPU3D.RenderNumPolygons)
