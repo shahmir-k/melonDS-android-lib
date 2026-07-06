@@ -1626,3 +1626,27 @@ actually ~20ms → capped ~43fps → also need JIT (register-alloc) work. Phase 
 decompose-first step measures this split — it is the decisive go/no-go for the
 whole R4 investment. (Caveat: sweep's staging-grid scene ~28ms is ~5ms heavier
 than the prior 23ms in-race point; relative resolution-invariance holds.)
+
+### D.7 addendum 14 — Phase 3 decomposition + a SUSPECT verdict; clean go/no-go in flight
+
+Phase 3 "decompose first" measured (deferred build, STAGING-GRID scene, device):
+inline 3D raster 3.8ms, MakeVRAMFlat 0.33ms, config 0.2ms, deferred submit 4.0ms
+→ concluded movable=4.3ms, "unmovable emulation floor"=23ms → R4 caps ~43fps@3x,
+recommended halt R4 / pivot to JIT.
+
+RECONCILIATION (why the 23ms is suspect): M6.11 headless device (clean, no GL,
+no log, app-matching full config) = pure emulation 13.56ms in-race. The Phase 3
+agent instrumented only 3 render sites and lumped the REST of RunFrame —
+critically the entire 2D-renderer per-scanline CPU (DrawScanline/prerender
+path) AND the command-log recording overhead — into "emulation." That
+uncounted ~9.7ms is render CPU (movable) + recording artifact (eliminable), not
+emulation. So the "23ms floor" is very likely mis-attribution; the real
+emulation floor is ~13.5ms and ~14.5ms of RunFrame is movable render CPU.
+
+If confirmed: Phase 4 thread → wall ≈ max(~14 emu+recording, ~14 render) ⇒
+~55-60fps@3x, R4 VIABLE. If pure emulation genuinely ~20-23ms → R4 caps ~43,
+need JIT (DraStic fixed-register-alloc) too. A clean two-way measurement is in
+flight: (A) headless pure-emulation floor on the race savestate; (B) app
+RunFrame FULLY partitioned (emulation vs ALL 2D render CPU vs 3D vs flatten vs
+config vs recording) — instrumenting the 2D per-scanline path the prior agent
+missed. That split is the definitive go/no-go for the R4 investment.
