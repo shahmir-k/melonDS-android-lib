@@ -1780,3 +1780,24 @@ NOT YET CARRIED (the backlog, ranked):
    Shrek in-race has 0 SMC → low value here; QUEUED behind the rest.
 RESERVE: M6.6 hybrid (soft-NEON compositor + banded software raster on helper
 threads — DraStic's full render model) if R4 thread + core cuts leave a gap.
+
+### D.7 addendum 20 — RETRACTION: torture goldens were VALID (my verify was mis-invoked); strong ARM oracle confirmed
+
+Addendum 17's "born-bad / possible regression" was MY misdiagnosis: I ran
+--verify-trace WITHOUT --input-script, so the core replayed armwrestler/rockwrestler
+with no buttons and diverged at frame 201 (one frame after the script's first press
+at 200). WITH --input-script the goldens verify exit 0 on the DEFAULT build and
+double-record byte-identical — they were always valid. No ARM regression exists.
+Harness hardened (37aaa743): --verify-trace now hard-fails (exit 4) on input-script
+hash mismatch instead of a silent warning, so this can't recur.
+
+VALIDATION (all WITH script, the strict ARM/condition-code torture oracle): every
+landed exactness-preserving flag passes armwrestler AND rockwrestler bit-exact —
+JIT_DISPATCH+LINK, JIT_FIXEDREG, MEM_DTCM_BLOCK, MEM_MAINRAM_LOAD, MEM_MAINRAM_BLOCK,
+GXFIFO_BATCH, and the full six-flag stack. The landed optimizations are genuinely
+bit-exact on the hardest ARM tests. This strong oracle now DE-RISKS the remaining
+emulation-core work (FIXEDREG register pinning, branchless fastmem): correctness is
+gateable on ALU/shift/LDR-STR/LDM-STM/condition patterns, so the only open question
+for those is the on-device (A55) WIN, not correctness. Golden set to trust going
+forward: shrek-600, shrek-race-3400, shrek-600-eventslices, armwrestler-arm-600
+(+script), rockwrestler-600 (+script).
