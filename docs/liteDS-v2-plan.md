@@ -1749,3 +1749,34 @@ handoff in docs/r4-step3-handoff.md: context share-group, runFrame GL touchpoint
 relocate, mutex+condvar depth-1 handshake, early-bank-release at GPU3D_OpenGL.cpp:1516,
 drain protocol (capture/pause/savestate/reset), and the one remaining 2D-config
 staging race (LayerConfig/ScanlineConfig live members → render-thread-private).
+
+### D.7 addendum 19 — DraStic optimization backlog (tracked); carrying over the remaining emulation levers
+
+From docs/drastic-teardown/, every DraStic technique vs our status. Thermal
+(addendum 18) makes the emulation-CPU cuts doubly valuable: less work = less
+throttle = SUSTAINED 60, not just peak.
+
+ALREADY HAVE (not gaps): baked cycle timing; backward liveness/dead-flag+reg
+elim (FloodFillSetFlags); deferred GXFIFO; NEON 2D renderer.
+IN PROGRESS: render off critical path (R4 thread — STEP 3 building); fixed
+register allocation (Stage 1 CPSR→NZCV landed 8a6d7098; Stage 2 register pinning
+building — ae152b16).
+NOT YET CARRIED (the backlog, ranked):
+1. Fixed register MAP / pin guest r0-r14 → host regs (§6.1) — biggest ARM9 lever,
+   Stage 2 building now. Full condition-folding falls out once registers fixed.
+2. Branchless software-pagetable fastmem (§7.2): 2KB-granular software TLB, one
+   sign-test per access, no SIGSEGV handler — likely faster than melonDS's
+   fault-based fastmem on the in-order A55. QUEUED (touches ARMJIT_Memory/stubs;
+   sequence after register work to avoid conflict).
+3. Batched GXFIFO threaded-code interpreter (§ doc04): de-interleaved command/
+   param streams, branchless jump-table, no per-command call/ret — attacks the
+   271ns/cmd DISPATCH cost (which is what made NEON-geometry closed-negative;
+   dispatch, not math, dominates). QUEUED (GPU3D.cpp geometry — check no overlap
+   with R4's geometry-bank/texcache touch first).
+4. Compile-time idle-loop detection (§9 tier a): bake scheduler-yield into
+   recognized software-poll loops. LOW value for Shrek (<0.15ms busy-wait) but
+   real for WarioWare-class IPC-poll titles — general compat. QUEUED.
+5. Software SMC bitmap (§8): 2-byte-granular code-presence map vs mprotect faults.
+   Shrek in-race has 0 SMC → low value here; QUEUED behind the rest.
+RESERVE: M6.6 hybrid (soft-NEON compositor + banded software raster on helper
+threads — DraStic's full render model) if R4 thread + core cuts leave a gap.
