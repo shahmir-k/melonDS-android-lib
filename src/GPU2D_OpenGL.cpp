@@ -719,6 +719,14 @@ void GLRenderer2D::UpdateAndRender(int line)
         u32 vrammask;
         GPU2D.GetBGVRAM(vram, vrammask);
 
+#ifdef LITEV_RENDER_THREAD
+        // STEP 3: RunFrame must issue ZERO GL under deferred/RIR replay (it runs on
+        // the emu thread while the renderer's GL objects live on the render thread's
+        // context). This bind is only needed by the INLINE glTexSubImage below; the
+        // deferred/RIR path records the upload and the replay (RIRReplay UploadBGVRAM)
+        // reproduces this bind on the render context.
+        if (!Parent.RIRMode && !Parent.DeferReplay)
+#endif
         glBindTexture(GL_TEXTURE_2D, VRAMTex_BG);
 
         int texlen = dirtybits >> 6;
@@ -826,6 +834,13 @@ void GLRenderer2D::UpdateAndRender(int line)
     {
         // pre-render BG layers with the new settings
 
+#ifdef LITEV_RENDER_THREAD
+        // STEP 3: deferred/RIR record only — the shared prerender setup is
+        // reproduced by RIRReplay(PrerenderLayer) on the render context. Keeping it
+        // out of RunFrame keeps RunFrame GL-free (see the UploadBGVRAM note above).
+        if (!Parent.RIRMode && !Parent.DeferReplay)
+#endif
+        {
         glUseProgram(LayerPreShader);
 
         glDisable(GL_DEPTH_TEST);
@@ -840,6 +855,7 @@ void GLRenderer2D::UpdateAndRender(int line)
         glBindTexture(GL_TEXTURE_2D, VRAMTex_BG);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, PalTex_BG);
+        }
 
         for (int layer = 0; layer < 4; layer++)
         {
@@ -887,8 +903,15 @@ void GLRenderer2D::UpdateAndRender(int line)
             std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _litevOam0).count();
 #endif
 
+#ifdef LITEV_RENDER_THREAD
+        // STEP 3: deferred/RIR record only — reproduced by RIRReplay(PrerenderSprites
+        // / RenderSpritesSpan) on the render context. Keep RunFrame GL-free.
+        if (!Parent.RIRMode && !Parent.DeferReplay)
+#endif
+        {
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, VRAMTex_OBJ);
+        }
 
         memcpy(&TempPalBuffer[0], &GPU.Palette[GPU2D.Num ? 0x600 : 0x200], 256*2);
         {
@@ -1444,8 +1467,16 @@ void GLRenderer2D::UpdateLayerConfig()
         }
     }
 
+#ifdef LITEV_RENDER_THREAD
+    // STEP 3: keep RunFrame GL-free. UpdateLayerConfig computes the CPU LayerConfig
+    // (snapshotted into the PrerenderLayer/Composite2D records); the deferred/RIR
+    // replay re-uploads LayerConfigUBO from that snapshot on the render context.
+    if (!Parent.RIRMode && !Parent.DeferReplay)
+#endif
+    {
     glBindBuffer(GL_UNIFORM_BUFFER, LayerConfigUBO);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(LayerConfig), &LayerConfig);
+    }
 }
 
 void GLRenderer2D::UpdateOAM(int ystart, int yend)

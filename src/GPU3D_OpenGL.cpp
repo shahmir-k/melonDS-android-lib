@@ -1547,6 +1547,16 @@ void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, NumIndices * 2, IndexBuffer);
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
 
+#ifdef LITEV_RENDER_THREAD
+        // R4 STEP 3 early bank release (design §4.2): the frame's geometry
+        // (RenderPolygonRAM walk + BuildPolygons) has now been fully consumed and
+        // uploaded to GL. Everything RenderSceneChunk reads below is STEP-2 banked
+        // (RR.Render* via the render-register bank + the texture-VRAM shadow), so the
+        // emu thread may resume frame N+1 now. This runs inside the render thread's
+        // SubmitFrame->ReplayLog->Render3D. The callback is idempotent (app guards it).
+        if (Parent.BankReleaseCB) Parent.BankReleaseCB();
+#endif
+
         RenderSceneChunk(0, 192);
     }
 }

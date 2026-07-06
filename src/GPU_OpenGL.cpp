@@ -1401,10 +1401,11 @@ void GLRenderer::SubmitFrame()
 
     SubmitPending = false;
 
-    // R4 STEP 2 (single-thread this tranche): replay the bank the frame was just
-    // recorded into. Under the render thread (STEP 3) the packet carries the bank the
-    // emu thread published and this is set from it instead.
-    LogReplayBank = LogBuildBank;
+    // R4 STEP 2 (single-thread): replay the bank the frame was just recorded into.
+    // R4 STEP 3 (render-thread): the app glue published the bank into the packet and
+    // set it via SetSubmitReplayBank, so replay THAT bank (the render thread reads
+    // bank r while the emu thread records bank 1-r for frame N+1). -1 = single-thread.
+    LogReplayBank = (SubmitReplayBankOverride >= 0) ? SubmitReplayBankOverride : LogBuildBank;
 
     SubmitReplaying = true;
     if (DeferReplay)

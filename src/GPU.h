@@ -20,6 +20,7 @@
 #define GPU_H
 
 #include <memory>
+#include <functional>
 
 #include "GPU2D.h"
 #include "GPU3D.h"
@@ -110,6 +111,13 @@ public:
     // RunFrame. No-op unless deferred submission is enabled AND the frame was
     // deferrable (non-capture; see CaptureActiveThisFrame). Call after RunFrame.
     void SubmitFrame() noexcept;
+
+    // R4 STEP 3 (render-thread) forwarders. See Renderer::SetSubmitReplayBank /
+    // SetBankReleaseCallback. Thin GPU-level wrappers so the app glue drives the
+    // render thread without reaching through GetRenderer().
+    void SetSubmitReplayBank(int bank) noexcept;
+    int GetLogBuildBank() const noexcept;
+    void SetBankReleaseCallback(std::function<void()> cb) noexcept;
 
     // Whether the frame just run used display capture (see CaptureActiveThisFrame).
     // The app glue reads this after RunFrame to decide whether the frame was
@@ -1032,6 +1040,24 @@ public:
     // synchronous (capture-active fallback) path. Safe to call unconditionally
     // after RunFrame.
     virtual void SubmitFrame() {}
+
+    // R4 STEP 3 (render-thread): the bank the next SubmitFrame() must replay. The
+    // app glue captures LogBuildBank into the packet when the emu thread publishes
+    // frame N, then sets it here on the render thread so SubmitFrame reads bank r
+    // (the published frame) while the emu thread is already recording bank 1-r for
+    // frame N+1. -1 restores the single-thread default (SubmitFrame uses the live
+    // LogBuildBank). Base/software = no-op.
+    virtual void SetSubmitReplayBank(int bank) {}
+    // R4 STEP 3: the log/shadow bank the frame just run recorded into (LogBuildBank).
+    // The emu thread reads this right after RunFrame to publish it in the packet.
+    virtual int GetLogBuildBank() const { return 0; }
+    // R4 STEP 3 (render-thread): a callback the 3D raster replay invokes ONCE per
+    // SubmitFrame, immediately after the frame's geometry (RenderPolygonRAM +
+    // vertex/index buffers) has been uploaded to GL — the "early bank release"
+    // point (design §4.2). Everything the raster reads after this is STEP-2 banked,
+    // so the emu thread may resume frame N+1 as soon as this fires. The app glue's
+    // callback signals the emu thread's depth-1 gate. Base/software = no-op.
+    virtual void SetBankReleaseCallback(std::function<void()> cb) {}
 
     // R4 Stage A: rewind the per-frame GL command log (recipe §1). Called from
     // GPU::StartFrame under deferred submission so the frame's converted call

@@ -396,6 +396,21 @@ void GPU::SubmitFrame() noexcept
 {
     if (Rend) Rend->SubmitFrame();
 }
+
+void GPU::SetSubmitReplayBank(int bank) noexcept
+{
+    if (Rend) Rend->SetSubmitReplayBank(bank);
+}
+
+int GPU::GetLogBuildBank() const noexcept
+{
+    return Rend ? Rend->GetLogBuildBank() : 0;
+}
+
+void GPU::SetBankReleaseCallback(std::function<void()> cb) noexcept
+{
+    if (Rend) Rend->SetBankReleaseCallback(std::move(cb));
+}
 #endif
 
 

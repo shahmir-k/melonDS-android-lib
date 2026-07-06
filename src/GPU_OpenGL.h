@@ -74,6 +74,10 @@ public:
     void Start3DRendering() override;   // RIR-routes the 3D raster (recipe §1.2 Render3D)
     void SubmitFrame() override;
     void SwapBuffers() override;
+    // R4 STEP 3 (render-thread) seams.
+    void SetSubmitReplayBank(int bank) override { SubmitReplayBankOverride = bank; }
+    int GetLogBuildBank() const override { return LogBuildBank; }
+    void SetBankReleaseCallback(std::function<void()> cb) override { BankReleaseCB = std::move(cb); }
 #endif
 
 private:
@@ -206,6 +210,14 @@ private:
     // thread (STEP 3) the packet carries the bank the emu thread published, so the
     // render thread reads bank r while the emu thread records into bank 1-r.
     int LogReplayBank = 0;
+    // R4 STEP 3: when >=0, SubmitFrame replays this (packet-published) bank instead
+    // of the live LogBuildBank. -1 = single-thread default. Set on the render thread
+    // via SetSubmitReplayBank before each SubmitFrame.
+    int SubmitReplayBankOverride = -1;
+    // R4 STEP 3: early bank-release callback (design §4.2), invoked from
+    // GLRenderer3D::RenderFrameBody right after the geometry upload. GLRenderer3D is
+    // a friend, so it calls Parent.BankReleaseCB directly.
+    std::function<void()> BankReleaseCB;
     void StartFrameLog() override;   // called from GPU::StartFrame under DeferSubmit
 
     // R4 RIR (Record-and-Immediately-Replay, recipe §8). When RIRMode is set, the
