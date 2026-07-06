@@ -1675,3 +1675,29 @@ DECISION (final, both required for 60fps@3x, matching DraStic):
   is its JIT (fixed register alloc + hardware NZCV + condition folding, teardown §6) +
   lean SPU. This is the 42→60 lever. Golden-gated, WiFi/MP untouched (DraStic speed
   WITH multiplayer is the whole goal). Running.
+
+### D.7 addendum 16 — R4 Stage 1b LANDED: core floor is ~13.2ms (NOT 22); threading → ~60fps@3x
+
+Deferring the 3D raster itself (not just its output) via a VCount-215 texture-VRAM
+shadow (pushed liteDS-v2-android dcd63f7f, bit-exact host goldens both flags,
+device-verified 60s soak no corruption) gave the CLEAN on-device split:
+  inline RunFrame ~20.9ms → deferred RunFrame ~13.2ms CORE-ONLY + submit ~9.6ms.
+The ~22ms "floor" from the norender probe was CONTAMINATION (it still ran 2D prep
+/ heavier scene / log-record overhead). The real core floor is ~13.2ms — matching
+the M6.11 headless 13.5ms. So:
+  THREADED: wall → max(core 13.2, render 9.6) = 13.2ms ⇒ ~60fps@3x. R4 ALONE
+  REACHES THE TARGET. The emulation-core work (register alloc) becomes thermal/
+  headroom margin, not a hard requirement for 60.
+
+FINAL tranche (Stage 3, the render thread) — precisely scoped by the Stage-1b agent:
+1. Remove the now-redundant VBlank 3D-output snapshot blit (the last GL in RunFrame)
+   → zero-GL RunFrame; 2D reads live OutputTex3D (safe: Render3D replays last).
+2. DOUBLE-BUFFER the replay-read state for concurrency: the Stage-1b texture shadow
+   is single-buffered and the Render* latched registers are read live — both A/B
+   keyed to LogBuildBank (RenderLog arena + 3D geometry bank already depth-1-safe).
+3. App: dedicated render thread owns the GL context (emu releases eglMakeCurrent,
+   render thread makes current), depth-1 SPSC handoff w/ early bank release, move
+   SubmitFrame+blit+fence+push off runFrame. Reuse MelonInstance FrameQueue/EGL.
+4. Drain (savestate/pause/reset), surface lifecycle, capture synchronous fallback
+   (gated), 5-min stability gate, FPS delta (expect ~31→~55-60).
+Gate doc note: host golden recipe needs -DENABLE_OGLRENDERER=OFF (headless has no GL).
