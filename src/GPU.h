@@ -92,6 +92,20 @@ public:
     // R4 Phase 3 prep-decomposition (TEMP) forwarders.
     u64 GetPrepFlattenNs() const noexcept;
     u64 GetPrepCfgNs() const noexcept;
+    // R4 decisive-split (TEMP): cumulative ns spent in the FULL 2D renderer
+    // per-scanline CPU path (GLRenderer::DrawScanline + DrawSprites + VBlank
+    // composite) — the chunk the prior decomposition mis-attributed as
+    // "emulation". Excludes 3D RenderFrame (separately timed). Accumulated at the
+    // GPU.cpp scanline call sites under LITEV_RENDER_THREAD; base returns member.
+    u64 GetPrep2DNs() const noexcept { return LitevPrep2DNs; }
+    u64 LitevPrep2DNs = 0;
+    // R4 decisive-split (TEMP): when true, ALL GL render calls (DrawScanline,
+    // DrawSprites, Start/Finish/Restart3DRendering, VBlank composite) are skipped
+    // while emulation/SPU/events run unchanged. runFrame in this mode = the true
+    // in-app UNMOVABLE emulation floor (renderer-independent). Toggled by the app
+    // glue from debug.litev.norender. Screen freezes; timing is what we read.
+    bool LitevNoRender = false;
+    void SetLitevNoRender(bool e) noexcept { LitevNoRender = e; }
     // Run the deferred GL-submission phase for the frame just produced by
     // RunFrame. No-op unless deferred submission is enabled AND the frame was
     // deferrable (non-capture; see CaptureActiveThisFrame). Call after RunFrame.

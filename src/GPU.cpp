@@ -17,6 +17,9 @@
 */
 
 #include <string.h>
+#ifdef LITEV_RENDER_THREAD
+#include <chrono>
+#endif
 #include "NDS.h"
 #include "GPU.h"
 
@@ -386,6 +389,8 @@ u64 GPU::GetPrepCfgNs() const noexcept
 {
     return Rend ? Rend->GetPrepCfgNs() : 0;
 }
+
+// GetPrep2DNs is defined inline in GPU.h (returns LitevPrep2DNs member).
 
 void GPU::SubmitFrame() noexcept
 {
@@ -1239,10 +1244,19 @@ void GPU::StartHBlank(u32 line) noexcept
         if (!SkipThisFrame)
 #endif
         {
+#ifdef LITEV_RENDER_THREAD
+            auto _l2d0 = std::chrono::steady_clock::now();
+          if (!LitevNoRender) {
+#endif
             if (line < 192)
                 Rend->DrawScanline(line);
             if (line < 191)
                 Rend->DrawSprites(line+1);
+#ifdef LITEV_RENDER_THREAD
+          }
+            LitevPrep2DNs += (u64) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - _l2d0).count();
+#endif
         }
 
         NDS.CheckDMAs(0, 0x02);
@@ -1252,6 +1266,9 @@ void GPU::StartHBlank(u32 line) noexcept
 #ifdef LITEV_AGGRESSIVE_SKIP
         if (!SkipThisFrame)
 #endif
+#ifdef LITEV_RENDER_THREAD
+        if (!LitevNoRender)
+#endif
         Rend->Start3DRendering();
     }
     else if (VCount == 262)
@@ -1260,7 +1277,16 @@ void GPU::StartHBlank(u32 line) noexcept
 #ifdef LITEV_AGGRESSIVE_SKIP
         if (!SkipThisFrame)
 #endif
-        Rend->DrawSprites(0);
+        {
+#ifdef LITEV_RENDER_THREAD
+            auto _l2d0 = std::chrono::steady_clock::now();
+            if (!LitevNoRender) Rend->DrawSprites(0);
+            LitevPrep2DNs += (u64) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - _l2d0).count();
+#else
+            Rend->DrawSprites(0);
+#endif
+        }
     }
 
     GPU2D_A.UpdateRegistersPostDraw(resetregs);
@@ -1283,6 +1309,9 @@ void GPU::FinishFrame(u32 lines) noexcept
 
     if (GPU3D.AbortFrame)
     {
+#ifdef LITEV_RENDER_THREAD
+        if (!LitevNoRender)
+#endif
         Rend->Restart3DRendering();
         GPU3D.AbortFrame = false;
     }
@@ -1383,6 +1412,9 @@ void GPU::StartScanline(u32 line) noexcept
         // texture memory anyway and only update it before the start
         // of the next frame.
         // So we can give the rasteriser a bit more headroom
+#ifdef LITEV_RENDER_THREAD
+        if (!LitevNoRender)
+#endif
         Rend->Finish3DRendering();
 
         DispStat[0] |= (1<<0);
@@ -1395,7 +1427,16 @@ void GPU::StartScanline(u32 line) noexcept
 
         GPU3D.VBlank();
 
+#ifdef LITEV_RENDER_THREAD
+        {
+            auto _l2d0 = std::chrono::steady_clock::now();
+            if (!LitevNoRender) Rend->VBlank();
+            LitevPrep2DNs += (u64) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - _l2d0).count();
+        }
+#else
         Rend->VBlank();
+#endif
 
         if (CaptureEnable)
         {
@@ -1437,6 +1478,9 @@ void GPU::StartScanline(u32 line) noexcept
 
 void GPU::Restart3DFrame() noexcept
 {
+#ifdef LITEV_RENDER_THREAD
+    if (LitevNoRender) return;
+#endif
     Rend->Restart3DRendering();
 }
 
