@@ -544,16 +544,22 @@ FixupBranch Compiler::CheckCondition(u32 cond)
     if (NZCVDeferred)
     {
         // Guest flags are resident in host NZCV. Reconcile them into RCPSR (so the
-        // conditionally-skipped body still observes a canonical CPSR word), then
-        // evaluate the guest condition NATIVELY on the still-live host NZCV.
-        // Comp_MaterializeFlags leaves PSTATE untouched, so the branch decision is
-        // bit-for-bit identical to the RCPSR-flag-table path, with no flag-word
-        // round trip. CCFlags == the ARM cond field and (cond ^ 1) is the AArch64
-        // inversion, so we branch (skip the body) exactly when the guest condition
-        // is false. Valid for every cond 0..13 (CheckCondition is only called for
-        // cond < 0xE).
+        // conditionally-skipped body still observes a canonical CPSR word).
+        // Comp_MaterializeFlags leaves PSTATE untouched.
+        bool condValid = NZCVCondValid;
         Comp_MaterializeFlags();
-        return B((CCFlags)(cond ^ 1));
+        if (condValid)
+        {
+            // Full guest NZCV resident (arithmetic producer): evaluate the guest
+            // condition NATIVELY on the still-live host NZCV. CCFlags == the ARM
+            // cond field and (cond ^ 1) is the AArch64 inversion, so we branch
+            // (skip the body) exactly when the guest condition is false. Valid for
+            // every cond 0..13 (CheckCondition is only called for cond < 0xE).
+            return B((CCFlags)(cond ^ 1));
+        }
+        // Only N,Z were host-resident (logical producer); host C,V are invalid.
+        // RCPSR now holds the full canonical guest CPSR (N,Z just materialized;
+        // C,V never left RCPSR), so fall through to the standard RCPSR path.
     }
 #endif
     if (cond >= 0x8)
@@ -971,6 +977,7 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
     CPSRDirty = false;
 #ifdef LITEV_JIT_FIXEDREG
     NZCVDeferred = 0;
+    NZCVCondValid = false;
 #endif
 
 #ifdef LITEV_JIT_LINK

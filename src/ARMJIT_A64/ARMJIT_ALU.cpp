@@ -270,7 +270,27 @@ void Compiler::Comp_Logical(int op, bool S, ARM64Reg rd, ARM64Reg rn, Op2 op2)
     }
 
     if (S)
-        Comp_RetriveFlags(false);
+    {
+#ifdef LITEV_JIT_FIXEDREG
+        // liteDS-v2 Stage 2a: logical S-op. The AArch64 logical op (ANDS/BICS, or
+        // TST after EOR/ORR) leaves guest N,Z LIVE in host PSTATE but ZEROES host
+        // C,V. Guest C is already in RCPSR (barrel-shifter carry, written by
+        // A_Comp_GetOp2 / Comp_RegShift*) and guest V is preserved in RCPSR, so
+        // only N,Z are host-resident. For an UNCONDITIONAL op (single path) defer
+        // exactly those bits (SetFlags & 0xC == what Comp_RetriveFlags(false) would
+        // extract). Host C,V are NOT valid guest flags -> NZCVCondValid = false, so
+        // a consumer materializes N,Z and evaluates its condition from RCPSR. Only
+        // take this when N,Z are actually live (mask != 0); otherwise the baseline
+        // Comp_RetriveFlags(false) still runs (it sets CPSRDirty for a C-only op).
+        if ((Thumb || CurInstr.Cond() == 0xE) && (CurInstr.SetFlags & 0xC))
+        {
+            NZCVDeferred = CurInstr.SetFlags & 0xC;
+            NZCVCondValid = false;
+        }
+        else
+#endif
+            Comp_RetriveFlags(false);
+    }
 }
 
 void Compiler::Comp_Arithmetic(int op, bool S, ARM64Reg rd, ARM64Reg rn, Op2 op2)
@@ -455,14 +475,22 @@ void Compiler::Comp_Arithmetic(int op, bool S, ARM64Reg rd, ARM64Reg rn, Op2 op2
         else
         {
 #ifdef LITEV_JIT_FIXEDREG
-            // SUB/RSB/ADD host op (SUBS/ADDS) sets host NZCV == full guest NZCV.
+            // Reaching this (non-CVInGPR) branch MEANS the host op left the full
+            // guest NZCV in host PSTATE: SUB/RSB/ADD via SUBS/ADDS, and the
+            // register-operand ADC/SBC via `CMP Wc,1; ADCS/SBCS` (which seed host
+            // carry-in from guest C, so host N,Z,C,V == full guest NZCV). Stage 2a
+            // widens the deferral from {SUB,RSB,ADD} to that whole class
+            // (op 0x2..0x6; RSC/0x7 always takes the CVInGPR path above, never here).
             // For an UNCONDITIONAL instruction (always executes, so host NZCV is
             // unambiguously current on the single path) keep the flags resident and
             // skip the RCPSR extraction. Conditional producers must stay on the
             // extract path: the host op runs only on the taken side, so a compile-
             // time "resident" claim would be wrong on the skipped side.
-            if (op >= 0x2 && op <= 0x4 && (Thumb || CurInstr.Cond() == 0xE))
+            if (op >= 0x2 && op <= 0x6 && (Thumb || CurInstr.Cond() == 0xE))
+            {
                 NZCVDeferred = CurInstr.SetFlags & 0xF;
+                NZCVCondValid = true; // full guest NZCV lives in host PSTATE
+            }
             else
 #endif
                 Comp_RetriveFlags(true);
@@ -509,10 +537,20 @@ void Compiler::Comp_Compare(int op, ARM64Reg rn, Op2 op2)
 
 #ifdef LITEV_JIT_FIXEDREG
     // CMP/CMN (arithmetic compares) set host NZCV == full guest NZCV. Defer when
-    // unconditional; TST/TEQ (logical, op 8/9) keep the baseline extraction.
+    // unconditional; TST/TEQ (logical, op 8/9) fall through to Comp_Compare's tail
+    // below which keeps the logical (N,Z-only) extraction.
     if ((op == 0xA || op == 0xB) && (Thumb || CurInstr.Cond() == 0xE))
     {
         NZCVDeferred = CurInstr.SetFlags & 0xF;
+        NZCVCondValid = true; // full guest NZCV lives in host PSTATE
+        return;
+    }
+    // TST/TEQ (op 8/9): logical compares — host N,Z live, host C,V zeroed, guest C
+    // in RCPSR (shifter), guest V preserved. Defer N,Z only (same as Comp_Logical).
+    if ((Thumb || CurInstr.Cond() == 0xE) && (CurInstr.SetFlags & 0xC))
+    {
+        NZCVDeferred = CurInstr.SetFlags & 0xC;
+        NZCVCondValid = false;
         return;
     }
 #endif

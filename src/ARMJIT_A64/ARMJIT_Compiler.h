@@ -208,6 +208,16 @@ public:
     // it does NOT touch host PSTATE, so a CheckCondition can still branch on the
     // resident flags immediately afterwards.
     u8 NZCVDeferred = 0;
+    // liteDS-v2 Stage 2a: the deferred set widened beyond full-NZCV arithmetic to
+    // LOGICAL producers (AND/EOR/ORR/BIC/TST/TEQ), whose host op leaves ONLY guest
+    // N,Z resident in PSTATE (the AArch64 logical op zeroes host C,V; guest C is in
+    // RCPSR from the barrel shifter, guest V is preserved in RCPSR). For those the
+    // host NZCV is NOT a valid full guest-condition source. NZCVCondValid records
+    // whether the CURRENTLY-deferred flags represent the COMPLETE guest NZCV in host
+    // PSTATE (true for arithmetic ADD/SUB/RSB/ADC/SBC/CMP/CMN, false for logical):
+    // only then may a consumer evaluate the guest condition natively via B.<cc>.
+    // Otherwise the consumer materializes N,Z into RCPSR and uses the RCPSR path.
+    bool NZCVCondValid = false;
     void Comp_MaterializeFlags();
 #endif
 
