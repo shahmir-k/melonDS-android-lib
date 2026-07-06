@@ -949,6 +949,7 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds, bool fastmem) : NDS(nds)
     FastMemTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
     FastMemTable7 = (u64*)calloc(FastTableEntries, sizeof(u64));
     assert(FastMemTable9 && FastMemTable7);
+#ifdef LITEV_MEM_SWTABLE_STORE
     // Dedicated STORE tables: host-pointer delta (gate + raw-store base) and SMC
     // code-bitmap base per store-eligible page. calloc zero-fills (all slow).
     FastMemStoreTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
@@ -956,6 +957,7 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds, bool fastmem) : NDS(nds)
     FastMemStoreCode9  = (u64*)calloc(FastTableEntries, sizeof(u64));
     FastMemStoreCode7  = (u64*)calloc(FastTableEntries, sizeof(u64));
     assert(FastMemStoreTable9 && FastMemStoreTable7 && FastMemStoreCode9 && FastMemStoreCode7);
+#endif
 #endif
 }
 
@@ -978,10 +980,12 @@ ARMJIT_Memory::~ARMJIT_Memory() noexcept
 #ifdef LITEV_MEM_SWTABLE
     free(FastMemTable9); FastMemTable9 = nullptr;
     free(FastMemTable7); FastMemTable7 = nullptr;
+#ifdef LITEV_MEM_SWTABLE_STORE
     free(FastMemStoreTable9); FastMemStoreTable9 = nullptr;
     free(FastMemStoreTable7); FastMemStoreTable7 = nullptr;
     free(FastMemStoreCode9);  FastMemStoreCode9  = nullptr;
     free(FastMemStoreCode7);  FastMemStoreCode7  = nullptr;
+#endif
 #endif
 
 #if defined(__SWITCH__)
@@ -1085,6 +1089,7 @@ void ARMJIT_Memory::FlushFastTables() noexcept
         memset(FastMemTable9, 0, (size_t)FastTableEntries * sizeof(u64));
     if (FastMemTable7)
         memset(FastMemTable7, 0, (size_t)FastTableEntries * sizeof(u64));
+#ifdef LITEV_MEM_SWTABLE_STORE
     // Store tables are populated in lockstep with the load table by InstallFastEntry,
     // so they must be flushed together to stay coherent on every geometry change.
     if (FastMemStoreTable9)
@@ -1095,6 +1100,7 @@ void ARMJIT_Memory::FlushFastTables() noexcept
         memset(FastMemStoreCode9, 0, (size_t)FastTableEntries * sizeof(u64));
     if (FastMemStoreCode7)
         memset(FastMemStoreCode7, 0, (size_t)FastTableEntries * sizeof(u64));
+#endif
 }
 
 void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
@@ -1155,6 +1161,7 @@ void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
     u32 page = addr >> FastTableShift;
     table[page] = delta;
 
+#ifdef LITEV_MEM_SWTABLE_STORE
     // ---- STORE-side eligibility -------------------------------------------
     // A raw host store is bit-exact to SlowWrite ONLY for plain writable flat RAM
     // whose backing byte IS `delta + a`. That is MainRAM, DTCM, SharedWRAM and WRAM7.
@@ -1192,6 +1199,7 @@ void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
         storeCode[page]  = codeBase;
         storeTable[page] = delta;
     }
+#endif // LITEV_MEM_SWTABLE_STORE
 }
 #endif
 

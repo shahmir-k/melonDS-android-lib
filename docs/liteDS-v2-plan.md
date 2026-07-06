@@ -2023,3 +2023,80 @@ model + register ABI working together. Honest follow-on (not yet done): store-si
 sw-table + SMC write-table (STEP 1 is loads-only), and whether the ~−7% ARM9 (~0.5-0.8ms
 of the frame) plus store-side compounds to a felt FPS change on the heavy scene — to be
 measured end-to-end in the app.
+
+### D.7 addendum 27 — mem-swtable STORE side landed (bit-exact, 8ef81c3d); GXFIFO twin-stream drain CLOSED (timing-incompatible)
+
+STORE-side branchless sw-table fastmem, the sanctioned loads-only follow-on. Landed on
+`liteDS-v2` @ **8ef81c3d**, default OFF, bit-exact. This is the untouched half of the hot
+memory path (STEP 1/addendum 26 was loads-only; stores always took the exact SlowWrite).
+
+Design: a DEDICATED store page-table (loads and stores map differently). A page gets a
+non-zero store delta ONLY for plain writable flat RAM whose backing byte is exactly
+`delta+addr` — MainRAM/DTCM/SharedWRAM/WRAM7. **NWRAM is excluded** even though it is
+fastmem-compatible for LOADS: a DSi NWRAM bank write mirrors into every mapped part
+(`DSi::ARM9Write32` loops over `NWRAMMap`), so one raw store would miss the others — it
+stays on the exact SlowWrite. IO/VRAM/ITCM/BIOS excluded by IsFastmemCompatible. SMC/JIT
+invalidation preserved EXACTLY (approach A): after the raw store the codegen reproduces
+`CheckAndInvalidate<num,region>` INLINE against the real `CodeMemRegions[].Code` bitmap
+(per-page base cached in a second store table, 0 for never-executable DTCM) and diverts to
+the exact `SlowWrite*SW` only when a code bit is set. The inline test reads the identical
+byte+bit CheckAndInvalidate uses (low 11 bits preserved by 2KB-page-aligned localisation),
+so it can never false-negative a needed invalidation — the safety-critical direction. Store
+tables populated in lockstep with the load table in InstallFastEntry, flushed together in
+FlushFastTables (every remap/reset). Cost: +64MB when ON (two 16M-entry tables per CPU);
+default OFF so zero normally. Store fast path scratch W1/W2/W3/W5/W6/W7 sits outside the
+GLOBALREG pin (W19..W26) and the mapped set {W4,W8-W15,W19-W25} — no collision.
+
+GATE (orchestrator-verified across 4 build configs, individual commands — NOT trusted from
+the agent, which only gated SWTABLE in isolation and missed the coupled config):
+- SWTABLE-only exact: shrek-600, shrek-race-3400, armwrestler+script, rockwrestler+script — ALL OK
+- Coupled exact (DISPATCH+LINK+DTCM_BLOCK+MAINRAM_LOAD+SWTABLE+FIXEDREG+GLOBALREG): same
+  four ALL OK — proves the store path bit-exact UNDER the GLOBALREG W19..W26 pin (the
+  register interaction the agent never tested).
+- Coupled+EVENT_SLICES: shrek-600-eventslices, ne-multiplemodels-600-eventslices — OK.
+- flag-OFF byte-identical by construction (every diff behind #ifdef LITEV_MEM_SWTABLE).
+TWO false-alarm traps caught & correctly diagnosed (both the exact class §5 warns about):
+(1) rockwrestler "MISMATCH at frame 3" under an EVENT_SLICES build — reproduced IDENTICALLY
+without the store change (coupled-minus-store build), so it is EVENT_SLICES re-timing, not a
+regression; rockwrestler/armwrestler are exact-timing-only oracles (no ES golden exists), so
+verifying them against an ES build is the addendum-17 mistake. (2) A shell-loop arg-parse bug
+made three scripted goldens exit-2 with the Usage text (not a mismatch) — re-run as individual
+commands → all OK. Lesson re-confirmed: torture goldens gate on EXACT-timing builds; run each
+as its own command; re-verify the orchestrator's OWN harness invocation.
+
+PERF — MEASURED on device (RG DS 4×A55, in-race window 60:960, cooled <52°C, 1.992GHz,
+3 interleaved reps, all bit-exact hash 5d5920a4...): the STORE side is a NET ARM9
+REGRESSION. arm9_exec_ns/frame: baseline `full` (fault-based fastmem) 7.795ms → loads-only
+swtable-pin 7.041ms (−9.67%) → loads+STORES swtable-pin 7.458ms (−4.32%). Store-side
+marginal = **+5.92% ARM9** (C>B every rep: 7458/7523/7397 vs 7014/7120/7041 µs), giving
+back ~60% of the loads-only win; window_fps corroborates (B 25.10 → C 24.70 = baseline).
+Mechanism: the store fast path inlines two dependent table-pointer loads + the SMC-bitmap
+check into EVERY store — memory-latency-bound work that stalls the in-order A55 — whereas
+melonDS's exact SlowWrite is a single predicted call to a hot helper. Stores never had the
+heavy slow path that made LOADS win (the load slow-helper was called 1.54M/frame; there is
+no comparable store slow-helper cost), so a branchless store table can only add overhead.
+
+DECISION: the store side is CLOSED-NEGATIVE, split behind its OWN flag LITEV_MEM_SWTABLE_STORE
+(default OFF). LITEV_MEM_SWTABLE alone now = loads-only (the shipped −9.67% win, stores back
+on the exact SlowWrite, +64MB store tables not allocated); +STORE = the regressing variant,
+kept for the record / future re-aim (e.g. packing delta+codeBase into one 16-byte entry to
+halve the context loads). Re-gated after the split: loads-only and loads+stores BOTH pass all
+exact torture goldens; flag-OFF byte-identical. This is the honest outcome — implemented
+bit-exact, measured on the target core, found net-negative, gated OFF, loads-only win intact.
+Store-side commit 8ef81c3d (loads+stores under one flag) → flag-split follow-up commit.
+
+GXFIFO twin-stream de-interleaved batch drain (addendum-19 item 3, remaining 2/3) — CLOSED.
+Split verdict: the branchless jump-table DISPATCH (the safe, valuable third) is already
+landed in LITEV_GXFIFO_BATCH and is bit-exact because it changes HOW the opcode dispatches,
+not WHEN commands execute. DraStic's actual speed mechanism — accumulate the whole display
+list then drain it in one branchless loop at SWAP — is ARCHITECTURALLY INCOMPATIBLE with
+melonDS's timing-exact GX model, verified in code: `GPU3D::Run()` (GPU3D.cpp:3048) is
+cycle-metered (executes commands only as ARM9 cycles are consumed), and `CmdFIFO.Level()`
+directly gates the GXFIFO IRQ (CheckFIFOIRQ:3088) and DMA (CheckFIFODMA:3098). Draining all
+at once changes the FIFO-level trajectory → IRQ/DMA timing → CPU execution → breaks the
+golden gate (shrek-race-3400 captures GX timing) and the ARM7/MP-timing-exact non-negotiable.
+The storage-only de-interleave (twin cmd-byte/param-word buffers for D-cache locality,
+preserving execution order) is separable but a massive timing-fragile rewrite of the
+CmdFIFO/CmdPIPE ring buffers + savestate format for an evidence-predicted-marginal win
+(NEON_GEOMETRY, same dispatch-dominated 271ns/cmd target, already closed-negative ~1%).
+Re-openable only as that storage-only locality experiment.

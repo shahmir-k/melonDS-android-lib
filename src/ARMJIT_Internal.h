@@ -113,8 +113,10 @@ template <typename T, int ConsoleType> T SlowRead7SW(u32 addr);
 // the real invalidation). Installing on a store miss is bit-exact -- InstallFastEntry
 // is a pure host-pointer cache, and store-ineligible regions (NWRAM/IO/...) simply get
 // no store-table entry and stay slow forever.
+#ifdef LITEV_MEM_SWTABLE_STORE
 template <typename T, int ConsoleType> void SlowWrite9SW(u32 addr, ARMv5* cpu, u32 val);
 template <typename T, int ConsoleType> void SlowWrite7SW(u32 addr, u32 val);
+#endif
 #endif
 
 }

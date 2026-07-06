@@ -162,6 +162,7 @@ T SlowRead7SW(u32 addr)
     return SlowRead7<T, ConsoleType>(addr);
 }
 
+#ifdef LITEV_MEM_SWTABLE_STORE
 // Store resolver: install the page (populates both load and store tables), then do the
 // EXACT SlowWrite. When reached via the SMC "code present" fall-through the JIT has
 // already written the raw bytes; SlowWrite writes the same T-sized value to the same
@@ -180,6 +181,7 @@ void SlowWrite7SW(u32 addr, u32 val)
     NDS::Current->JIT.Memory.InstallFastEntry(1, addr);
     SlowWrite7<T, ConsoleType>(addr, val);
 }
+#endif
 #endif
 
 template <typename T, int ConsoleType>
@@ -275,6 +277,17 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     template void SlowBlockTransfer7<true, consoleType>(u32 addr, u64* data, u32 num); \
 
 #ifdef LITEV_MEM_SWTABLE
+#ifdef LITEV_MEM_SWTABLE_STORE
+#define INSTANTIATE_SWTABLE_STORE(consoleType) \
+    template void SlowWrite9SW<u32, consoleType>(u32, ARMv5*, u32); \
+    template void SlowWrite9SW<u16, consoleType>(u32, ARMv5*, u32); \
+    template void SlowWrite9SW<u8,  consoleType>(u32, ARMv5*, u32); \
+    template void SlowWrite7SW<u32, consoleType>(u32, u32); \
+    template void SlowWrite7SW<u16, consoleType>(u32, u32); \
+    template void SlowWrite7SW<u8,  consoleType>(u32, u32);
+#else
+#define INSTANTIATE_SWTABLE_STORE(consoleType)
+#endif
 #define INSTANTIATE_SWTABLE(consoleType) \
     template u32 SlowRead9SW<u32, consoleType>(u32, ARMv5*); \
     template u16 SlowRead9SW<u16, consoleType>(u32, ARMv5*); \
@@ -282,12 +295,7 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     template u32 SlowRead7SW<u32, consoleType>(u32); \
     template u16 SlowRead7SW<u16, consoleType>(u32); \
     template u8  SlowRead7SW<u8,  consoleType>(u32); \
-    template void SlowWrite9SW<u32, consoleType>(u32, ARMv5*, u32); \
-    template void SlowWrite9SW<u16, consoleType>(u32, ARMv5*, u32); \
-    template void SlowWrite9SW<u8,  consoleType>(u32, ARMv5*, u32); \
-    template void SlowWrite7SW<u32, consoleType>(u32, u32); \
-    template void SlowWrite7SW<u16, consoleType>(u32, u32); \
-    template void SlowWrite7SW<u8,  consoleType>(u32, u32);
+    INSTANTIATE_SWTABLE_STORE(consoleType)
 #else
 #define INSTANTIATE_SWTABLE(consoleType)
 #endif

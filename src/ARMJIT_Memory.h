@@ -157,8 +157,10 @@ public:
     [[nodiscard]] u64* GetFastMemTable(u32 num) noexcept { return num == 0 ? FastMemTable9 : FastMemTable7; }
     // STORE-side tables (see ARM::FastMemStoreTable). Separate from the load table so
     // loads and stores can map differently (e.g. NWRAM: load-fast, store-slow).
+#ifdef LITEV_MEM_SWTABLE_STORE
     [[nodiscard]] u64* GetFastMemStoreTable(u32 num) noexcept { return num == 0 ? FastMemStoreTable9 : FastMemStoreTable7; }
     [[nodiscard]] u64* GetFastMemStoreCodeTable(u32 num) noexcept { return num == 0 ? FastMemStoreCode9 : FastMemStoreCode7; }
+#endif
     // Wipe all fast tables (load + store) back to all-slow. Called on any
     // mapping-geometry change.
     void FlushFastTables() noexcept;
@@ -208,10 +210,12 @@ private:
 #ifdef LITEV_MEM_SWTABLE
     u64* FastMemTable9 = nullptr;
     u64* FastMemTable7 = nullptr;
+#ifdef LITEV_MEM_SWTABLE_STORE
     u64* FastMemStoreTable9 = nullptr;
     u64* FastMemStoreTable7 = nullptr;
     u64* FastMemStoreCode9 = nullptr;
     u64* FastMemStoreCode7 = nullptr;
+#endif
 #endif
 
 #if defined(__SWITCH__)

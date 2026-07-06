@@ -338,6 +338,22 @@ if (LITEV_MEM_SWTABLE)
     endif()
 endif()
 
+# STORE-side branchless sw-table (extends the load table to JIT stores + inline SMC
+# check). Built + bit-exact + torture-gated, but MEASURED a NET ARM9 REGRESSION on the
+# in-order A55 (+5.92% marginal; gives back ~60% of the loads-only win) -- the inline
+# per-store table-pointer chase + SMC bitmap check costs more than melonDS's predicted
+# SlowWrite call, and stores never had the heavy slow path that made LOADS win. So this
+# is CLOSED-NEGATIVE and split behind its OWN flag, default OFF: LITEV_MEM_SWTABLE alone
+# = loads-only (the -9.67% win), stores keep the exact SlowWrite. Kept (not deleted) for
+# the record / future re-aim. Requires LITEV_MEM_SWTABLE. See plan D.7 addendum 27.
+option(LITEV_MEM_SWTABLE_STORE "STORE-side branchless sw-table (closed-negative on A55; default OFF)" OFF)
+if (LITEV_MEM_SWTABLE_STORE)
+    if (NOT LITEV_MEM_SWTABLE)
+        message(FATAL_ERROR "LITEV_MEM_SWTABLE_STORE requires LITEV_MEM_SWTABLE.")
+    endif()
+    add_compile_definitions(LITEV_MEM_SWTABLE_STORE=1)
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)

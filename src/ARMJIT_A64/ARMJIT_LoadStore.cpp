@@ -258,19 +258,21 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
     }
     else
     {
+#if defined(LITEV_MEM_SWTABLE_STORE)
         // ---- STORE fast path (branchless software page table) ---------------
-        // Bit-exact by construction. A non-zero FastMemStoreTable entry means the page
-        // is plain writable flat RAM (MainRAM/DTCM/SharedWRAM/WRAM7) whose backing byte
-        // is exactly (delta + addr) -- the same host location fault-based fastmem writes
-        // and the same one SlowWrite reaches, so the raw store's bytes are identical.
-        // SMC/JIT invalidation is PRESERVED exactly: after the raw store we reproduce
-        // CheckAndInvalidate<num,region> inline against the real Code bitmap (via the
-        // per-page base in FastMemStoreCodeTable) and, only when a code bit is actually
-        // set, fall through to the exact SlowWrite (which re-stores idempotently and runs
-        // the real InvalidateByAddr). Store<->invalidate order is irrelevant: the store
-        // touches guest RAM, the invalidation touches JIT block metadata -- disjoint.
-        // W0 = access address (preserved). Scratch: W1/W2/W3/W5/X6/W7 (rdMapped may be
-        // W4, and W8+/W19+ hold guest regs, so those are avoided).
+        // CLOSED-NEGATIVE on the in-order A55 (see plan D.7 addendum 27): bit-exact but a
+        // net ARM9 regression, so gated behind LITEV_MEM_SWTABLE_STORE (default OFF). The
+        // #else branch below (loads-only SWTABLE) keeps stores on the exact SlowWrite --
+        // the shipped path. Kept here for the record / future re-aim.
+        //
+        // A non-zero FastMemStoreTable entry means the page is plain writable flat RAM
+        // (MainRAM/DTCM/SharedWRAM/WRAM7) whose backing byte is exactly (delta + addr) --
+        // the same host location fault-based fastmem writes and the same one SlowWrite
+        // reaches, so the raw store's bytes are identical. SMC/JIT invalidation is
+        // PRESERVED exactly: after the raw store we reproduce CheckAndInvalidate<num,
+        // region> inline against the real Code bitmap (via the per-page base in
+        // FastMemStoreCodeTable) and, only when a code bit is actually set, fall through
+        // to the exact SlowWrite. W0 = access address. Scratch: W1/W2/W3/W5/X6/W7.
         static_assert(sizeof(AddressRange) == 16, "store SMC check assumes 16-byte AddressRange");
 
         LDR(INDEX_UNSIGNED, X1, RCPU, offsetof(ARM, FastMemStoreTable));
@@ -333,6 +335,40 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
 
         SetJumpTarget(doneNoSMC);                      // fast paths merge here
         SetJumpTarget(doneNoBit);
+#else
+        // store: exact SlowWrite helper (no fast path -> invalidation untouched).
+        // This is the SHIPPED loads-only SWTABLE store path (store fast path is
+        // closed-negative on the A55; see LITEV_MEM_SWTABLE_STORE above).
+        PushRegs(false, false);
+        if (Num == 0)
+        {
+            MOV(X1, RCPU);
+            MOV(W2, rdMapped);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowWrite9<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite9<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite9<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite9<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite9<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite9<u8,  1>); break;
+            }
+        }
+        else
+        {
+            MOV(W1, rdMapped);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowWrite7<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite7<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite7<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite7<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite7<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite7<u8,  1>); break;
+            }
+        }
+        PopRegs(false, false);
+#endif // LITEV_MEM_SWTABLE_STORE
     }
 #else
     u32 expectedTarget = Num == 0

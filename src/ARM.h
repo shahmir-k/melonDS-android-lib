@@ -241,8 +241,10 @@ public:
     // SMC bitmap (or 0 for DTCM, which is never executable), so the JIT can inline the
     // exact CheckAndInvalidate bit test after the raw store and divert to the exact
     // SlowWrite (which re-stores idempotently + invalidates) only when code is present.
+#ifdef LITEV_MEM_SWTABLE_STORE
     u64* FastMemStoreTable = nullptr;
     u64* FastMemStoreCodeTable = nullptr;
+#endif
 #endif
 
     static const u32 ConditionTable[16];

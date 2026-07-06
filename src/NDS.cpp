@@ -139,10 +139,12 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
     // fetch the table base per access (LDR from RCPU), freeing the MemBase host reg.
     ARM9.FastMemPageTable = JIT.Memory.GetFastMemTable(0);
     ARM7.FastMemPageTable = JIT.Memory.GetFastMemTable(1);
+#ifdef LITEV_MEM_SWTABLE_STORE
     ARM9.FastMemStoreTable = JIT.Memory.GetFastMemStoreTable(0);
     ARM7.FastMemStoreTable = JIT.Memory.GetFastMemStoreTable(1);
     ARM9.FastMemStoreCodeTable = JIT.Memory.GetFastMemStoreCodeTable(0);
     ARM7.FastMemStoreCodeTable = JIT.Memory.GetFastMemStoreCodeTable(1);
+#endif
 #endif
 }
 
