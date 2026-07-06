@@ -45,6 +45,12 @@ struct FrameCounters
     std::atomic<uint64_t> GPU3DNs{0};
     std::atomic<uint64_t> RunSystemNs{0};
 
+    // SPU mixer wall time (nanoseconds within the frame). SPU::Mix is a
+    // scheduler event, so this is a CHILD of RunSystemNs, carved out to answer
+    // "how big is the SPU chunk of the SPU+events bucket?" (liteDS-v2 Stage 1
+    // SPU front). Purely diagnostic; compiled out unless LITEV_PROFILE=1.
+    std::atomic<uint64_t> SPUMixNs{0};
+
     // M6.11 RunFrame decomposition (step 1): aim the NEON geometry work by
     // splitting the ~20ms in-race RunFrame bucket. RunFrameNs is the whole
     // NDS::RunFrame() wall time (the parent); the child buckets above plus the
@@ -138,6 +144,7 @@ struct FrameCounters
         ARM7WaitNs.store(0, std::memory_order_relaxed);
         GPU3DNs.store(0, std::memory_order_relaxed);
         RunSystemNs.store(0, std::memory_order_relaxed);
+        SPUMixNs.store(0, std::memory_order_relaxed);
         RunFrameNs.store(0, std::memory_order_relaxed);
         DMA9Ns.store(0, std::memory_order_relaxed);
         DMA7Ns.store(0, std::memory_order_relaxed);

@@ -137,6 +137,40 @@ if (LITEV_JIT_DISPATCH)
     endif()
 endif()
 
+# Stage 2 (liteDS-v2 core-speed / DraStic parity): native-NZCV condition guard.
+# EXACTNESS-PRESERVING. For guest ARM instructions with a COMPOUND condition
+# (cond >= 8: HI/LS/GE/LT/GT/LE), the upstream CheckCondition emits a 5-instruction
+# flag-table lookup out of RCPSR. Since this backend keeps guest CPSR in a GP reg
+# (not host NZCV), we can instead transiently `MSR NZCV, X<cpsr>` and use a native
+# `B.<inverted-cond>` skip (2 instructions). Same architectural branch decision,
+# fewer host ops / smaller blocks. Single-flag conditions (cond < 8, already a
+# 1-instruction TBZ/TBNZ) are left untouched. No register-cache / cycle-model
+# interaction, so ON must stay bit-exact on the exact-timing goldens. AArch64 only.
+option(LITEV_JIT_CONDFOLD "Stage 2: native-NZCV guard for compound conditions (exactness-preserving, AArch64)" OFF)
+if (LITEV_JIT_CONDFOLD)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_CONDFOLD=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_CONDFOLD requires an AArch64 target.")
+    endif()
+endif()
+
+# Stage 1 of the fixed-register / CPSR-in-NZCV JIT rearchitecture (DraStic teardown
+# 01 §6.1). An UNCONDITIONAL flag-setting ADD/SUB/RSB/CMP/CMN leaves its guest NZCV
+# resident in the host PSTATE instead of extracting it into the emulated RCPSR flag
+# word; the word is reconstructed lazily (bit-exact CSET/BFI) only at consumers /
+# host-NZCV clobbers / block boundaries, and CheckCondition then evaluates the guest
+# condition natively on the resident host flags. Pure codegen change: cycle counts,
+# timing and the register cache are untouched. Default OFF; flag-off is byte-identical.
+option(LITEV_JIT_FIXEDREG "Stage 1: keep guest CPSR flags in host NZCV on the ALU hot path (AArch64)" OFF)
+if (LITEV_JIT_FIXEDREG)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_FIXEDREG=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_FIXEDREG requires an AArch64 target.")
+    endif()
+endif()
+
 # Unit 4: direct block linking (patch, don't dispatch). Builds ON TOP of the
 # Unit 3 dispatcher: an eligible block exit whose next PC is a compile-time
 # constant emits a per-hop-commit guard followed by a patchable `B` (initially to
@@ -231,6 +265,28 @@ if (LITEV_MEM_DTCM_BLOCK OR LITEV_MEM_MAINRAM_LOAD)
         endif()
     else()
         message(FATAL_ERROR "LITEV_MEM_FAST requires an AArch64 target "
+                            "(the x64 JIT keeps the upstream helper paths).")
+    endif()
+endif()
+
+# M6.14 Tier A (plan Appendix D.7): MainRAM-hit inline path for LDM/STM BLOCK
+# LOADS. In-race the ARM9 issues ~8.2k SlowBlockTransfer9 (LDM) calls/frame that
+# re-enter SlowRead9 once per word -> ~23k MainRAM word-reads/frame (86% of all
+# slow reads). This composes the two landed Tier A wins: a block (LDM) whose
+# whole address range lies inside MainRAM takes a guarded direct-pointer copy
+# instead of per-word SlowRead9, exactly as MEM_DTCM_BLOCK does for DTCM. LOADS
+# ONLY (stores stay on the helper -> JIT invalidation untouched). ARM9 only
+# (SlowBlockTransfer9; ARM7/WiFi untouched). Same exactness class as MEM_DTCM_BLOCK:
+# cycles are baked at compile time by Comp_AddCycles_CDI independent of the memory
+# path, the copy touches the SAME bytes SlowBlockTransfer9 would, and any runtime
+# guard miss (DTCM overlay, region exit, MainRAM mirror wrap) falls back to the
+# exact helper. Default OFF -> emission-identical to the pre-M6.14 tree.
+option(LITEV_MEM_MAINRAM_BLOCK "M6.14 Tier A: MainRAM inline path for LDM/STM block LOADS (ARM9)" OFF)
+if (LITEV_MEM_MAINRAM_BLOCK)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_MEM_MAINRAM_BLOCK=1)
+    else()
+        message(FATAL_ERROR "LITEV_MEM_MAINRAM_BLOCK requires an AArch64 target "
                             "(the x64 JIT keeps the upstream helper paths).")
     endif()
 endif()

@@ -390,14 +390,31 @@ int VerifyTrace(const TraceRunConfig& cfg, const std::string& tracePath)
                         " current=0x%016" PRIx64 ") - verifying anyway\n",
                 (u64)hdr.romHash, b.romHash);
 
-    // Sanity: scripted input is part of the deterministic input, so a script
-    // mismatch will almost certainly cause a frame mismatch below. Warn early
-    // so the cause is obvious rather than a cryptic register divergence.
+    // Sanity: scripted input is part of the deterministic input. Replaying a
+    // scripted golden WITHOUT (or with a different) --input-script feeds the
+    // core different button input, so the very first post-divergence frame
+    // mismatches on register/mainRAM state. That is NOT a core regression and
+    // NOT a "born-bad" oracle — it is a harness invocation error. Fail FAST
+    // here with an actionable message BEFORE running any frames, so the cause
+    // is unambiguous instead of surfacing as a cryptic frame-N state diff that
+    // gets mis-attributed to the emulation core. This strengthens (never
+    // weakens) the oracle: a genuine same-script replay still runs the full
+    // bit-exact comparison below.
     if (hdr.scriptHash != b.inputScript.Hash())
-        fprintf(stderr, "warning: input-script hash differs from trace "
-                        "(trace=0x%016" PRIx64 " current=0x%016" PRIx64 ") - "
-                        "replay under the recording's script for a valid oracle\n",
+    {
+        fprintf(stderr,
+                "error: input-script hash mismatch — this trace was recorded "
+                "with scripted input (trace=0x%016" PRIx64 ", current=0x%016" PRIx64 ").\n"
+                "       Re-run --verify-trace with the SAME --input-script that recorded "
+                "the golden\n"
+                "       (see the trace's .json sidecar 'input_script' field). Refusing "
+                "to verify\n"
+                "       under different input — the result would be a false mismatch, not "
+                "a core check.\n",
                 (u64)hdr.scriptHash, b.inputScript.Hash());
+        fclose(f);
+        return 4;
+    }
 
     for (u32 frame = 0; frame < hdr.frames; frame++)
     {

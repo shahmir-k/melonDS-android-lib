@@ -1198,3 +1198,697 @@ DraStic-style timing win requires DraStic's runtime-computed-timing structure,
 which melonDS's compile-time-baking JIT does not have, so there is nothing to
 reclaim. Reclassified to the same closed-negative tier as M6.11 NEON-geometry;
 the emulation-side ARM9 bucket is not reachable by timing relaxation.
+
+## D.7 — 60 FPS reanalysis (2026-07-05, post-M6.12): render side REOPENED with evidence
+
+Three independent deep-dives (prior-art/DraStic mapping; on-device simpleperf of
+the app's emu thread; A55 headless decomposition) converge on a reframing that
+supersedes D.4's "the wall is ARM emulation" conclusion:
+
+**Core emulation compute is ~13.5ms/frame — it already fits the 16.6ms budget.**
+The app's ~22ms RunFrame = core (~13.5) + ~8.5ms of GL render submission that
+melonDS's GL renderer issues INSIDE NDS::RunFrame on the emulation thread
+(simpleperf: Mali userspace driver 25% self ≈ 7ms + GL renderer C++ ≈ 1.7ms).
+On top: ~2.8ms ART/JNI tax purely from the debuggable build (CheckJNI on), and
+the 2.1ms "blit" bucket is a GPU-completion stall (0% CPU), not work. D.4's
+M6.5 rejection judged GPU *hardware* idle (~1ms) and missed the CPU-side
+submission mass. Three of four A55 cores are idle.
+
+DraStic's shape confirms the path: one cooperative core thread + a render
+thread. Its 60fps recipe is NOT more core speed — its own ceiling is realtime.
+120fps verdict: no documented path on in-order A55 short of per-game
+hot-region recompilation + HLE; out of scope for this fork.
+
+### The four render-side workstreams (exact plans)
+
+**R1 — Release build (S; ~1.5-2.5ms; app repo).** Build the existing gitHubProd
+RELEASE variant (debug-keystore signing acceptable for the RG DS). Verify the
+native cmake flags are identical to the debug production set; verify
+minify/R8 keeps JNI symbols (existing proguard rules); confirm
+android:debuggable=false kills CheckJNI (logcat "CheckJNI is ON" absent).
+Gate: same-scene FPS A/B vs debug build, expect +1.5-2.5ms cpu_loop reduction.
+Note: run-as stops working on release builds — device debugging via root only.
+
+**R2 — Deferred blit (M; ~1-1.5ms wall; app glue MelonInstance.cpp).**
+blitAcceleratedFrame() blits the array texture the 3D renderer wrote THIS
+frame -> driver blocks on tiler completion. Change: keep N-buffered (2) frame
+textures; blit the PREVIOUS frame's texture (guaranteed complete, zero stall)
+and present it — one frame of added display latency, acceptable on this
+device. Keep a fence check to assert completeness rather than stall. Flag:
+runtime-selectable (debug.litev.deferblit or setting), default ON after gates.
+Gates: screenshot-compare top+bottom vs baseline (identical content, allowing
+the 1-frame shift), blit bucket -> ~0 in LITEV_PROF, no flicker over 3-lap
+race.
+
+**R3 — GL draw/state diet (M-L; ~2-4ms of the 7ms Mali time; core GL renderer,
+android branch).** Step 1 MEASURE: temporary LITEV_PROFILE counters for
+glDraw*/glBindTexture/glUseProgram/glUniform*/sampler-state calls per frame
+in-race (the compositor's ~800 tiny draws + per-batch glTexParameteri are the
+suspects). Step 2 implement in cost order: (a) redundant-state shadow cache
+(skip no-op binds/uniforms), (b) merge consecutive draws sharing full state
+(the 2D compositor's per-scanline/per-layer quads -> instanced or
+vertex-appended batches), (c) GLES sampler objects to end per-batch
+glTexParameteri churn. Gates: per-frame GL call count before/after (target
+>5x reduction), screenshot-compare exactness, in-race FPS.
+
+**R4 — Render-thread offload (L; collapses wall toward ~13.5ms core floor +
+R1-R3 savings; core+glue).** The structural fix: emulation thread never talks
+to GL. Design: (1) RunFrame produces a frame packet — 3D polygon/vertex RAM
+snapshot (the GL 3D renderer's input), 2D compositor inputs (VRAM/palette/OAM
+dirty ranges), capture requests; (2) double-buffered packet queue, depth 1
+(render N while emulating N+1); (3) render thread owns the GL context: 3D
+submission, 2D compositor, blit, present, fences; (4) emu thread blocks only
+when the queue is full (render slower than emu) — wall = max(emu, render);
+(5) savestate/pause/reset drain the queue first (coherency point); (6)
+LITEV_RENDER_THREAD flag, default OFF, app setting to enable. Correctness
+gates: golden traces untouched (render is downstream of traced state);
+screenshot-compare parity flag-ON vs OFF; 3-lap stability; input latency
+check. Bench gate: wall/frame -> max(core, render) measured by LITEV_PROF.
+Deliver design doc first (docs/r4-render-thread-design.md) reviewed against
+melonDS GL renderer object lifetimes before code.
+
+Sequencing: R1 ships independently now. R2 next (small, app-only). R3 after
+its measurement step. R4 design in parallel; implementation lands last and
+benefits from R2/R3 (less to move). Device measurement is serialized through
+one verification queue (dispatcher A/B first). Projection if all four land at
+midpoints, on top of the ~30ms baseline: ~30 - (2 + 1.2 + 3 + remaining
+serialization ~6) => ~17-18ms wall => ~55-58fps at 3x resolution, better at
+1x; with thermal headroom restored by fewer joules/frame. Reserve tier
+(ARM9 idle-skip NEW-GOLDEN, Tier-B memory stubs, hot-region recompilation)
+remains if a gap persists.
+
+### D.7 addendum — ARM9 deep-dive results (same day)
+
+On-device hot-block histogram + slow-memory classification (bit-exact
+instrumented runs, in-race window): ARM9's 7.55ms is well-distributed genuine
+game execution (~46 host-cycles/guest-instr; top-50 blocks = 59% but all
+diverse mainRAM game code). Busy-wait/poll share is <0.15ms (DISPSTAT 0,
+GXSTAT 1.5, IPCSYNC 0.5 polls/frame; VBlank is a HALT already fast-forwarded
+1,373x/frame) — ARM9 idle-skip is CLOSED before implementation, and D.6's
+relaxed-timing regression is fully explained. JIT churn near zero; dispatch
+84% in-asm. fastmem: neutral on the ARM9 bucket in matched A/B (keep ON,
+not a lever). THE one core pickup: 86% of slow reads (23,162/frame) are
+mainRAM words from 8,204 SlowBlockTransfer9 LDM calls — the M3 Tier B
+"block-LOAD inline tier for mainRAM" deferred in C.3 now has its evidence:
+~0.5-0.7ms, bit-exact, effort M (task M6.14). Secondary: mainRAM u16/u8
+inline + div/sqrt result-read shortcut ~0.1-0.2ms. ARM9 floor ~6.6ms; core
+best-case ~11.9ms — 60fps remains render-side + pipelining per D.7.
+
+### D.7 addendum 2 — R0 pacing-floor diagnosis (same day): no wait exists; the floor is real serialized CPU
+
+Off-CPU tracing + schedstat on the app's emu thread (in-race, 3x GL): ~90%
+on-CPU at 1.992GHz, no audio/limiter/present wait (all three suspects
+exonerated with code+trace evidence; SPU drops-oldest and never blocks). The
+~30.5ms floor decomposes as ~18-19ms ARM/SPU/2D emulation + ~11ms Mali GL
+serialized on the SAME thread: ~5ms per-polygon glDrawElements submission
+(GPU3D_OpenGL RenderSceneChunk, scales with 3x resolution), ~2.6ms blit,
+~3.4ms glFlush/sync/save-check glue. The dispatcher A/B's "absorbed savings"
+were the Mali driver's fixed async submission cost redistributing between
+profiler buckets when frames arrive faster — an illusion of pacing.
+Implications: (1) R4 render-thread offload is confirmed as THE ceiling-raiser
+(frame -> max(ARM ~18, GL ~11) => ~50-55fps at 3x, more at 1x, before R1-R3
+and core wins); (2) R3 draw batching directly attacks the ~5ms submission;
+(3) once R4 overlaps rendering, ARM becomes the critical path and the
+dispatcher's 1.2ms + M6.14's ~0.6ms surface as FPS — ship dispatcher ON
+after R4 lands; (4) GPU hardware remains ~idle (0.1-0.7ms) even at 3x.
+
+### D.7 addendum 3 — DraStic audio teardown (binary RE): no audio-slaved pacing; audio is free once fast
+
+Decompiled libdrastic_arm64.so (OpenSL ES Simple Buffer Queue). Proven from the
+binary: DraStic's audio is the SAME non-blocking model melonDS already uses —
+callback contains zero pthread calls, enqueues an all-zeros silence buffer on
+underrun, and the producer (emu thread) DROPS-ON-FULL (branch at 0x1de98
+returns immediately, no usleep/cond_wait/spin). No sync primitive is shared
+between the audio path and the frame path; DraStic's frame limiter is a condvar
+shared only emu<->render-thread (waitScreen/signalScreen) — which is exactly
+the R4 architecture we're building. Rate 44100 stereo, DS 32768->44100
+fixed-ratio resample, user-selectable output-buffer depth {1470..5880 samples,
+up to ~4 video frames of slack}. VERDICT: liteDS-v2 needs NO audio-architecture
+change; the crackle at 33fps is pure underrun from running at ~55% realtime and
+resolves automatically when R4 reaches 60fps. Two cheap copy-worthy ideas:
+(1) user-selectable output-buffer depth to mask transient spikes; (2) since
+audio never back-pressures emulation, instrument underrun/silence-fill events
+as a clean realtime-miss signal for the profiler. Full teardown:
+docs/drastic-audio-teardown.md.
+
+### D.7 addendum 4 — R2/R3 device verification: R2 shelved, R3 diet re-aimed at redundant state
+
+**R2 deferred blit = REGRESSION on-device (3x GL, verified).** Toggle ON vs OFF
+medians: blit 2.53->3.60ms (did NOT collapse), cpu_loop 31.26->33.13, fps
+31.9->30.0. Correctness all-pass (screenshots identical, savestate/pause/3-min
+stability clean, 0 crashes). Root cause = R0's floor: the frame is CPU-bound
+serialized, no idle-GPU window for a deferred blit to hide in, so deferral only
+shuffles cost between buckets (other 3.38->0.73, runFrame 25.3->28.8) and
+slightly worsens. VERDICT: R2 provides no benefit pre-overlap. Keep the toggle
+default OFF / SHELVE the commit until R4 creates a real overlap window, then
+re-measure (the blit belongs on the render thread, which subsumes R2 anyway).
+
+**R3 GL counters aim the diet — it's redundant STATE, not draw count.** Per-frame
+in-race medians (menu->race): draws 5->124, binds 411->529, texparam 17->251,
+uniforms 4->29, uploadKB 79->121, progs 6->7. The ~411 binds present at a STATIC
+menu prove a large fixed redundant-rebind baseline independent of scene. Ranked
+diet targets: (1) binds 529/frame — redundant-state shadow cache (skip no-op
+glBindTexture/glBind*), (2) texparam 251/frame — cache glTexParameter per
+texture / GLES sampler objects (steepest race scaler, +234), (3) draws
+124/frame — batching, far lower leverage. So R3 = redundant-state shadowing
+FIRST (biggest win, lowest risk), draw batching last. Upload 121KB/frame is
+modest, not a target. This is the ~5ms Mali-submission slice from R0.
+
+### D.7 addendum 5 — R3 diet implemented (redundant-state shadow cache); latent Android build bug fixed
+
+Landed on liteDS-v2-android (60af1f87): LITEV_GL_STATE_CACHE (default OFF,
+Android-only). New src/LiteGLStateCache.h shadows bound GL state and wraps the
+renderer's bind/param calls so redundant ones (bind to already-bound object,
+same texparam on same object) are skipped — a driver-level identity. Reset at
+END of every VBlank (not frameskip-gated) so no assumption survives into the
+app-glue blit/present or next frame => transparent to the app. Attacks binds
+529/frame (the ~411 static-menu baseline is per-frame re-binds of a fixed small
+object set — collapses toward the count of DISTINCT bind points, tens) and
+texparam 251/frame (SetupPolygonTexture's 2 WRAP calls/polygon). Per-object
+param cache chosen over a sampler object because wrap mode is per-polygon.
+Deliberately NOT cached (ambiguous ownership): UNIFORM/ELEMENT_ARRAY buffer
+binds (VAO/BufferBase aliasing), VAO binds, the compute-3D renderer. Gates:
+host golden bit-exact flag OFF and ON (inert in headless); Android app builds
+flag OFF and ON exit 0. Standalone FPS value (unlike R2): the eliminated calls
+are Mali userspace command-construction CPU on R0's serial critical path.
+Staged apk-r3-diet.apk for device counter-verify (expect binds/texparam LITEV_GL
+counters to drop OFF->ON by exactly the redundant count).
+
+LATENT BUG FOUND + FIXED (41cdf730): LiteProfileGL.h had `*/` inside a comment
+(the text "glTexSubImage*/") that closes the block comment early — breaks EVERY
+Android LITEV_PROFILE build. It never showed on the host golden (OGLRENDERER=OFF
+never compiles the header), meaning the earlier profile-gl instrumentation
+commit was host-verified only, never Android-built. Process note: GL/renderer
+changes must be Android-compile-gated, not just host-golden-gated.
+
+### D.7 addendum 6 — R3 diet + R1 release: BOTH closed-negative on-device; only R4 remains
+
+Two device A/Bs, both clean negatives, both reshape the plan:
+
+**R3 GL diet: cuts calls, does NOT cut frame time.** Device (3x GL, in-race):
+binds 529->436 (-18%), texparam 251->74 (-70%) — the cache works — but fps
+30.75->30.90 (noise), cpu_loop -0.11ms. GL *call count* is NOT a serial-CPU
+cost. This RETRACTS the R0/simpleperf read that Mali command construction was
+~5ms of the ~11ms GL slice: the Mali on-CPU time is proportional to draw/vertex
+CONTENT (124 draws, geometry, fragments), not bind/param call count, so
+deduping calls can't reclaim it. Correctness PASS (visually identical, stable).
+Keep LITEV_GL_STATE_CACHE flag default OFF (correct, harmless, may reduce
+render-thread work post-R4); no standalone value.
+
+**R1 release build: 0ms CheckJNI win.** Non-debuggable release vs debug, same
+race scene, -O3 matched: cpu_loop 31.15 vs 31.15, fps 32 vs 32. The emulation
+hot loop makes too few JNI calls/frame for CheckJNI/ART validation to register;
+the ~2.8ms simpleperf "ART/JNI" was the Java driver-loop's real work, not the
+debuggable flag. Release build has no perf value (still worth shipping for size/
+production hygiene, not FPS).
+
+**Roadmap impact — the cheap wins are exhausted.** Every incremental lever tried
+(dispatcher wash, NEON geom +1%, relaxed timing -5%, R2 blit regression, R3 diet
+0%, R1 release 0%) is closed. The frame is ~30.5ms of serial work that does not
+yield to call-count/CPU-micro cuts. The ONLY remaining structural lever is R4
+render-thread offload: run the ~11ms GL-content CPU on a spare A55 concurrent
+with the ~18.5ms emulation, wall -> max(~18.5, ~11) ~= 18.5ms => ~54fps at 3x.
+R4 is now 60fps-or-bust; its value rests on the ~11ms GL CPU being genuinely
+parallelizable (it is CPU per R0's 90%-on-CPU finding, just content-bound not
+call-bound). Post-R4, the banked core wins (dispatcher 1.2ms, M6.14 mainRAM,
+event-slices) become the ARM-side critical path and surface as FPS. If R4's
+overlap does not materialize the win on-device, the honest conclusion is 60fps
+at 3x is not reachable on this A55 without dropping internal resolution.
+
+### D.7 addendum 7 — DraStic full teardown (Ghidra, 3285 fns): findings for the campaign
+
+Complete decompile of libdrastic_arm64.so r2.6.0.4a → docs/drastic-teardown/
+(12 subsystem docs, 4131 lines). Campaign-relevant conclusions:
+
+**CONFIRMS closed levers (do not reopen):**
+- DraStic ALSO bakes cycle cost at compile time (per-instr base + LDM/STM popcount
+  + waitstate tables, one subtract/block against a signed down-counter). M6.12
+  relaxed-timing regression was correct; DraStic would regress identically.
+- DraStic's #1 speed technique — per-block backward liveness → dead-flag AND
+  dead-register elimination — is ALREADY in melonDS's JIT (FloodFillSetFlags +
+  ARM_InstrInfo ReadFlags/DstRegs/SrcRegs/NotStrictlyNeeded). Not a new lever;
+  explains why the ARM9 bucket is dense (~46 cyc/instr), not naive-codegen bloat.
+
+**VALIDATES R4 as the right move:** DraStic runs emulation on the caller thread
+and renders FULLY off the critical path — double-buffered software framebuffer,
+emu's only present cost is a buffer-index flip + condvar signal; a separate GL
+thread does upload+post-FX. This is exactly R4's design. Frame pacing = audio
+back-pressure + GLSurfaceView vsync, no sleep-to-60 (matches our R0/audio
+findings). R4 is DraStic's proven architecture.
+
+**THE DEEPER ARCHITECTURAL DIVERGENCE (the real ceiling question):** DraStic does
+NOT use GL for rendering at all — GLES2 only blits+post-processes a software
+framebuffer (no glDrawElements/VBO). Its entire 2D compositor and 3D rasterizer
+are software-NEON on DEDICATED helper threads (2D engine-B on its own thread; 3D
+raster split 12×16-line bands across 4 threads). melonDS-v2's ~11ms GL-content
+CPU (R0) is its full-GL renderer submission — an architecture DraStic proves is
+NOT required for DS 60fps on this silicon. So:
+- R4 (offload GL submission to a thread) → the sanctioned next step, gets ~54fps.
+- IF R4's overlap is insufficient, the DraStic-proven ceiling-raiser is the M6.6
+  HYBRID reconsidered with in-race data: soft-2D(NEON) + soft-or-GL-3D + GL-as-
+  dumb-blit, rendering on dedicated A55 helper threads — v1's architecture, which
+  is literally DraStic's. D.4 rejected M6.6 on 1.2ms MENU compositor data; in-race
+  the GL cost is ~11ms, so the rejection no longer holds and M6.6 is REOPENED as
+  the reserve behind R4.
+
+**Other portable ideas (logged, not yet actioned):** branchless 2KB software
+pointer-table fastmem (vs our SIGSEGV-handler fastmem — may suit A55 better;
+big rearchitecture); deferred/batched GXFIFO threaded-code interpreter (our
+GXFIFO is already deferred per M6.11); LLE clean-room custom BIOS + synthesized
+firmware direct-boot (compat/legal, not perf). Full detail per subsystem in
+docs/drastic-teardown/.
+
+### D.7 addendum 8 — R4 single-thread split landed (device bit-exact); threaded tranche is next
+
+Pushed liteDS-v2-android 7e54405d: the 2D final-composite capture/submit split
+body behind SubmitFrame(), still SINGLE-THREADED (submit runs on the emu thread
+after RunFrame). This is the correctness foundation for the actual thread.
+- Capture phase (GLRenderer::VBlank): non-capture deferred frames snapshot the 3D
+  color output into a shadow tex and defer the 2D composite + buffer swap.
+- Submit phase (SubmitFrame after RunFrame): replay per-engine 2D composite ->
+  final pass (consuming OutputTex2D) -> swap, reading the 3D shadow.
+- The ONLY boundary crossing in single-thread was OutputTex3D (ColorBufferTex)
+  being overwritten by the next frame's Start3DRendering at VCount 215 before
+  SubmitFrame runs — resolved with a glBlitFramebuffer snapshot to SubmitShadow3DTex
+  (~tens of us on Mali, no CPU packet copy this tranche). Config/VRAM stay
+  live-valid because submit completes before the next RunFrame mutates them.
+- Capture-active frames run inline (Tier 1 fallback, SyncVRAMCapture edge preserved);
+  Reset() drains pending state.
+
+GATES: host golden bit-exact flag OFF and ON; app builds both flags; DEVICE
+screenshot-parity PASS — same savestate deferred vs inline: top(3D) maxdiff=0
+(pixel-exact), bottom 98.9% (diff only animated timer/minimap, <=1-frame),
+pause/save/load correct, no corruption. Perf flat as expected (single-thread).
+Artifacts: apk-r4-flagON.apk, r4-app-glue.diff (MelonInstance calls SubmitFrame;
+debug.litev.renderthread toggle), r4shots/.
+
+NEXT (threaded tranche): add the render thread + depth-1 queue so SubmitFrame(N)
+runs concurrent with RunFrame(N+1). THEN the per-span 2D config packet
+(Layer/Compositor/Scanline/OAM snapshots, double-buffered) + VRAM/palette shadow
+flat-mirror become necessary (live state is no longer submit-before-mutate), plus
+deferring Start3DRendering/mid-frame composites. This is the tranche that
+realizes the wall -> max(emu ~18.5, render ~11) => ~54fps win. Design in
+docs/r4-render-thread-design.md; the single-thread seam proven here de-risks it.
+
+### D.7 addendum 9 — THE DraStic gap, quantified: we waste 3 of 4 cores
+
+Direct analysis of docs/drastic-teardown/ against our measured numbers. The
+gap to DraStic is NOT emulation speed — it is the rendering architecture.
+
+**Our emulation already fits 60fps.** M6.11 decomposition: pure emu-compute
+13.56ms + scheduler residual 2.53 = 16.09ms < the 16.6ms budget. The reason
+we're at 32fps is the ~11ms of full-GL renderer submission SERIALIZED into
+RunFrame on the emu thread (R0), so frame = 13.5 + 11 + glue on ~1 CPU core.
+
+**DraStic renders in software-NEON across all 4 A55 cores; GL is a dumb blit**
+(docs 07/05, proven): emu on caller thread, 2D engine-B on its own thread, 3D
+rasterizer in 12x16-line bands across 4 threads, GL thread does only
+texSubImage2D+drawArrays+post-FX. Its wall = slowest of ~6 overlapped threads.
+We use ONE core and serialize. That is the entire gap.
+
+**R4 threaded is the fix and is the make-or-break test.** If GL submission
+overlaps emulation on a second core: wall -> max(emu ~13.5, GL ~11) ~= 13.5ms
+=> ~60fps, emulation-bound. Running now; the FPS delta is the campaign verdict.
+Kill-criteria if R4 underdelivers (packet-copy >2.5ms, sync overhead, or
+2-core memory-bandwidth contention on the shared A55 L3): fall to the M6.6
+HYBRID = DraStic's exact model (soft-NEON 2D compositor + banded 3D raster on
+dedicated helper threads, GL as blit) — reopened in addendum 7, this is the
+proven-on-weaker-silicon ceiling and uses all 4 cores like DraStic does.
+
+**Secondary JIT gaps (real, but only matter AFTER R4 makes us emu-bound):**
+- Compile-time idle-loop detector (doc 01 §9): overview calls it the biggest
+  CPU gap, BUT our ARM9 deep-dive measured Shrek-race busy-wait <0.15ms (we
+  have HALT + branch-to-self detection already). Helps WarioWare-class IPC-poll
+  titles, NOT the Shrek target. Port for general compat, not for this number.
+- Fixed static register allocation (doc 01 §6): DraStic pins guest r0-r14 ->
+  host x13-x27 and CPSR flags 1:1 -> host NZCV, so guest ALU ~1:1, zero
+  per-block spill; melonDS uses a dynamic register cache. Genuine per-instr win
+  on the 13.5ms emu bucket, but a large risky JIT rearchitecture — only worth
+  it once R4 makes emulation the wall and we need to push 13.5 -> lower.
+- melonDS ALREADY has: backward liveness/dead-flag+reg elimination
+  (FloodFillSetFlags), deferred GXFIFO, HALT idle, NEON 2D/geometry. Those
+  DraStic techniques are NOT gaps.
+
+Bottom line: one architectural fix (R4, use the other cores) closes the DraStic
+gap; the JIT micro-gaps are a distant second and some are already closed.
+
+### D.7 addendum 10 — R4 threaded: precise NEGATIVE on the current seam; core-floor measurement gates the full split
+
+Device A/B (in-race 3x): inline vs single-thread-deferred → wall 32.8ms both,
+fps 30.5 vs 30.4 (Δ≈0). The landed seam (7e54405d) defers ONLY the VBlank final
+composite (~2.83ms into a new `submit` bucket); RunFrame stays 28.4ms and still
+issues ALL per-scanline GL (DrawScanline VRAM/palette glTexSubImage, prerender
+draws, mid-frame RenderScreen composites). Threading THIS seam ceiling =
+max(28.4, 2.83+1.29) ≈ 28.4ms ⇒ ~33fps — fails the 45-54 target. NOT a
+sync/bandwidth failure (design kill-criterion #2) — the render work simply
+isn't isolated from RunFrame. The agent correctly refused to ship a threaded
+flag-ON (false win + unverifiable data-race surface).
+
+THE GATE ON THE 4-6 DAY FULL SPLIT: RunFrame 28.4ms = core_emu + inline_GL. Our
+13.5ms "emu-compute" is HEADLESS (software renderer, no GL); the APP core floor
+is unmeasured. Decide before investing:
+- core ~13.5ms + inline_GL ~15ms → full per-scanline split → wall max(13.5,~18)
+  ≈18ms ⇒ ~55fps. Full R4 split IS worth it.
+- core ~20ms+ → even a perfect split caps <60 ⇒ pivot to M6.6 hybrid (DraStic
+  software-render, addendum 9) or drop internal resolution.
+Cheap decisive test: measure app RunFrame with the 3D/2D renderer disabled (or
+frameskip sweep, which skips rasterization) on-device. Do this BEFORE the split.
+Artifacts (not pushed, HEAD still 7e54405d): r4-app-glue-profsplit.diff (the
+emu/render submit-bucket profiling split — safe/useful regardless),
+apk-r4-prof-split.apk, r4t_{defer,inline}.log.
+
+### D.7 addendum 11 — core-floor measurement: frameskip invalid, but decomposition leans PROCEED
+
+Attempted app core-only RunFrame via frameskip sweep (in-race 3x). Result:
+frameskip is INVALID for isolating core — confirmed in GPU.cpp: frameskip gates
+the software 2D compositor (if !SkipThisFrame, ~3-5ms) but the GL 3D render
+(VCount215 CurrentRenderer->RenderFrame, synchronous in RunFrame) is gated by
+!SkipThisFrame || !RenderFrameIdentical, and RenderFrameIdentical is forced
+false on every geometry flush → in a racing scene the GL 3D submission runs
+EVERY frame regardless of frameskip. So the movable GL-3D cost stays in RunFrame
+and can't be skipped away.
+
+Decomposition obtained (in-race 3x medians): full RunFrame ~26ms; 2D compositor
+~3-5ms; floor with 2D removed (core + GL-3D-submit) ~20-22ms. Cross-ref headless
+core ~13.5ms ⇒ GL-3D-submit ~6-7ms, core ~13-15ms (core~20/GL3D~0 is impossible
+— GL 3D provably costs several ms). This LEANS PROCEED (core in the go-zone),
+not pivot — but is not proof. Authoritative number = the per-section profiler
+(LiteProfile GPU3DRunNs/ARM9ExecNs/ARM7ExecNs summed) which R4 STAGE A produces
+directly: Stage A makes RunFrame emit ~zero GL, so its gated RunFrame reading IS
+the app core floor from the target build. No separate measurement needed.
+Also confirmed: debug.litev.renderthread is inert in the installed e3badc8 build
+(expected — pre-R4-seam); the R4 seam lives only in unpushed local commits.
+
+### D.7 addendum 12 — R4 Phase 1 (RIR) COMPLETE: monolith broken, full split surface proven bit-exact
+
+Pushed liteDS-v2-android c55d261d..050eaa42 (5 batches). The RIR unlock worked:
+every recipe §1.2 per-scanline GL site (BG/OBJ VRAM + palette uploads, PrerenderLayer/
+Sprites, DoRenderSprites, per-engine RenderScreen composite, final-pass FinalPass,
+Start3DRendering→Render3D) now routes through the GLLogRecord command log via
+record→immediate-replay, DEVICE-verified pixel-identical to flag-OFF per batch
+(counter proof inlineGL=0). The hard error-prone 80% — byte-exact payload snapshots
+for every op — is done and proven on-device, incrementally, no all-or-nothing.
+Host goldens bit-exact both flags. Runtime prop debug.litev.rir; flag-OFF byte-
+identical at every commit. APK apk-r4-rir.apk, glue diff r4-app-glue-rir.diff.
+
+PHASE 2 (launching): flip replay from immediate → deferred (SubmitFrame, STILL
+single-thread) + add the Stage-B VRAM/palette shadow (recipe §2) for the only two
+ops that read live VRAM (UploadBGVRAM/OBJVRAM, Render3D) — the config-driven ops
+already fully snapshot. After Phase 2, RunFrame emits ~zero GL ⇒ its flag-ON
+RunFrame reading IS the authoritative app core floor (the go/pivot number),
+still single-thread (no perf win yet — that's Phase 3's thread). PHASE 3: render
+thread + depth-1 queue = the wall→max(core,render) FPS win.
+
+### D.7 addendum 13 — resolution sweep: RunFrame is resolution-INVARIANT; the floor is CPU, not raster
+
+apk-r4-deferred (2D-GL deferred), in-race, cooled starts, freq pinned:
+| res | runFrame | submit | fps |
+|-----|----------|--------|-----|
+| 1x  | 29.08ms  | 4.15   | 28.6 |
+| 2x  | 28.50ms  | 4.25   | 28.95 |
+| 3x  | 27.86ms  | 3.93   | 29.8 |
+
+RunFrame is FLAT (~28ms) across resolution — 3x is marginally FASTER (noise).
+Falsifies "1x/2x reaches 60" AND "prep is resolution-dependent GPU work."
+Internal resolution scales only async GPU rasterization, which is NOT the
+bottleneck at any res. The ~28ms floor is fixed resolution-invariant CPU:
+ARM emulation + GL-renderer CPU (MakeVRAMFlat, config, GL-3D geometry
+submission — polygon-count-bound, not pixel-bound). Native res is off the
+table (owner: unacceptable UX) and would not help anyway.
+
+Consequence for R4: the offload target (MakeVRAMFlat + config + inline GL 3D
+RenderFrame) is resolution-invariant CPU → genuinely parallelizable to another
+A55 core, which is what we want. The go/no-go number is the split of RunFrame
+into UNMOVABLE ARM emulation (incl GPU3D geometry emulation ~2.29ms, stays —
+traced hardware) vs MOVABLE GL-renderer CPU. If movable ≈14.5ms and emulation
+≈13.5ms → Phase 3 offload + Phase 4 thread → ~55fps@3x. If app emulation is
+actually ~20ms → capped ~43fps → also need JIT (register-alloc) work. Phase 3's
+decompose-first step measures this split — it is the decisive go/no-go for the
+whole R4 investment. (Caveat: sweep's staging-grid scene ~28ms is ~5ms heavier
+than the prior 23ms in-race point; relative resolution-invariance holds.)
+
+### D.7 addendum 14 — Phase 3 decomposition + a SUSPECT verdict; clean go/no-go in flight
+
+Phase 3 "decompose first" measured (deferred build, STAGING-GRID scene, device):
+inline 3D raster 3.8ms, MakeVRAMFlat 0.33ms, config 0.2ms, deferred submit 4.0ms
+→ concluded movable=4.3ms, "unmovable emulation floor"=23ms → R4 caps ~43fps@3x,
+recommended halt R4 / pivot to JIT.
+
+RECONCILIATION (why the 23ms is suspect): M6.11 headless device (clean, no GL,
+no log, app-matching full config) = pure emulation 13.56ms in-race. The Phase 3
+agent instrumented only 3 render sites and lumped the REST of RunFrame —
+critically the entire 2D-renderer per-scanline CPU (DrawScanline/prerender
+path) AND the command-log recording overhead — into "emulation." That
+uncounted ~9.7ms is render CPU (movable) + recording artifact (eliminable), not
+emulation. So the "23ms floor" is very likely mis-attribution; the real
+emulation floor is ~13.5ms and ~14.5ms of RunFrame is movable render CPU.
+
+If confirmed: Phase 4 thread → wall ≈ max(~14 emu+recording, ~14 render) ⇒
+~55-60fps@3x, R4 VIABLE. If pure emulation genuinely ~20-23ms → R4 caps ~43,
+need JIT (DraStic fixed-register-alloc) too. A clean two-way measurement is in
+flight: (A) headless pure-emulation floor on the race savestate; (B) app
+RunFrame FULLY partitioned (emulation vs ALL 2D render CPU vs 3D vs flatten vs
+config vs recording) — instrumenting the 2D per-scanline path the prior agent
+missed. That split is the definitive go/no-go for the R4 investment.
+
+### D.7 addendum 15 — CONFIRMED: emulation floor ~22ms; R4 caps ~42fps; 60 needs BOTH fronts
+
+Device-measured, in-race, three ways agreeing:
+| mode | runFrame | wall | fps |
+|---|---|---|---|
+| norender (pure emulation floor) | ~22.5ms | ~24 | ~42 |
+| full inline render (current, flag OFF) | ~30.4ms | ~32 | ~31 |
+| deferred single-thread | ~28.5ms | ~34 | ~29 |
+Render CPU on emu thread ≈ 8ms (2D per-scanline 4.7 + 3D raster 3.7 + flatten 0.4 + cfg 0.2).
+
+The ~22ms floor = ARM9 7.5 + GPU3D-geom 2.3 + ARM7 1.9 + DMA 1.7 + SPU + per-scanline
+event dispatch (the ~8.7ms the emu-compute buckets exclude). The earlier "13.5ms"
+was ONLY the ARM9/GPU3D/ARM7/DMA sub-buckets, not the full emulation.
+
+DECISION (final, both required for 60fps@3x, matching DraStic):
+- FRONT 1 R4 render thread: wall→max(22, 8)≈22ms ⇒ ~42fps. +35% over 31. Necessary,
+  not sufficient. The gating build is deferring the inline 3D RenderFrame — three
+  agents scoped-not-built it (texcache edge-dirty hazard, device-only-verifiable).
+  Unlock: apply the RIR method (record→immediate-replay 3D first, bit-exact,
+  device-verifiable) that already broke the 2D monolith, THEN shadow+defer, THEN thread.
+- FRONT 2 emulation core: cut the 22ms floor → ≤16.6ms (need ~5.5ms). DraStic's edge
+  is its JIT (fixed register alloc + hardware NZCV + condition folding, teardown §6) +
+  lean SPU. This is the 42→60 lever. Golden-gated, WiFi/MP untouched (DraStic speed
+  WITH multiplayer is the whole goal). Running.
+
+### D.7 addendum 16 — R4 Stage 1b LANDED: core floor is ~13.2ms (NOT 22); threading → ~60fps@3x
+
+Deferring the 3D raster itself (not just its output) via a VCount-215 texture-VRAM
+shadow (pushed liteDS-v2-android dcd63f7f, bit-exact host goldens both flags,
+device-verified 60s soak no corruption) gave the CLEAN on-device split:
+  inline RunFrame ~20.9ms → deferred RunFrame ~13.2ms CORE-ONLY + submit ~9.6ms.
+The ~22ms "floor" from the norender probe was CONTAMINATION (it still ran 2D prep
+/ heavier scene / log-record overhead). The real core floor is ~13.2ms — matching
+the M6.11 headless 13.5ms. So:
+  THREADED: wall → max(core 13.2, render 9.6) = 13.2ms ⇒ ~60fps@3x. R4 ALONE
+  REACHES THE TARGET. The emulation-core work (register alloc) becomes thermal/
+  headroom margin, not a hard requirement for 60.
+
+FINAL tranche (Stage 3, the render thread) — precisely scoped by the Stage-1b agent:
+1. Remove the now-redundant VBlank 3D-output snapshot blit (the last GL in RunFrame)
+   → zero-GL RunFrame; 2D reads live OutputTex3D (safe: Render3D replays last).
+2. DOUBLE-BUFFER the replay-read state for concurrency: the Stage-1b texture shadow
+   is single-buffered and the Render* latched registers are read live — both A/B
+   keyed to LogBuildBank (RenderLog arena + 3D geometry bank already depth-1-safe).
+3. App: dedicated render thread owns the GL context (emu releases eglMakeCurrent,
+   render thread makes current), depth-1 SPSC handoff w/ early bank release, move
+   SubmitFrame+blit+fence+push off runFrame. Reuse MelonInstance FrameQueue/EGL.
+4. Drain (savestate/pause/reset), surface lifecycle, capture synchronous fallback
+   (gated), 5-min stability gate, FPS delta (expect ~31→~55-60).
+Gate doc note: host golden recipe needs -DENABLE_OGLRENDERER=OFF (headless has no GL).
+
+### D.7 addendum 17 — JIT FIXEDREG Stage 1 landed (CPSR→NZCV); torture goldens are born-bad (NOT a regression)
+
+jit-fixedreg Stage 1 (8a6d7098, pushed): guest CPSR flags kept resident in host
+NZCV for the hot unconditional-flag-setting ALU class (DraStic §6.1 flag half);
+CheckCondition evaluates natively via B.<cond^1>. Pure codegen, cycles/timing/
+WiFi/MP untouched, flag-OFF byte-identical. Host ARM9ExecNs ~2.3% drop; A55 win
+expected larger (fewer emitted instrs, smaller blocks) — device-measure pending.
+Verified bit-exact vs default on shrek-600, shrek-race-3400, and (byte-identical
+output) armwrestler/rockwrestler.
+
+INFRA FINDING: tools/headless/baselines/armwrestler-arm-600.trace and
+rockwrestler-600.trace are BORN-BAD oracles — they fail against the plain
+DEFAULT core AND against the core at 0696440f (the commit that added them), with
+the core producing a consistent actual hash 0x7a9dd8243d0cac70 vs the golden's
+0xdada32ecccc057e0. i.e. the record path that generated them used a different
+config/platform than --verify-trace uses; they NEVER matched. This is NOT an ARM
+regression (core output is identical at 0696440f, mainline, and FIXEDREG=ON) —
+it's a broken oracle providing zero protection. TODO: regenerate both from the
+current default build (or delete) so the ARM torture oracle is real again. Any
+agent citing "armwrestler/rockwrestler pass" was verifying a circular/regenerated
+copy — trust only shrek-600 + shrek-race-3400 + shrek-600-eventslices until fixed.
+
+### D.7 addendum 18 — R4 STEP 1+2 landed (concurrency foundation); THERMAL is the sustained-60 constraint
+
+Pushed liteDS-v2-android e3074445: STEP 1 (zero-GL RunFrame — removed the last
+VBlank blit; 2D reads live OutputTex3D, safe since Render3D replays last) + STEP 2
+(double-buffered the replay-read state: VRAMFlat_Texture/TexPalShadow[2] + a
+RenderRegs3D snapshot bank keyed to LogBuildBank; copy cost 0.19ms/336KB, flag-OFF
+byte-identical). Device-verified screenshot-clean both steps, host goldens both flags.
+Prep is only ~2ms (full2D 1.6 + flatten 0.34 + cfg 0.19) — most of RunFrame is core.
+
+**THERMAL FINDING (load-bearing for the goal):** the RG DS SoC throttles to ~80C
+within ~1min of racing (min-freq pinned 1.992GHz but the chip caps regardless).
+- COOL: threaded wall ≈ 15ms ⇒ ~60fps.  THROTTLED: wall ≈ 23ms ⇒ ~43fps.
+So the threaded 60fps is REAL but only sustained if the device stays cool. On a
+passively-cooled handheld, sustained racing throttles. IMPLICATION: matching DraStic
+for SUSTAINED play needs BOTH (a) R4 thread (peak 60) AND (b) emulation-core
+efficiency (FIXEDREG etc. = fewer joules/frame = less throttle = holds 60 longer).
+The emulation-core work is NO LONGER just headroom — it is required for sustained 60.
+Also: the STEP-3 FPS gate MUST be measured on a COOLED device (force-stop between
+runs, wait <60C) or it reads the throttled ~43 and undercounts the real win.
+
+STEP 3 (the render thread) is the only remaining R4 piece — foundation done, precise
+handoff in docs/r4-step3-handoff.md: context share-group, runFrame GL touchpoints to
+relocate, mutex+condvar depth-1 handshake, early-bank-release at GPU3D_OpenGL.cpp:1516,
+drain protocol (capture/pause/savestate/reset), and the one remaining 2D-config
+staging race (LayerConfig/ScanlineConfig live members → render-thread-private).
+
+### D.7 addendum 19 — DraStic optimization backlog (tracked); carrying over the remaining emulation levers
+
+From docs/drastic-teardown/, every DraStic technique vs our status. Thermal
+(addendum 18) makes the emulation-CPU cuts doubly valuable: less work = less
+throttle = SUSTAINED 60, not just peak.
+
+ALREADY HAVE (not gaps): baked cycle timing; backward liveness/dead-flag+reg
+elim (FloodFillSetFlags); deferred GXFIFO; NEON 2D renderer.
+IN PROGRESS: render off critical path (R4 thread — STEP 3 building); fixed
+register allocation (Stage 1 CPSR→NZCV landed 8a6d7098; Stage 2 register pinning
+building — ae152b16).
+NOT YET CARRIED (the backlog, ranked):
+1. Fixed register MAP / pin guest r0-r14 → host regs (§6.1) — biggest ARM9 lever,
+   Stage 2 building now. Full condition-folding falls out once registers fixed.
+2. Branchless software-pagetable fastmem (§7.2): 2KB-granular software TLB, one
+   sign-test per access, no SIGSEGV handler — likely faster than melonDS's
+   fault-based fastmem on the in-order A55. QUEUED (touches ARMJIT_Memory/stubs;
+   sequence after register work to avoid conflict).
+3. Batched GXFIFO threaded-code interpreter (§ doc04): de-interleaved command/
+   param streams, branchless jump-table, no per-command call/ret — attacks the
+   271ns/cmd DISPATCH cost (which is what made NEON-geometry closed-negative;
+   dispatch, not math, dominates). QUEUED (GPU3D.cpp geometry — check no overlap
+   with R4's geometry-bank/texcache touch first).
+4. Compile-time idle-loop detection (§9 tier a): bake scheduler-yield into
+   recognized software-poll loops. LOW value for Shrek (<0.15ms busy-wait) but
+   real for WarioWare-class IPC-poll titles — general compat. QUEUED.
+5. Software SMC bitmap (§8): 2-byte-granular code-presence map vs mprotect faults.
+   Shrek in-race has 0 SMC → low value here; QUEUED behind the rest.
+RESERVE: M6.6 hybrid (soft-NEON compositor + banded software raster on helper
+threads — DraStic's full render model) if R4 thread + core cuts leave a gap.
+
+### D.7 addendum 20 — RETRACTION: torture goldens were VALID (my verify was mis-invoked); strong ARM oracle confirmed
+
+Addendum 17's "born-bad / possible regression" was MY misdiagnosis: I ran
+--verify-trace WITHOUT --input-script, so the core replayed armwrestler/rockwrestler
+with no buttons and diverged at frame 201 (one frame after the script's first press
+at 200). WITH --input-script the goldens verify exit 0 on the DEFAULT build and
+double-record byte-identical — they were always valid. No ARM regression exists.
+Harness hardened (37aaa743): --verify-trace now hard-fails (exit 4) on input-script
+hash mismatch instead of a silent warning, so this can't recur.
+
+VALIDATION (all WITH script, the strict ARM/condition-code torture oracle): every
+landed exactness-preserving flag passes armwrestler AND rockwrestler bit-exact —
+JIT_DISPATCH+LINK, JIT_FIXEDREG, MEM_DTCM_BLOCK, MEM_MAINRAM_LOAD, MEM_MAINRAM_BLOCK,
+GXFIFO_BATCH, and the full six-flag stack. The landed optimizations are genuinely
+bit-exact on the hardest ARM tests. This strong oracle now DE-RISKS the remaining
+emulation-core work (FIXEDREG register pinning, branchless fastmem): correctness is
+gateable on ALU/shift/LDR-STR/LDM-STM/condition patterns, so the only open question
+for those is the on-device (A55) WIN, not correctness. Golden set to trust going
+forward: shrek-600, shrek-race-3400, shrek-600-eventslices, armwrestler-arm-600
+(+script), rockwrestler-600 (+script).
+
+### D.7 addendum 21 — R4 render thread BUILT + stable, but overlap blocked; the win needs 2 more double-buffers
+
+Pushed liteDS-v2-android cc026cef: full render-thread seam (dedicated GL context in
+the emu EGL share-group; renderer GL objects created ON the render context — Mali
+does NOT share FBOs/VAOs across contexts; monotonic-counter SPSC depth-1 handshake;
+early-release callback; drain protocol; GL-free RunFrame — the deferred path was
+issuing ungated setup GL on the emu thread, gated now). Correctness/stability ALL
+PASS: host golden both flags, device screenshot pixel-clean threaded-vs-sync, 5-min
+in-race + rapid-input/pause/savestate stress 0 crash/deadlock. flag-OFF byte-identical.
+
+BUT NO FPS WIN: threaded 38.2 vs synchronous 38.7 cool (wash). The offload WORKS —
+emu RunFrame dropped 16.3→10.8ms (GL fully off the core) — but wall = gate(15) +
+core(10.8) ≈ 26ms, NOT max(core, render), because the geometry bank must release
+LATE (after the ~15ms 2D replay), forced by TWO still-single-buffered structures:
+(1) the 2D config members LayerConfig/ScanlineConfig/SpriteConfig, (2) the 3D
+texcache `Cache`. Emu's next-frame DrawScanline/Texcache.Update would race the
+render's replay/GetTexture. STEP 2's foundation was INCOMPLETE (it double-buffered
+the texture-VRAM shadow + 3D render registers but NOT these two — the "concurrency-
+safe state already exists" claim was wrong).
+
+THE WIN (final tranche): double-buffer the 2D config members + the texcache Cache,
+then release the geometry bank at PICKUP (early, ~0.16ms deep-copy) → full
+max(core~11, render~15) ≈ 15ms overlap ⇒ ~55-60fps cool. The thread is built and
+stable; this is purely completing the double-buffering the foundation missed.
+Runtime toggle debug.litev.rtserial (default off) forces serialization for A/B.
+Glue: docs/r4-app-glue-step3.diff (614 insertions). Device is now FREE for measurement.
+
+### D.7 addendum 22 — FIXEDREG 2c CLOSED-NEGATIVE (proven): within-block register map is a dead lever; melonDS cache already block-resident
+
+Instrumented proof (LITEV_REGCACHE_STATS, host, reverted): melonDS's RegisterCache
+is ALREADY block-resident — Prepare() loads a guest reg on first use and it stays
+resident the whole block, evicted only under genuine pressure or when dead. There
+is NO per-instruction spill for a fixed map to bypass; the DraStic §6.1 "per-instr
+load/spill" premise is false here. The target ALU tri-op reg,reg,reg-no-shift class
+already emits a SINGLE spill-free host instruction. On shrek-race that class = 1496
+loads + 1202 saves = 2698 of 192653 total reg-mem-ops (1.4%), all irreducible
+first-materializations/dirty-writebacks — net removable ≈ 0, predicted ARM9 delta in
+the noise. Simulated pinning (pool 15→12→8) LEFT traffic unchanged / +1.5% worse
+(register pressure is a non-issue: working set ~8 live regs). The interop is
+constructible+bit-exact but POINTLESS. FIXEDREG stays at Stage 2b (landed).
+
+Where the REAL DraStic register win lives: cross-block residency — a global
+guest→host register ABI kept live ACROSS the dispatch loop (the block-boundary
+traffic is the dominant 49472 first-loads + 117375 writebacks/shrek-race). That
+touches the dispatcher/linkage/every stub/interp-fallback/mode-switch/exception —
+a separate, far larger, highest-regression-risk unit. NOT pursued now (EV unclear
+without A55 measurement; R4 is the real FPS lever).
+
+PATTERN (twice-confirmed, GXFIFO + 2c): melonDS is ALREADY a strong JIT (block-
+resident cache, backward liveness, jump-table dispatch, baked timing). Most
+teardown-headline "gaps" are already closed in this codebase, so emulation-core
+levers keep measuring small/null. The big remaining wins are R4 render-thread
+overlap (building) and — only if A55 data justifies its risk — cross-block
+register residency. FIXEDREG 1/2a/2b flag-traffic win (70% fewer spills) is real
+but A55-magnitude is device-pending.
+
+### D.7 addendum 23 — ★ R4 RENDER-THREAD OVERLAP LANDED: 34 → 55 fps cooled (+60%), holds 52 throttled ★
+
+THE WIN. Pushed liteDS-v2-android ed57f886 (STEP A ed8062d8 + STEP C ed57f886 on
+the STEP-3 seam cc026cef). The render thread now OVERLAPS the next frame's core:
+the geometry+texcache consume moved BEFORE the early bank release, so only ~3.75ms
+(the deep-consume) gates the emu thread; the ~15ms 2D replay + raster overlaps.
+
+Device, in-race 3x, cooled first-window medians:
+| config | cpu_loop | gate | wall | FPS |
+|---|---|---|---|---|
+| THREADED (rt=1 overlapped) | 17.7 | 3.75 | 18.1ms | **55.2** |
+| SERIAL (rtserial=1) | 29.0 | 16.0 | 29.2ms | 34.3 |
+| FLAG-OFF (inline) | 28.7 | — | 28.8ms | 34.7 |
+THROTTLED (74-75C, 5-min): threaded holds 52.5fps / wall 19.0ms — WIN SURVIVES
+THERMAL (serial/OFF stay ~34). The `gate` collapsed 14.8→3.75ms — the overlap.
+
+STEP C is core-only: split RenderFrameBody → RenderFrameBodyGeometry (consumes
+RenderPolygonRAM + GetTexture into render-private VBOs) + RenderFrameBodyRaster;
+ReplayLog runs Geometry → fires early bank release → replays 2D log + raster.
+STEP B (texcache double-buffer) proved UNNECESSARY: geometry-before-release makes
+texcache access strictly alternate Geometry(N)→Update(N+1), never concurrent.
+
+Gates ALL PASS: host golden shrek-600 bit-exact flag OFF+ON; app builds both;
+device screenshot-parity clean (bottom byte-identical, top 99.986% sub-pixel dither
+only, no garbling) across start-line/splash/menu under active overlap; 6/6 stability
+cycles 0 crash/tear/deadlock, 2 savestate-load stresses survived. flag-OFF byte-
+identical. App glue: docs/r4-app-glue-final.diff (626 lines, MelonInstance).
+
+RESULT vs GOAL: R4 render-thread offload = DraStic's core architecture (render off
+the emu thread), now DELIVERED — 34→55 cooled, matching DraStic's render model.
+Remaining gap to 60: wall 18.1ms vs 16.6ms = ~1.5ms, in the render/gate + thermal.
+The banked emulation-core efficiency (FIXEDREG flag traffic, device-pending) + the
+residual overlap headroom (runFrame was 14ms at 63-70C, ~11ms cold) close it. This
+is the headline win of the campaign.
