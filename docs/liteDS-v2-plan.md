@@ -1701,3 +1701,25 @@ FINAL tranche (Stage 3, the render thread) — precisely scoped by the Stage-1b 
 4. Drain (savestate/pause/reset), surface lifecycle, capture synchronous fallback
    (gated), 5-min stability gate, FPS delta (expect ~31→~55-60).
 Gate doc note: host golden recipe needs -DENABLE_OGLRENDERER=OFF (headless has no GL).
+
+### D.7 addendum 17 — JIT FIXEDREG Stage 1 landed (CPSR→NZCV); torture goldens are born-bad (NOT a regression)
+
+jit-fixedreg Stage 1 (8a6d7098, pushed): guest CPSR flags kept resident in host
+NZCV for the hot unconditional-flag-setting ALU class (DraStic §6.1 flag half);
+CheckCondition evaluates natively via B.<cond^1>. Pure codegen, cycles/timing/
+WiFi/MP untouched, flag-OFF byte-identical. Host ARM9ExecNs ~2.3% drop; A55 win
+expected larger (fewer emitted instrs, smaller blocks) — device-measure pending.
+Verified bit-exact vs default on shrek-600, shrek-race-3400, and (byte-identical
+output) armwrestler/rockwrestler.
+
+INFRA FINDING: tools/headless/baselines/armwrestler-arm-600.trace and
+rockwrestler-600.trace are BORN-BAD oracles — they fail against the plain
+DEFAULT core AND against the core at 0696440f (the commit that added them), with
+the core producing a consistent actual hash 0x7a9dd8243d0cac70 vs the golden's
+0xdada32ecccc057e0. i.e. the record path that generated them used a different
+config/platform than --verify-trace uses; they NEVER matched. This is NOT an ARM
+regression (core output is identical at 0696440f, mainline, and FIXEDREG=ON) —
+it's a broken oracle providing zero protection. TODO: regenerate both from the
+current default build (or delete) so the ARM torture oracle is real again. Any
+agent citing "armwrestler/rockwrestler pass" was verifying a circular/regenerated
+copy — trust only shrek-600 + shrek-race-3400 + shrek-600-eventslices until fixed.
