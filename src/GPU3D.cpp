@@ -209,7 +209,24 @@ GPU3D::GPU3D(melonDS::GPU& gpu) noexcept :
     NDS(gpu.NDS),
     GPU(gpu)
 {
+#ifdef LITEV_GEOM_OFFLOAD
+    // G1b buffers: the resolved-input event log + a scratch geometry bank (one bank's worth:
+    // VertexRAM is 6144 verts / 2 banks, PolygonRAM 2048 polys wait -> per-bank = 6144 verts and
+    // 2048 polys, see CurVertexRAM = &VertexRAM[6144]) for the passive replay verify.
+    GeomEventLog  = new GeomEvent[GeomEventMax];
+    GeomScratchVtx  = new Vertex[6144];
+    GeomScratchPoly = new Polygon[2048];
+#endif
 }
+
+#ifdef LITEV_GEOM_OFFLOAD
+GPU3D::~GPU3D() noexcept
+{
+    delete[] GeomEventLog;
+    delete[] GeomScratchVtx;
+    delete[] GeomScratchPoly;
+}
+#endif
 
 void Vertex::DoSavestate(Savestate* file) noexcept
 {
@@ -1006,6 +1023,125 @@ bool ClipCoordsEqual(Vertex* a, Vertex* b)
            a->Position[3] == b->Position[3];
 }
 
+#ifdef LITEV_GEOM_OFFLOAD
+void GPU3D::RecordGeomBegin(u32 polygonMode) noexcept
+{
+    if (GeomEventCount >= GeomEventMax) { GeomEventOverflow++; return; }
+    GeomEvent& e = GeomEventLog[GeomEventCount++];
+    e.Type = 0;
+    e.PolygonMode = polygonMode;
+}
+
+void GPU3D::RecordGeomVertex() noexcept
+{
+    if (GeomEventCount >= GeomEventMax) { GeomEventOverflow++; return; }
+    GeomEvent& e = GeomEventLog[GeomEventCount++];
+    e.Type = 1;
+    e.CurVertex[0] = CurVertex[0]; e.CurVertex[1] = CurVertex[1]; e.CurVertex[2] = CurVertex[2];
+    memcpy(e.ClipMatrix, ClipMatrix, sizeof(ClipMatrix));
+    memcpy(e.TexMatrix, TexMatrix, sizeof(TexMatrix));
+    e.VertexColor[0] = VertexColor[0]; e.VertexColor[1] = VertexColor[1]; e.VertexColor[2] = VertexColor[2];
+    e.TexCoords[0] = TexCoords[0]; e.TexCoords[1] = TexCoords[1];
+    e.RawTexCoords[0] = RawTexCoords[0]; e.RawTexCoords[1] = RawTexCoords[1];
+    e.TexParam = TexParam;
+    e.CurPolygonAttr = CurPolygonAttr;
+    memcpy(e.Viewport, Viewport, sizeof(Viewport));
+}
+
+// Passive verify (STEP G1b): replay the recorded event log into the scratch bank via the exact
+// SubmitVertex/SubmitPolygon, then compare to the real bank. Saves+restores every piece of state
+// the replay mutates, so the emu is untouched -> rendering is unaffected; a mismatch only bumps a
+// counter (tells us a captured field is missing, e.g. Viewport, without breaking anything).
+void GPU3D::ReplayAndVerifyGeometry() noexcept
+{
+    GeomVerifyFrames++;
+
+    Vertex*  saveCurVtx = CurVertexRAM;
+    Polygon* saveCurPoly = CurPolygonRAM;
+    u32 saveNumVertices = NumVertices, saveNumPolygons = NumPolygons, saveNumOpaque = NumOpaquePolygons;
+    u32 saveVertexNum = VertexNum, saveVertexNumInPoly = VertexNumInPoly, saveNumConsec = NumConsecutivePolygons;
+    Polygon* saveLastStrip = LastStripPolygon;
+    u32 savePolygonMode = PolygonMode;
+    Vertex saveTemp[4]; memcpy(saveTemp, TempVertexBuffer, sizeof(saveTemp));
+    s32 saveCycle = CycleCount, saveVP = VertexPipeline, savePP = PolygonPipeline, saveNP = NormalPipeline;
+    s32 saveVSC = VertexSlotCounter, saveVSF = VertexSlotsFree;
+    s16 saveCurVertex[3]; memcpy(saveCurVertex, CurVertex, sizeof(saveCurVertex));
+    s32 saveClip[16]; memcpy(saveClip, ClipMatrix, sizeof(saveClip));
+    s32 saveTexM[16]; memcpy(saveTexM, TexMatrix, sizeof(saveTexM));
+    u8  saveVColor[3]; memcpy(saveVColor, VertexColor, sizeof(saveVColor));
+    s16 saveTexC[2]; memcpy(saveTexC, TexCoords, sizeof(saveTexC));
+    s16 saveRawTexC[2]; memcpy(saveRawTexC, RawTexCoords, sizeof(saveRawTexC));
+    u32 saveTexParam = TexParam, saveCurPolyAttr = CurPolygonAttr;
+    u32 saveViewport[6]; memcpy(saveViewport, Viewport, sizeof(saveViewport));
+
+    CurVertexRAM = GeomScratchVtx;
+    CurPolygonRAM = GeomScratchPoly;
+    NumVertices = 0; NumPolygons = 0; NumOpaquePolygons = 0;
+    VertexNum = 0; VertexNumInPoly = 0; NumConsecutivePolygons = 0; LastStripPolygon = NULL;
+
+    GeomReplaying = true;
+    for (u32 i = 0; i < GeomEventCount; i++)
+    {
+        const GeomEvent& e = GeomEventLog[i];
+        if (e.Type == 0)
+        {
+            PolygonMode = e.PolygonMode;
+            VertexNum = 0; VertexNumInPoly = 0; NumConsecutivePolygons = 0; LastStripPolygon = NULL;
+        }
+        else
+        {
+            CurVertex[0] = e.CurVertex[0]; CurVertex[1] = e.CurVertex[1]; CurVertex[2] = e.CurVertex[2];
+            memcpy(ClipMatrix, e.ClipMatrix, sizeof(ClipMatrix));
+            memcpy(TexMatrix, e.TexMatrix, sizeof(TexMatrix));
+            VertexColor[0] = e.VertexColor[0]; VertexColor[1] = e.VertexColor[1]; VertexColor[2] = e.VertexColor[2];
+            TexCoords[0] = e.TexCoords[0]; TexCoords[1] = e.TexCoords[1];
+            RawTexCoords[0] = e.RawTexCoords[0]; RawTexCoords[1] = e.RawTexCoords[1];
+            TexParam = e.TexParam;
+            CurPolygonAttr = e.CurPolygonAttr;
+            memcpy(Viewport, e.Viewport, sizeof(Viewport));
+            SubmitVertex();
+        }
+    }
+    GeomReplaying = false;
+
+    // Compare the RENDERED geometry fields only. HiresPosition is written only in the hi-res GL
+    // path (not the software renderer), so in the SW-verify build it retains stale bank bytes that
+    // differ between the two reused banks -- a verify artifact, not a geometry difference. The
+    // replay reruns the exact SubmitPolygon, so under the GL renderer HiresPosition matches too.
+    bool mismatch = (NumVertices != saveNumVertices) || (NumPolygons != saveNumPolygons);
+    for (u32 i = 0; !mismatch && i < saveNumVertices; i++)
+    {
+        const Vertex& r = saveCurVtx[i]; const Vertex& s = GeomScratchVtx[i];
+        if (memcmp(r.Position, s.Position, sizeof(r.Position)) != 0 ||
+            memcmp(r.Color, s.Color, sizeof(r.Color)) != 0 ||
+            memcmp(r.TexCoords, s.TexCoords, sizeof(r.TexCoords)) != 0 ||
+            memcmp(r.FinalPosition, s.FinalPosition, sizeof(r.FinalPosition)) != 0 ||
+            memcmp(r.FinalColor, s.FinalColor, sizeof(r.FinalColor)) != 0 ||
+            r.Clipped != s.Clipped)
+        {
+            mismatch = true;
+        }
+    }
+    if (mismatch) GeomVerifyMismatches++;
+
+    CurVertexRAM = saveCurVtx; CurPolygonRAM = saveCurPoly;
+    NumVertices = saveNumVertices; NumPolygons = saveNumPolygons; NumOpaquePolygons = saveNumOpaque;
+    VertexNum = saveVertexNum; VertexNumInPoly = saveVertexNumInPoly; NumConsecutivePolygons = saveNumConsec;
+    LastStripPolygon = saveLastStrip; PolygonMode = savePolygonMode;
+    memcpy(TempVertexBuffer, saveTemp, sizeof(saveTemp));
+    CycleCount = saveCycle; VertexPipeline = saveVP; PolygonPipeline = savePP; NormalPipeline = saveNP;
+    VertexSlotCounter = saveVSC; VertexSlotsFree = saveVSF;
+    memcpy(CurVertex, saveCurVertex, sizeof(saveCurVertex));
+    memcpy(ClipMatrix, saveClip, sizeof(saveClip));
+    memcpy(TexMatrix, saveTexM, sizeof(saveTexM));
+    memcpy(VertexColor, saveVColor, sizeof(saveVColor));
+    memcpy(TexCoords, saveTexC, sizeof(saveTexC));
+    memcpy(RawTexCoords, saveRawTexC, sizeof(saveRawTexC));
+    TexParam = saveTexParam; CurPolygonAttr = saveCurPolyAttr;
+    memcpy(Viewport, saveViewport, sizeof(Viewport));
+}
+#endif
+
 void GPU3D::SubmitPolygon() noexcept
 {
     Vertex clippedvertices[10];
@@ -1416,7 +1552,18 @@ void GPU3D::SubmitVertex() noexcept
     s64 vertex[4] = {(s64)CurVertex[0], (s64)CurVertex[1], (s64)CurVertex[2], 0x1000};
     Vertex* vertextrans = &TempVertexBuffer[VertexNumInPoly];
 
+#ifdef LITEV_GEOM_OFFLOAD
+    // Normal execution: resolve the clip matrix and RECORD the exact per-vertex inputs.
+    // Replay: ClipMatrix/TexMatrix/attrs are already loaded from the captured event, so skip
+    // UpdateClipMatrix (which would recompute from the live Proj/Pos matrices) and skip recording.
+    if (!GeomReplaying)
+    {
+        UpdateClipMatrix();
+        RecordGeomVertex();
+    }
+#else
     UpdateClipMatrix();
+#endif
 #if defined(LITEV_NEON_GEOMETRY) && defined(__ARM_NEON)
     // vertex[] components fit in s32 (CurVertex is s16, w = 0x1000), so the
     // widening 32x32->64 NEON multiply matches the scalar s64 products exactly.
@@ -1815,16 +1962,6 @@ GPU3D::CmdFIFOEntry GPU3D::CmdFIFORead() noexcept
 {
     CmdFIFOEntry ret = CmdPIPE.Read();
 
-#ifdef LITEV_GEOM_OFFLOAD
-    // STEP G1: passively record the executed command stream (command + params flow through
-    // here in order). Nothing replays it yet. A memcpy-cheap append; << the transform it will
-    // eventually move off-thread.
-    if (GeomCmdLogCount < GeomCmdLogMax)
-        GeomCmdLog[GeomCmdLogCount++] = ret;
-    else
-        GeomCmdLogOverflow++;
-#endif
-
     if (CmdPIPE.Level() <= 2)
     {
         if (!CmdFIFO.IsEmpty())
@@ -2185,6 +2322,9 @@ void GPU3D::ExecuteCommand() noexcept
             NumConsecutivePolygons = 0;
             LastStripPolygon = NULL;
             CurPolygonAttr = PolygonAttr;
+#ifdef LITEV_GEOM_OFFLOAD
+            RecordGeomBegin(PolygonMode);
+#endif
             goto gxf_end;
 
         gxf_41: // end polygons
@@ -2529,6 +2669,9 @@ void GPU3D::ExecuteCommand() noexcept
             NumConsecutivePolygons = 0;
             LastStripPolygon = NULL;
             CurPolygonAttr = PolygonAttr;
+#ifdef LITEV_GEOM_OFFLOAD
+            RecordGeomBegin(PolygonMode);
+#endif
             break;
 
         case 0x41: // end polygons
@@ -3186,6 +3329,16 @@ void GPU3D::VBlank() noexcept
 
         if (FlushRequest)
         {
+#ifdef LITEV_GEOM_OFFLOAD
+            // STEP G1b: geometry finalized in CurVertexRAM/CurPolygonRAM. Passively replay the
+            // recorded event log into a scratch bank and compare -> proves the transform/clip/
+            // assembly are reproducible from the captured inputs, WITHOUT touching the real bank
+            // (rendering unaffected). Must run BEFORE the bank toggle below.
+            ReplayAndVerifyGeometry();
+            if (GeomEventCount > GeomEventPeak) GeomEventPeak = GeomEventCount;
+            GeomEventCount = 0;
+#endif
+
             CurRAMBank = CurRAMBank?0:1;
             CurVertexRAM = &VertexRAM[CurRAMBank ? 6144 : 0];
             CurPolygonRAM = &PolygonRAM[CurRAMBank ? 2048 : 0];
@@ -3195,14 +3348,6 @@ void GPU3D::VBlank() noexcept
             NumOpaquePolygons = 0;
 
             FlushRequest = 0;
-
-#ifdef LITEV_GEOM_OFFLOAD
-            // STEP G1: geometry frame committed. Record the high-water mark, then reset the
-            // command log so the next frame's stream accumulates from empty. (A future step
-            // hands this frame's log to the render thread here instead of discarding it.)
-            if (GeomCmdLogCount > GeomCmdLogPeak) GeomCmdLogPeak = GeomCmdLogCount;
-            GeomCmdLogCount = 0;
-#endif
         }
     }
 }

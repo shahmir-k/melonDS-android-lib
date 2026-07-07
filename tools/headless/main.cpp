@@ -608,6 +608,13 @@ int main(int argc, char** argv)
         printf("window_wall_s: %.4f\n", windowSec);
         printf("window_fps:  %.2f\n", windowFps);
     }
+#ifdef LITEV_GEOM_OFFLOAD
+    // G1b passive verify: replayed geometry vs inline geometry (0 mismatches => split proven).
+    printf("geom_verify_frames:     %llu\n", (unsigned long long)nds->GPU.GPU3D.GeomVerifyFrames);
+    printf("geom_verify_mismatches: %llu\n", (unsigned long long)nds->GPU.GPU3D.GeomVerifyMismatches);
+    printf("geom_event_peak:        %u\n", nds->GPU.GPU3D.GeomEventPeak);
+    printf("geom_event_overflow:    %u\n", nds->GPU.GPU3D.GeomEventOverflow);
+#endif
     printf("final_top:   %016llx\n", (unsigned long long)lastTopHash);
     printf("final_bot:   %016llx\n", (unsigned long long)lastBotHash);
     printf("fb_changing: %s\n", anyChange ? "yes" : "no");

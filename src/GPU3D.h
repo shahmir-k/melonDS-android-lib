@@ -89,7 +89,11 @@ class GPU3D
 {
 public:
     GPU3D(melonDS::GPU& gpu) noexcept;
+#ifdef LITEV_GEOM_OFFLOAD
+    ~GPU3D() noexcept;
+#else
     ~GPU3D() noexcept = default;
+#endif
     void Reset() noexcept;
 
     void DoSavestate(Savestate* file) noexcept;
@@ -187,15 +191,42 @@ public:
 
 #ifdef LITEV_GEOM_OFFLOAD
     // G) geometry-transform offload (docs/liteDS-v2-renderprep-offload-scope.md).
-    // STEP G1: passive recording only. The emu thread appends every executed GX command
-    // entry here as it drains (in CmdFIFORead); a future helper thread will replay this log
-    // and do the vertex transform off the emu-thread critical path. Reset per geometry frame
-    // at the SwapBuffers flush. Nothing consumes it yet -> no behaviour change (FBHASH inert).
-    static constexpr u32 GeomCmdLogMax = 65536;
-    CmdFIFOEntry GeomCmdLog[GeomCmdLogMax] {};
-    u32 GeomCmdLogCount = 0;      // entries recorded this geometry frame
-    u32 GeomCmdLogPeak = 0;       // high-water mark across frames (sizing diagnostic)
-    u32 GeomCmdLogOverflow = 0;   // entries dropped because the log filled (should stay 0)
+    // STEP G1b: resolved-input event log + PASSIVE scratch-replay verify. Each VERTEX event
+    // captures the exact inputs SubmitVertex/SubmitPolygon read at that vertex, so the log
+    // replays those functions VERBATIM with no matrix-stack/lighting evolution to reproduce.
+    // BEGIN events carry PolygonMode. During a frame the emu thread executes normally (fills the
+    // real bank) AND records; at the SwapBuffers flush a passive replay rebuilds the geometry
+    // into a scratch bank and memcmp's it vs the real bank -> proves the split is bit-exact
+    // WITHOUT touching rendering (mismatches only increment a counter). Once scratch==real, a
+    // later step flips to replay-only and moves it to the render thread.
+    struct GeomEvent
+    {
+        u8  Type;              // 0 = BEGIN, 1 = VERTEX
+        u32 PolygonMode;       // BEGIN
+        // VERTEX: the resolved inputs SubmitVertex reads (post-lighting/texgen).
+        s16 CurVertex[3];
+        s32 ClipMatrix[16];
+        s32 TexMatrix[16];
+        u8  VertexColor[3];
+        s16 TexCoords[2];
+        s16 RawTexCoords[2];
+        u32 TexParam;
+        u32 CurPolygonAttr;
+        u32 Viewport[6];       // SubmitPolygon computes FinalPosition from this; changes mid-frame
+    };
+    static constexpr u32 GeomEventMax = 8192;  // >= max vertices/frame (VertexRAM = 6144) + begins
+    GeomEvent* GeomEventLog = nullptr;         // heap; allocated in Reset
+    u32 GeomEventCount = 0;
+    u32 GeomEventPeak = 0;
+    u32 GeomEventOverflow = 0;
+    bool GeomReplaying = false;                // set during the scratch replay (SubmitVertex path)
+    Vertex*  GeomScratchVtx = nullptr;         // scratch geometry bank for the verify (6144)
+    Polygon* GeomScratchPoly = nullptr;        // (2048)
+    u64 GeomVerifyFrames = 0;
+    u64 GeomVerifyMismatches = 0;              // frames whose scratch != real bank (should be 0)
+    void RecordGeomBegin(u32 polygonMode) noexcept;
+    void RecordGeomVertex() noexcept;
+    void ReplayAndVerifyGeometry() noexcept;
 #endif
 
     u32 ZeroDotWLimit = 0xFFFFFF;

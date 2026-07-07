@@ -28,6 +28,11 @@ if (LITEV_PROFILE)
     target_compile_definitions(liteDS-headless PRIVATE LITEV_PROFILE=1)
 endif()
 
+# G1b geometry-offload verify output in the summary needs the flag on the harness too.
+if (LITEV_GEOM_OFFLOAD)
+    target_compile_definitions(liteDS-headless PRIVATE LITEV_GEOM_OFFLOAD=1)
+endif()
+
 # dlopen/dlsym for the Platform dynamic-library backend.
 if (NOT WIN32)
     target_link_libraries(liteDS-headless PRIVATE ${CMAKE_DL_LIBS})
