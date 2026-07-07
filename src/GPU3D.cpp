@@ -1996,6 +1996,15 @@ GPU3D::CmdFIFOEntry GPU3D::CmdFIFORead() noexcept
 
 void GPU3D::ExecuteCommand() noexcept
 {
+#ifdef LITEV_GXFIFO_THREADED
+    // DraStic #3 (backlog D.7 §3): batched threaded-code interpreter. Run()'s
+    // drain loop is hoisted in here — after each command the loop-tail below
+    // jumps back to this label, so a whole batch drains with ONE call, no
+    // per-command bl/ret or prologue/epilogue. Reuses the LITEV_GXFIFO_BATCH
+    // computed-goto tables below. Bit-exact (CmdFIFORead still fires per command
+    // in identical order, keeping DMA/IRQ/audio timing).
+gxfifo_threaded_top:
+#endif
     // M6.11: count GXFIFO commands (cheap add only; GPU3DNs times the whole
     // Run()/drain batch so per-command clock_gettime does not distort it).
     LITE_PROFILE_ADD(melonDS::LiteProfile::g_Frame.GXCommands);
@@ -2015,7 +2024,7 @@ void GPU3D::ExecuteCommand() noexcept
 
         /*printf("[GXS:%08X] 0x%02X,  0x%08X", GXStat, entry.Command, entry.Param);*/
 
-#ifdef LITEV_GXFIFO_BATCH
+#if defined(LITEV_GXFIFO_BATCH) || defined(LITEV_GXFIFO_THREADED)
         // liteDS-v2 gxfifo: DraStic-style threaded-code dispatch (teardown
         // docs/drastic-teardown/04-gpu3d-geometry.md §3). A flat 256-entry
         // label table indexed by the command byte replaces the switch's
@@ -2755,7 +2764,7 @@ void GPU3D::ExecuteCommand() noexcept
 
                 ExecParamCount = 0;
 
-#ifdef LITEV_GXFIFO_BATCH
+#if defined(LITEV_GXFIFO_BATCH) || defined(LITEV_GXFIFO_THREADED)
                 // liteDS-v2 gxfifo: threaded-code dispatch for the multi-param
                 // completion path (hot for VTX_16 / MTX_MULT). Statement-
                 // identical handlers to the #else switch; bit-exact.
@@ -3179,6 +3188,17 @@ void GPU3D::ExecuteCommand() noexcept
             }
         }
     }
+#ifdef LITEV_GXFIFO_THREADED
+    // Threaded loop-tail: instead of returning, re-run the whole ExecuteCommand
+    // body for the next queued command (mirrors Run()'s drain-loop condition).
+    // One call drains the batch -> no per-command bl/ret or prologue/epilogue.
+    if (CycleCount <= 0 && !CmdPIPE.IsEmpty())
+    {
+        if (NumPushPopCommands == 0) GXStat &= ~(1<<14);
+        if (NumTestCommands == 0)    GXStat &= ~(1<<0);
+        goto gxfifo_threaded_top;
+    }
+#endif
 }
 
 s32 GPU3D::CyclesToRunFor() const noexcept
@@ -3233,6 +3253,16 @@ void GPU3D::Run() noexcept
     }
     else
 #endif
+#ifdef LITEV_GXFIFO_THREADED
+    // DraStic #3: one ExecuteCommand() call drains the whole batch via its threaded
+    // loop-tail (no per-command call/ret). Equivalent to the while loop below.
+    if (CycleCount <= 0 && !CmdPIPE.IsEmpty())
+    {
+        if (NumPushPopCommands == 0) GXStat &= ~(1<<14);
+        if (NumTestCommands == 0)    GXStat &= ~(1<<0);
+        ExecuteCommand();
+    }
+#else
     if (CycleCount <= 0)
     {
         while (CycleCount <= 0 && !CmdPIPE.IsEmpty())
@@ -3243,6 +3273,7 @@ void GPU3D::Run() noexcept
             ExecuteCommand();
         }
     }
+#endif
 
     if (CycleCount <= 0 && CmdPIPE.IsEmpty())
     {
