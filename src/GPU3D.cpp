@@ -1048,17 +1048,39 @@ void GPU3D::RecordGeomVertex() noexcept
     memcpy(e.Viewport, Viewport, sizeof(Viewport));
 }
 
-// Passive verify (STEP G1b): replay the recorded event log into the scratch bank via the exact
-// SubmitVertex/SubmitPolygon, then compare to the real bank. Saves+restores every piece of state
-// the replay mutates, so the emu is untouched -> rendering is unaffected; a mismatch only bumps a
-// counter (tells us a captured field is missing, e.g. Viewport, without breaking anything).
-void GPU3D::ReplayAndVerifyGeometry() noexcept
+void GPU3D::SubmitPolygonTiming() noexcept
+{
+    // Approximate geometry-engine cycle model for the emu-inline path. The EXACT model needs the
+    // cull/clip result (post-clip vertex count + early-outs) which we've moved off-thread; here we
+    // assume the polygon passes. Not exact -> GXSTAT/timing/MP expendable (FPS-first). Keeps the
+    // engine plausibly busy so ARM9 pacing doesn't collapse to "geometry instant". Mirrors the
+    // cycle writes at SubmitPolygon top + the nverts==4/3 build block.
+    PolygonPipeline = 8;
+    VertexSlotCounter = 1;
+    VertexSlotsFree = 0b11110;
+    if (PolygonMode & 0x1)   // quad
+    {
+        PolygonPipeline = 35;
+        VertexSlotsFree = (PolygonMode & 0x2) ? 0b11100 : 0b11110;
+    }
+    else
+    {
+        PolygonPipeline = 26;
+        VertexSlotsFree = (PolygonMode & 0x2) ? 0b1000 : 0b1110;
+    }
+    LastStripPolygon = NULL;
+}
+
+// STEP G2: replay the recorded geometry log into the REAL bank via the exact SubmitVertex/
+// SubmitPolygon (the emu-inline path recorded but SKIPPED the transform/clip/store). Saves+restores
+// the geometry MATH state (matrices/attrs/assembly/cycle) so the emu's live state survives for the
+// next frame; the bank (NumVertices/NumPolygons + CurVertexRAM/CurPolygonRAM contents) is what the
+// replay FILLS, so it is deliberately NOT restored. Same-thread for now; G3 threads it.
+void GPU3D::ReplayGeometry() noexcept
 {
     GeomVerifyFrames++;
+    if (GeomEventCount > GeomEventPeak) GeomEventPeak = GeomEventCount;
 
-    Vertex*  saveCurVtx = CurVertexRAM;
-    Polygon* saveCurPoly = CurPolygonRAM;
-    u32 saveNumVertices = NumVertices, saveNumPolygons = NumPolygons, saveNumOpaque = NumOpaquePolygons;
     u32 saveVertexNum = VertexNum, saveVertexNumInPoly = VertexNumInPoly, saveNumConsec = NumConsecutivePolygons;
     Polygon* saveLastStrip = LastStripPolygon;
     u32 savePolygonMode = PolygonMode;
@@ -1074,8 +1096,7 @@ void GPU3D::ReplayAndVerifyGeometry() noexcept
     u32 saveTexParam = TexParam, saveCurPolyAttr = CurPolygonAttr;
     u32 saveViewport[6]; memcpy(saveViewport, Viewport, sizeof(saveViewport));
 
-    CurVertexRAM = GeomScratchVtx;
-    CurPolygonRAM = GeomScratchPoly;
+    // the frame's bank is empty (emu-inline skipped the store); the replay fills it from 0.
     NumVertices = 0; NumPolygons = 0; NumOpaquePolygons = 0;
     VertexNum = 0; VertexNumInPoly = 0; NumConsecutivePolygons = 0; LastStripPolygon = NULL;
 
@@ -1104,28 +1125,8 @@ void GPU3D::ReplayAndVerifyGeometry() noexcept
     }
     GeomReplaying = false;
 
-    // Compare the RENDERED geometry fields only. HiresPosition is written only in the hi-res GL
-    // path (not the software renderer), so in the SW-verify build it retains stale bank bytes that
-    // differ between the two reused banks -- a verify artifact, not a geometry difference. The
-    // replay reruns the exact SubmitPolygon, so under the GL renderer HiresPosition matches too.
-    bool mismatch = (NumVertices != saveNumVertices) || (NumPolygons != saveNumPolygons);
-    for (u32 i = 0; !mismatch && i < saveNumVertices; i++)
-    {
-        const Vertex& r = saveCurVtx[i]; const Vertex& s = GeomScratchVtx[i];
-        if (memcmp(r.Position, s.Position, sizeof(r.Position)) != 0 ||
-            memcmp(r.Color, s.Color, sizeof(r.Color)) != 0 ||
-            memcmp(r.TexCoords, s.TexCoords, sizeof(r.TexCoords)) != 0 ||
-            memcmp(r.FinalPosition, s.FinalPosition, sizeof(r.FinalPosition)) != 0 ||
-            memcmp(r.FinalColor, s.FinalColor, sizeof(r.FinalColor)) != 0 ||
-            r.Clipped != s.Clipped)
-        {
-            mismatch = true;
-        }
-    }
-    if (mismatch) GeomVerifyMismatches++;
-
-    CurVertexRAM = saveCurVtx; CurPolygonRAM = saveCurPoly;
-    NumVertices = saveNumVertices; NumPolygons = saveNumPolygons; NumOpaquePolygons = saveNumOpaque;
+    // restore MATH state -- but NOT NumVertices/NumPolygons/NumOpaquePolygons or the bank contents,
+    // which now hold the replay's output that the renderer consumes this frame.
     VertexNum = saveVertexNum; VertexNumInPoly = saveVertexNumInPoly; NumConsecutivePolygons = saveNumConsec;
     LastStripPolygon = saveLastStrip; PolygonMode = savePolygonMode;
     memcpy(TempVertexBuffer, saveTemp, sizeof(saveTemp));
@@ -1144,6 +1145,11 @@ void GPU3D::ReplayAndVerifyGeometry() noexcept
 
 void GPU3D::SubmitPolygon() noexcept
 {
+#ifdef LITEV_GEOM_OFFLOAD
+    // G2 OFFLOAD: emu-inline runs only an APPROXIMATE cycle model (the exact one needs the
+    // cull/clip result, which we've moved off-thread). FPS-first: MP/exactness expendable.
+    if (!GeomReplaying) { SubmitPolygonTiming(); return; }
+#endif
     Vertex clippedvertices[10];
     Vertex* reusedvertices[2];
     int clipstart = 0;
@@ -1553,17 +1559,19 @@ void GPU3D::SubmitVertex() noexcept
     Vertex* vertextrans = &TempVertexBuffer[VertexNumInPoly];
 
 #ifdef LITEV_GEOM_OFFLOAD
-    // Normal execution: resolve the clip matrix and RECORD the exact per-vertex inputs.
-    // Replay: ClipMatrix/TexMatrix/attrs are already loaded from the captured event, so skip
-    // UpdateClipMatrix (which would recompute from the live Proj/Pos matrices) and skip recording.
+    // G2 OFFLOAD: emu-inline records the resolved per-vertex inputs and SKIPS the transform+clip+
+    // store (the render-side replay does all of it off the critical path). Replay transforms using
+    // the captured ClipMatrix/attrs, so UpdateClipMatrix (recompute from live matrices) is skipped.
     if (!GeomReplaying)
     {
         UpdateClipMatrix();
         RecordGeomVertex();
     }
+    if (GeomReplaying)
 #else
     UpdateClipMatrix();
 #endif
+    {
 #if defined(LITEV_NEON_GEOMETRY) && defined(__ARM_NEON)
     // vertex[] components fit in s32 (CurVertex is s16, w = 0x1000), so the
     // widening 32x32->64 NEON multiply matches the scalar s64 products exactly.
@@ -1600,6 +1608,7 @@ void GPU3D::SubmitVertex() noexcept
     }
 
     vertextrans->Clipped = false;
+    }  // end transform block (offload: replay-only)
 
     VertexNum++;
     VertexNumInPoly++;
@@ -3269,6 +3278,16 @@ void GPU3D::VBlank() noexcept
 {
     if (GeometryEnabled)
     {
+#ifdef LITEV_GEOM_OFFLOAD
+        // STEP G2: the emu-inline path recorded the geometry but SKIPPED the transform/clip/store.
+        // Replay the log into the REAL bank NOW -- BEFORE the polygon sort below consumes
+        // NumPolygons/CurPolygonRAM. (G3 moves this replay onto a helper thread.)
+        if (FlushRequest)
+        {
+            ReplayGeometry();
+            GeomEventCount = 0;
+        }
+#endif
         if (RenderingEnabled)
         {
             if (FlushRequest)
@@ -3329,16 +3348,6 @@ void GPU3D::VBlank() noexcept
 
         if (FlushRequest)
         {
-#ifdef LITEV_GEOM_OFFLOAD
-            // STEP G1b: geometry finalized in CurVertexRAM/CurPolygonRAM. Passively replay the
-            // recorded event log into a scratch bank and compare -> proves the transform/clip/
-            // assembly are reproducible from the captured inputs, WITHOUT touching the real bank
-            // (rendering unaffected). Must run BEFORE the bank toggle below.
-            ReplayAndVerifyGeometry();
-            if (GeomEventCount > GeomEventPeak) GeomEventPeak = GeomEventCount;
-            GeomEventCount = 0;
-#endif
-
             CurRAMBank = CurRAMBank?0:1;
             CurVertexRAM = &VertexRAM[CurRAMBank ? 6144 : 0];
             CurPolygonRAM = &PolygonRAM[CurRAMBank ? 2048 : 0];

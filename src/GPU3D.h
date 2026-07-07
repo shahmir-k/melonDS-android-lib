@@ -226,7 +226,8 @@ public:
     u64 GeomVerifyMismatches = 0;              // frames whose scratch != real bank (should be 0)
     void RecordGeomBegin(u32 polygonMode) noexcept;
     void RecordGeomVertex() noexcept;
-    void ReplayAndVerifyGeometry() noexcept;
+    void SubmitPolygonTiming() noexcept;   // approximate cycle model for the emu-inline path
+    void ReplayGeometry() noexcept;        // replay the log into the REAL bank (fills geometry)
 #endif
 
     u32 ZeroDotWLimit = 0xFFFFFF;
