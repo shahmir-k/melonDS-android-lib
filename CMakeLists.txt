@@ -460,6 +460,17 @@ if (LITEV_GL_STATE_CACHE)
     add_compile_definitions(LITEV_GL_STATE_CACHE=1)
 endif()
 
+# Instant ARM9 hardware divider/sqrt: compute the DIV/SQRT result at register-
+# write time and skip the scheduled completion event. In-race profiling showed
+# Event_Div is the single largest scheduler load (~1233 dispatches/frame, 42% of
+# all events) plus Sqrt (~80/frame); eliminating them cuts scheduler/event-
+# dispatch overhead and coarsens slicing. The busy bit is never observed set
+# (result ready same-cycle) — a deliberate ARM9 timing relaxation (FPS-first).
+option(LITEV_INSTANT_DIVSQRT "Instant ARM9 divider/sqrt: compute on write, skip Event_Div/Event_Sqrt" OFF)
+if (LITEV_INSTANT_DIVSQRT)
+    add_compile_definitions(LITEV_INSTANT_DIVSQRT=1)
+endif()
+
 # R4 (Appendix D.7; docs/r4-render-thread-design.md): render-thread offload seam.
 # Compiles in the capture/submit phase split so the Android app glue can later
 # move GL renderer submission off the emulation thread (RunFrame produces a

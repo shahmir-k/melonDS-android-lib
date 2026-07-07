@@ -34,6 +34,11 @@ struct FrameCounters
     std::atomic<uint64_t> SchedulerIterations{0};
     std::atomic<uint64_t> SchedulerEventsFired{0};
 
+    // Per-event-type dispatch counts (indexed by NDS Event_* id). Sizing the
+    // scheduler bucket: which event floods RunSystem's 2935 dispatches/frame
+    // (Div/Sqrt hardware units? LCD scanline? timers?). 32 >= Event_MAX.
+    std::atomic<uint64_t> SchedEventByType[32]{};
+
     // CPU execution time (nanoseconds within the frame)
     std::atomic<uint64_t> ARM9ExecNs{0};
     std::atomic<uint64_t> ARM7ExecNs{0};
@@ -139,6 +144,7 @@ struct FrameCounters
     {
         SchedulerIterations.store(0, std::memory_order_relaxed);
         SchedulerEventsFired.store(0, std::memory_order_relaxed);
+        for (auto& c : SchedEventByType) c.store(0, std::memory_order_relaxed);
         ARM9ExecNs.store(0, std::memory_order_relaxed);
         ARM7ExecNs.store(0, std::memory_order_relaxed);
         ARM7WaitNs.store(0, std::memory_order_relaxed);

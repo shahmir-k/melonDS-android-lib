@@ -111,12 +111,22 @@ config_flags() {
       # M6.11 step 3: the app-matching `full` stack + integer-NEON GPU3D geometry.
       # A/B against `full` isolates the LITEV_NEON_GEOMETRY delta on the A55.
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_NEON_GEOMETRY=ON" ;;
+    full-instantdiv)
+      # Instant ARM9 divider/sqrt on top of `full`. A/B against `full` isolates
+      # the LITEV_INSTANT_DIVSQRT delta — removing ~1233 Event_Div + ~80 Event_Sqrt
+      # dispatches/frame (the single largest in-race scheduler event source).
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_INSTANT_DIVSQRT=ON" ;;
     full-relaxed9)
       # M6.12 / plan §8: the app-matching `full-neon` stack + DraStic-style flat
       # ARM9 timing. A/B against `full-neon` isolates the LITEV_RELAXED_ARM9_TIMING
       # delta on the A55 (targets the 7.55ms ARM9 bucket incl. GXFIFO write timing).
       # ARM7 timing stays exact (WiFi invariant). Deliberate semantic timing change.
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_NEON_GEOMETRY=ON -DLITEV_RELAXED_ARM9_TIMING=ON" ;;
+    full-max)
+      # Max emu-core stack: full + geometry-NEON + relaxed-ARM9 + instant-div/sqrt.
+      # The cumulative ceiling for the emu-core grind (2026-07-07); A/B each delta
+      # against full to attribute the gains.
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_NEON_GEOMETRY=ON -DLITEV_RELAXED_ARM9_TIMING=ON -DLITEV_INSTANT_DIVSQRT=ON" ;;
     *)
       echo "error: unknown config '$1'" >&2; return 1 ;;
   esac

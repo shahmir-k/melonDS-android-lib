@@ -487,6 +487,7 @@ int main(int argc, char** argv)
                        runFrameNs=0, dma9Ns=0, dma7Ns=0, gxCommands=0, lightingCalls=0,
                        arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0,
                        memBlock9HelperCalls=0, memRead9U32HelperCalls=0; } profTotals;
+    uint64_t schedByType[32] = {0};
     // Frames actually folded into profTotals. When --bench-window is set we
     // only accumulate frames inside [start,end] so the M6.11 decomposition is
     // window-scoped (per-frame averages divide by this). Without a window it
@@ -535,6 +536,8 @@ int main(int argc, char** argv)
             profTotals.dispatchOnlyExits+= g_Frame.DispatchOnlyExits.load(std::memory_order_relaxed);
             profTotals.schedIterations  += g_Frame.SchedulerIterations.load(std::memory_order_relaxed);
             profTotals.schedEventsFired += g_Frame.SchedulerEventsFired.load(std::memory_order_relaxed);
+            for (int e = 0; e < 32; e++)
+                schedByType[e] += g_Frame.SchedEventByType[e].load(std::memory_order_relaxed);
             profTotals.arm9ExecNs   += g_Frame.ARM9ExecNs.load(std::memory_order_relaxed);
             profTotals.arm7ExecNs   += g_Frame.ARM7ExecNs.load(std::memory_order_relaxed);
             profTotals.gpu3dNs      += g_Frame.GPU3DNs.load(std::memory_order_relaxed);
@@ -700,6 +703,28 @@ int main(int argc, char** argv)
         printf("dma_share_pct:   %.2f\n", 100.0 * dmaNs / denom);
         printf("system_share_pct:%.2f\n", 100.0 * profTotals.runSystemNs / denom);
         printf("residual_share_pct: %.2f\n", 100.0 * residualNs / denom);
+
+        // Per-event-type scheduler dispatch breakdown: which event floods
+        // RunSystem. Names track the NDS Event_* enum order.
+        {
+            static const char* kEvtNames[] = {
+                "LCD","SPU","Wifi","RTC","DisplayFIFO",
+                "CartROMTransfer9","CartSPITransfer9","CartROMTransfer7","CartSPITransfer7",
+                "SPITransfer","Div","Sqrt","Timer9","Timer7",
+                "DSi_SDMMC","DSi_SDIO","DSi_NWifi","DSi_CamIRQ","DSi_CamTransfer",
+                "DSi_DSP","DSi_DSPHLE","DSi_Cart2ROM9","DSi_Cart2SPI9","DSi_Cart2ROM7",
+                "DSi_Cart2SPI7","DSi_Cart1Power","DSi_Cart2Power"
+            };
+            const int nNames = (int)(sizeof(kEvtNames)/sizeof(kEvtNames[0]));
+            for (int e = 0; e < 32; e++)
+            {
+                if (!schedByType[e]) continue;
+                printf("evt[%02d]_%-16s per_frame=%8.1f  total=%llu\n",
+                       e, (e < nNames ? kEvtNames[e] : "?"),
+                       (double)schedByType[e] / pf,
+                       (unsigned long long)schedByType[e]);
+            }
+        }
 
         printf("arm9_idle_hits:  %llu\n", (unsigned long long)profTotals.arm9IdleHits);
         printf("arm7_idle_hits:  %llu\n", (unsigned long long)profTotals.arm7IdleHits);

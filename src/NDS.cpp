@@ -940,6 +940,7 @@ void NDS::RunSystem(u64 timestamp)
                 SchedListMask &= ~(1<<i);
 
                 LITE_PROFILE_ADD(LiteProfile::g_Frame.SchedulerEventsFired);
+                LITE_PROFILE_ADD(LiteProfile::g_Frame.SchedEventByType[i]);
 
                 EventFunc func = evt.Funcs[evt.FuncID];
                 func(evt.That, evt.Param);
@@ -2014,9 +2015,17 @@ void NDS::DivDone(u32 param)
 
 void NDS::StartDiv()
 {
+#ifdef LITEV_INSTANT_DIVSQRT
+    // Instant divide: compute now and skip the Event_Div completion. DivDone
+    // clears the busy bit (0x8000) and fills the result registers, so the
+    // result is ready same-cycle and busy is never observed set. Removes the
+    // largest in-race scheduler event source (~1233 Event_Div/frame).
+    DivDone(0);
+#else
     CancelEvent(Event_Div);
     DivCnt |= 0x8000;
     ScheduleEvent(Event_Div, false, ((DivCnt&0x3)==0) ? 18:34, 0, 0);
+#endif
 }
 
 // http://stackoverflow.com/questions/1100090/looking-for-an-efficient-integer-square-root-algorithm-for-arm-thumb2
@@ -2062,9 +2071,15 @@ void NDS::SqrtDone(u32 param)
 
 void NDS::StartSqrt()
 {
+#ifdef LITEV_INSTANT_DIVSQRT
+    // Instant sqrt: compute now, skip Event_Sqrt. SqrtDone clears the busy bit
+    // (0x8000) and fills SqrtRes; result ready same-cycle.
+    SqrtDone(0);
+#else
     CancelEvent(Event_Sqrt);
     SqrtCnt |= 0x8000;
     ScheduleEvent(Event_Sqrt, false, 13, 0, 0);
+#endif
 }
 
 
