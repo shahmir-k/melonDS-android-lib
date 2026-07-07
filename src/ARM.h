@@ -230,20 +230,17 @@ public:
     // CyclesBudget) so it cannot disturb their hard-coded/static_asserted offsets.
     u64* FastMemPageTable = nullptr;
 
-    // STORE-side branchless page tables (liteDS-v2). Loads and stores map
-    // DIFFERENTLY: a page is store-eligible (non-zero FastMemStoreTable entry =
-    // host-pointer delta) ONLY when a raw host store there is byte-for-byte identical
-    // to the exact SlowWrite helper -- i.e. plain writable flat RAM (MainRAM/DTCM/
-    // SharedWRAM/WRAM7). NWRAM is deliberately EXCLUDED (a DSi NWRAM bank write mirrors
-    // into every mapped part, so a single raw store is NOT equivalent); IO/VRAM/ITCM/
-    // BIOS are excluded by not being fastmem-compatible. FastMemStoreCodeTable holds,
-    // per store-eligible page, a pointer to that page's first AddressRange in the JIT
-    // SMC bitmap (or 0 for DTCM, which is never executable), so the JIT can inline the
-    // exact CheckAndInvalidate bit test after the raw store and divert to the exact
-    // SlowWrite (which re-stores idempotently + invalidates) only when code is present.
+    // STORE-side branchless page table (liteDS-v2, DraStic-faithful). Loads and stores
+    // map DIFFERENTLY, so this is a separate table from FastMemPageTable. A non-zero entry
+    // (host-pointer delta) means the page is BOTH (a) plain writable flat RAM where a raw
+    // host store is byte-identical to the exact SlowWrite -- MainRAM or DTCM -- AND (b)
+    // currently code-free. The SMC decision is FOLDED into the entry: a page holding
+    // compiled code has its entry zeroed (ARMJIT_Memory::PunchStoreCode) so its stores hit
+    // the exact SlowWrite (which invalidates); the entry re-fastens once the code is
+    // invalidated. SharedWRAM/WRAM7 (small) and NWRAM (a DSi bank write mirrors into every
+    // mapped part) stay on the exact SlowWrite; IO/VRAM/ITCM/BIOS are not fastmem-compatible.
 #ifdef LITEV_MEM_SWTABLE_STORE
     u64* FastMemStoreTable = nullptr;
-    u64* FastMemStoreCodeTable = nullptr;
 #endif
 #endif
 

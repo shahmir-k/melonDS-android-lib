@@ -142,8 +142,6 @@ NDS::NDS(NDSArgs&& args, int type, void* userdata) noexcept :
 #ifdef LITEV_MEM_SWTABLE_STORE
     ARM9.FastMemStoreTable = JIT.Memory.GetFastMemStoreTable(0);
     ARM7.FastMemStoreTable = JIT.Memory.GetFastMemStoreTable(1);
-    ARM9.FastMemStoreCodeTable = JIT.Memory.GetFastMemStoreCodeTable(0);
-    ARM7.FastMemStoreCodeTable = JIT.Memory.GetFastMemStoreCodeTable(1);
 #endif
 #endif
 }

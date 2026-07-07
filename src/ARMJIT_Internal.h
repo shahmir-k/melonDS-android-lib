@@ -107,16 +107,10 @@ template <bool Write, int ConsoleType> void SlowBlockTransfer7(u32 addr, u64* da
 // DraStic software page-table load resolvers (install page delta, then exact read).
 template <typename T, int ConsoleType> T SlowRead9SW(u32 addr, ARMv5* cpu);
 template <typename T, int ConsoleType> T SlowRead7SW(u32 addr);
-// Store resolvers (install page delta, then exact write). Emitted as the store slow
-// path: covers not-yet-installed pages AND the SMC "code present" case (where the JIT
-// already did the raw store; the exact SlowWrite here re-stores idempotently and runs
-// the real invalidation). Installing on a store miss is bit-exact -- InstallFastEntry
-// is a pure host-pointer cache, and store-ineligible regions (NWRAM/IO/...) simply get
-// no store-table entry and stay slow forever.
-#ifdef LITEV_MEM_SWTABLE_STORE
-template <typename T, int ConsoleType> void SlowWrite9SW(u32 addr, ARMv5* cpu, u32 val);
-template <typename T, int ConsoleType> void SlowWrite7SW(u32 addr, u32 val);
-#endif
+// The STORE side has no dedicated *SW resolver: its slow path calls the exact
+// SlowWrite9/SlowWrite7 directly. The store table is populated by load misses (SlowRead*SW
+// installs BOTH tables) plus the code-gain punch (PunchStoreCode), so a per-slow-store
+// install is redundant (and was the measured A55 regression; plan D.7 addendum 28).
 #endif
 
 }

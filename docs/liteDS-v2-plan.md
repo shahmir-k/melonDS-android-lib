@@ -2119,3 +2119,66 @@ preserving execution order) is separable but a massive timing-fragile rewrite of
 CmdFIFO/CmdPIPE ring buffers + savestate format for an evidence-predicted-marginal win
 (NEON_GEOMETRY, same dispatch-dominated 271ns/cmd target, already closed-negative ~1%).
 Re-openable only as that storage-only locality experiment.
+
+### D.7 addendum 28 — ★ STORE-side sw-table RETRY (DraStic-faithful) lands: −4.0% ARM9 on device, bit-exact ★
+
+The store side was CLOSED-NEGATIVE in addendum 27 (+5–6% ARM9). Per the STANDING PRINCIPLE
+(never give up on a DraStic lever; assume OUR impl is wrong), it was rebuilt DraStic-faithfully
+and now WINS: **−4.0% ARM9 on device (cooled, interleaved), bit-exact, MP-safe.** DraStic proved
+the technique; our two prior impls were wrong. Landed on `liteDS-v2`, default OFF behind
+`LITEV_MEM_SWTABLE_STORE` (requires `LITEV_MEM_SWTABLE`).
+
+TWO impl bugs, fixed in two steps:
+
+STEP A — kill the dependent-load chain (addendum-27 diagnosis §3d bugs 1–3). The old store fast
+path inlined a ~4-deep dependent-load chain per store: `LDR base,[RCPU,StoreTable]` +
+`LDR delta` + `LDR base,[RCPU,StoreCodeTable]` + `LDR codeBase` + `LDR AddressRange.Code` +
+bit test. Replaced with a path the SAME shape as the WINNING load path — one context load, one
+indexed load, one raw store — by FOLDING the SMC decision into the delta entry:
+- ONE store table (dropped the 2nd "code base" table). `FastMemStoreTable[page] != 0` ⟺ the page
+  is store-eligible flat RAM (MainRAM or DTCM) AND its enclosing code-protection page is code-free.
+- Code-gain punch: `ARMJIT_Memory::PunchStoreCode(region, localOffset)` zeroes every store entry
+  aliasing a just-compiled MainRAM page (all guest mirrors × both CPUs; over-punch is safe), hooked
+  at the single empty→code transition in `CompileBlock` (ARMJIT.cpp, alongside SetCodeProtection).
+  DTCM is never executable (`CodeMemRegions[DTCM]==NULL`) so it never needs punching. Literals are
+  covered for free: literal pages are folded into a block's addressRanges (ARMJIT.cpp), so they are
+  Code-protected and punched like code.
+- Store-eligible restricted to **MainRAM + DTCM** (the hot store targets). SharedWRAM/WRAM7 dropped
+  from store-fastmem (small; avoids their mirror/WRAMCNT bookkeeping); NWRAM excluded (a DSi bank
+  write mirrors into every mapped part). All stay on the exact SlowWrite.
+Result after STEP A: **+1.0% ARM9** (S vs loads-only) — regression nearly gone but not a win.
+
+STEP B — the residual was the per-slow-store `InstallFastEntry`. Every store that MISSED the fast
+path (SMC/ineligible) called `SlowWrite*SW`, which ran `InstallFastEntry`
+(ClassifyAddress + GetMirrorLocation + PageContainsCode) — work the loads-only build's plain
+`BL SlowWrite9` never did. But the store table is ALREADY populated as a side effect of load misses
+(`SlowRead*SW` installs BOTH tables) plus the code-gain punch, so per-slow-store install is
+redundant. The store slow path now calls the exact `SlowWrite9/SlowWrite7` directly (no install;
+the `SlowWrite*SW` store wrappers were deleted). Isolated cost of the redundant install: ~5% ARM9.
+
+DEVICE PERF (RG DS 4×A55, in-race 8-kart scene, savestate slot-2, window 60:960, cooled <48 °C,
+interleaved, all bit-exact final_top=5d5920a4…), arm9_exec_ns/frame mean. Isolating 3-way A/B
+(loads-only / store STEP-A / store STEP-A+B, one session):
+- loads-only (swtable-pin)                    7,106,734 ns  (baseline)
+- store, STEP A only (per-store install)      7,178,769 ns  (+1.0%)
+- store, STEP A+B (no per-store install)  **6,819,346 ns  (−4.0%)**
+Final shipped-source re-confirm (loads-only vs store, separate session): 7,093,937 → 6,875,866 =
+**−3.1%**. Net store-side win **~−3 to −4% ARM9** (session thermal variance), store faster every rep.
+window_fps corroborates (loads 24.99 → store 25.21). Stacks on the loads-only −9.67%: the unified
+fast-memory path (loads + stores) is now ~−12–13% ARM9 vs fault-based fastmem.
+
+GATE (bit-exact, orchestrator-verified, individual commands):
+- EXACT-timing host build (no EVENT_SLICES) + STORE passes ALL committed exact goldens:
+  armwrestler-arm-600 + rockwrestler-600 (SMC torture ROMs — the decisive SMC-fold test),
+  shrek-600, shrek-race-3400 (3400 frames of live gameplay: main-RAM stores + SMC + literals).
+- ES build: store == loads-only byte-for-byte (both diverge identically from the plain-`es`
+  shrek-600-eventslices golden, which predates the coupled config — a pre-existing incomparability,
+  NOT the store change). Direct A/B proof the store path is inert under EVENT_SLICES.
+- Device: final_top/final_bot identical across loads / store, every rep.
+- flag-OFF byte-identical by construction (all diffs behind `#ifdef LITEV_MEM_SWTABLE_STORE`).
+
+Open follow-on (not needed for the win): a code→free refasten hook (ARMJIT.cpp InvalidateByAddr)
+could re-fasten store entries for ex-code pages whose LOAD entry is already cached (so no load
+miss re-installs them). The −4.0% is measured WITHOUT it; it can only help scenes with heavy code
+churn. Note: DraStic DOES install on its slow store path, but its install is cheap (part of the
+MMIO region walk it already needs); relying on load-install is the melonDS-specific adaptation.

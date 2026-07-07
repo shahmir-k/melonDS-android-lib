@@ -162,26 +162,11 @@ T SlowRead7SW(u32 addr)
     return SlowRead7<T, ConsoleType>(addr);
 }
 
-#ifdef LITEV_MEM_SWTABLE_STORE
-// Store resolver: install the page (populates both load and store tables), then do the
-// EXACT SlowWrite. When reached via the SMC "code present" fall-through the JIT has
-// already written the raw bytes; SlowWrite writes the same T-sized value to the same
-// aligned address (idempotent for RAM) and performs the real CheckAndInvalidate, so the
-// end state is byte-identical to taking the slow path from the start.
-template <typename T, int ConsoleType>
-void SlowWrite9SW(u32 addr, ARMv5* cpu, u32 val)
-{
-    cpu->NDS.JIT.Memory.InstallFastEntry(0, addr);
-    SlowWrite9<T, ConsoleType>(addr, cpu, val);
-}
-
-template <typename T, int ConsoleType>
-void SlowWrite7SW(u32 addr, u32 val)
-{
-    NDS::Current->JIT.Memory.InstallFastEntry(1, addr);
-    SlowWrite7<T, ConsoleType>(addr, val);
-}
-#endif
+// NOTE: the STORE side has no dedicated *SW resolver. Its slow path calls the exact
+// SlowWrite9/SlowWrite7 directly and does NOT install a store-table entry: the store table
+// is populated as a side effect of load misses (SlowRead*SW installs BOTH tables) plus the
+// code-gain punch (ARMJIT_Memory::PunchStoreCode), so a per-slow-store install is redundant
+// -- and its cost was the measured A55 regression (plan D.7 addendum 28).
 #endif
 
 template <typename T, int ConsoleType>
@@ -277,25 +262,13 @@ void SlowBlockTransfer7(u32 addr, u64* data, u32 num)
     template void SlowBlockTransfer7<true, consoleType>(u32 addr, u64* data, u32 num); \
 
 #ifdef LITEV_MEM_SWTABLE
-#ifdef LITEV_MEM_SWTABLE_STORE
-#define INSTANTIATE_SWTABLE_STORE(consoleType) \
-    template void SlowWrite9SW<u32, consoleType>(u32, ARMv5*, u32); \
-    template void SlowWrite9SW<u16, consoleType>(u32, ARMv5*, u32); \
-    template void SlowWrite9SW<u8,  consoleType>(u32, ARMv5*, u32); \
-    template void SlowWrite7SW<u32, consoleType>(u32, u32); \
-    template void SlowWrite7SW<u16, consoleType>(u32, u32); \
-    template void SlowWrite7SW<u8,  consoleType>(u32, u32);
-#else
-#define INSTANTIATE_SWTABLE_STORE(consoleType)
-#endif
 #define INSTANTIATE_SWTABLE(consoleType) \
     template u32 SlowRead9SW<u32, consoleType>(u32, ARMv5*); \
     template u16 SlowRead9SW<u16, consoleType>(u32, ARMv5*); \
     template u8  SlowRead9SW<u8,  consoleType>(u32, ARMv5*); \
     template u32 SlowRead7SW<u32, consoleType>(u32); \
     template u16 SlowRead7SW<u16, consoleType>(u32); \
-    template u8  SlowRead7SW<u8,  consoleType>(u32); \
-    INSTANTIATE_SWTABLE_STORE(consoleType)
+    template u8  SlowRead7SW<u8,  consoleType>(u32);
 #else
 #define INSTANTIATE_SWTABLE(consoleType)
 #endif
@@ -1182,7 +1155,15 @@ void ARMJIT::CompileBlock(ARM* cpu) noexcept
         AddressRange* region = CodeMemRegions[addressRanges[j] >> 27];
 
         if (!PageContainsCode(&region[(addressRanges[j] & 0x7FFF000 & ~(Memory.PageSize - 1)) / 512], Memory.PageSize))
+        {
             Memory.SetCodeProtection(addressRanges[j] >> 27, addressRanges[j] & 0x7FFFFFF, true);
+#ifdef LITEV_MEM_SWTABLE_STORE
+            // Empty->code transition: revoke store-fastmem for this page so its stores
+            // take the exact SlowWrite (which invalidates). The entry re-fastens lazily
+            // once the code is invalidated. (No-op for non-MainRAM regions.)
+            Memory.PunchStoreCode(addressRanges[j] >> 27, addressRanges[j] & 0x7FFFFFF);
+#endif
+        }
 
         AddressRange* range = &region[(addressRanges[j] & 0x7FFFFFF) / 512];
         range->Code |= addressMasks[j];
