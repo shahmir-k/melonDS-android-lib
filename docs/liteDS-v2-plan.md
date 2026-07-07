@@ -2083,7 +2083,26 @@ kept for the record / future re-aim (e.g. packing delta+codeBase into one 16-byt
 halve the context loads). Re-gated after the split: loads-only and loads+stores BOTH pass all
 exact torture goldens; flag-OFF byte-identical. This is the honest outcome — implemented
 bit-exact, measured on the target core, found net-negative, gated OFF, loads-only win intact.
-Store-side commit 8ef81c3d (loads+stores under one flag) → flag-split follow-up commit.
+Store-side commit 8ef81c3d (loads+stores under one flag) → flag-split follow-up 5cd17c5e.
+
+ORCHESTRATOR-INDEPENDENT PERF VERIFICATION (not trusting the agent's number — the §5
+discipline): re-ran the agent's OWN device binaries myself (liteDS-B-loads vs liteDS-C-stores,
+cooled): B 7.002ms vs C 7.363ms ARM9/frame (+5.16%), window_fps 25.27 → 24.88 — reproduces
+the agent's B/C. Also built a CLEAN same-commit A/B (HEAD, only the LITEV_MEM_SWTABLE_STORE
+flag differs, eliminating any ae1a040e-vs-HEAD question): loads-only 7.162ms vs loads+stores
+7.400ms (+3.32%), window_fps 25.03 → 24.88. Direction unanimous across all measurements
+(agent 3/3 + two orchestrator pairs on three binary pairs): the store side is a real ARM9
+regression (magnitude ~+3-6% with thermal state), window_fps always drops. Gate-off confirmed.
+
+CORE-CAMPAIGN STATUS after this session: the shippable core is UNCHANGED from the handoff's
+measured state — loads-only sw-table + widened register pin (−9.67% ARM9 vs fault-fastmem),
+already landed pre-session at ae1a040e. This session added the store side (the sole remaining
+core lever), proved it bit-exact, measured it net-negative on the A55, and gated it OFF. Every
+other DraStic-teardown optimization is landed-or-closed-with-code-level-evidence (GXFIFO drain
+/ DMA chunk = timing-incompatible with melonDS's cycle-metered model; idle-loop / palette-COW =
+moot for the target). So the end-to-end app FPS would reconfirm the handoff's ~31fps heavy-scene
+ceiling (the shippable core did not change) — the honest conclusion is that the core campaign is
+COMPLETE and the felt-FPS wall is the emulation/thermal ceiling, exactly as §3 assessed.
 
 GXFIFO twin-stream de-interleaved batch drain (addendum-19 item 3, remaining 2/3) — CLOSED.
 Split verdict: the branchless jump-table DISPATCH (the safe, valuable third) is already
