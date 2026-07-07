@@ -185,6 +185,19 @@ public:
 
     FIFO<CmdFIFOEntry, 64> CmdStallQueue {};
 
+#ifdef LITEV_GEOM_OFFLOAD
+    // G) geometry-transform offload (docs/liteDS-v2-renderprep-offload-scope.md).
+    // STEP G1: passive recording only. The emu thread appends every executed GX command
+    // entry here as it drains (in CmdFIFORead); a future helper thread will replay this log
+    // and do the vertex transform off the emu-thread critical path. Reset per geometry frame
+    // at the SwapBuffers flush. Nothing consumes it yet -> no behaviour change (FBHASH inert).
+    static constexpr u32 GeomCmdLogMax = 65536;
+    CmdFIFOEntry GeomCmdLog[GeomCmdLogMax] {};
+    u32 GeomCmdLogCount = 0;      // entries recorded this geometry frame
+    u32 GeomCmdLogPeak = 0;       // high-water mark across frames (sizing diagnostic)
+    u32 GeomCmdLogOverflow = 0;   // entries dropped because the log filled (should stay 0)
+#endif
+
     u32 ZeroDotWLimit = 0xFFFFFF;
 
     u32 GXStat = 0;

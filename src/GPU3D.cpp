@@ -1815,6 +1815,16 @@ GPU3D::CmdFIFOEntry GPU3D::CmdFIFORead() noexcept
 {
     CmdFIFOEntry ret = CmdPIPE.Read();
 
+#ifdef LITEV_GEOM_OFFLOAD
+    // STEP G1: passively record the executed command stream (command + params flow through
+    // here in order). Nothing replays it yet. A memcpy-cheap append; << the transform it will
+    // eventually move off-thread.
+    if (GeomCmdLogCount < GeomCmdLogMax)
+        GeomCmdLog[GeomCmdLogCount++] = ret;
+    else
+        GeomCmdLogOverflow++;
+#endif
+
     if (CmdPIPE.Level() <= 2)
     {
         if (!CmdFIFO.IsEmpty())
@@ -3185,6 +3195,14 @@ void GPU3D::VBlank() noexcept
             NumOpaquePolygons = 0;
 
             FlushRequest = 0;
+
+#ifdef LITEV_GEOM_OFFLOAD
+            // STEP G1: geometry frame committed. Record the high-water mark, then reset the
+            // command log so the next frame's stream accumulates from empty. (A future step
+            // hands this frame's log to the render thread here instead of discarding it.)
+            if (GeomCmdLogCount > GeomCmdLogPeak) GeomCmdLogPeak = GeomCmdLogCount;
+            GeomCmdLogCount = 0;
+#endif
         }
     }
 }

@@ -407,6 +407,17 @@ if (LITEV_RENDER_THREAD)
     add_compile_definitions(LITEV_RENDER_THREAD=1)
 endif()
 
+# G) Geometry-transform off-core offload (docs/liteDS-v2-renderprep-offload-scope.md).
+# Moves the GPU3D vertex transform (SubmitVertex) off the emu-thread critical path: the emu
+# thread keeps the exact cycle/timing model + GXSTAT + test commands (MP-safe by construction)
+# and RECORDS the GX command stream; a helper (render) thread replays it and does the transform.
+# STEP G1 (current): flag + passive command-stream recording only, no behaviour change.
+# Default OFF; flag-OFF is byte-identical (all changes behind #ifdef LITEV_GEOM_OFFLOAD).
+option(LITEV_GEOM_OFFLOAD "G: offload GPU3D geometry transform off the emu thread (record/replay; WIP)" OFF)
+if (LITEV_GEOM_OFFLOAD)
+    add_compile_definitions(LITEV_GEOM_OFFLOAD=1)
+endif()
+
 add_subdirectory(src)
 
 # --- liteDS-v2 core-fix: export LITEV_* configuration as a PUBLIC usage requirement ---
