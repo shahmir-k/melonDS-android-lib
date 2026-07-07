@@ -70,6 +70,44 @@ changes; the emulated result is identical (same fixed-point code, just on anothe
   params, transform is matrix math + clip). **MP: safe by construction (timing model untouched).**
 - Gate (FPS-first): boots + playable (user) + FBHASH threaded==serial + faster cooled on device.
 
+## G1b — executable spec (the transform/clip/assembly split)
+
+Grounded in a full read of `SubmitVertex` (GPU3D.cpp:1414) + `SubmitPolygon` (:1009): the transform,
+clip, and polygon-assembly (triangle/quad/strip/fan via `TempVertexBuffer`, `NumConsecutivePolygons`,
+`LastStripPolygon`) are **coupled** and read a large evolving state set. So the replay must rerun
+`SubmitVertex`+`SubmitPolygon` verbatim — the safe way is to **capture resolved inputs** and reuse
+the existing functions, not reimplement them.
+
+### Recording (emu thread, passive first)
+Emit a typed event log (replace G1's raw `GeomCmdLog`):
+- `BEGIN{polygonMode}` — at the 0x40 handler. NOTE: **two copies** (gxf_40 @2180 BATCH, case 0x40
+  @2522 non-BATCH) — factor a `RecordBegin()` helper called from both.
+- `VERTEX{ CurVertex[3], ClipMatrix[16], TexMatrix[16], VertexColor[3], TexCoords[2],
+  RawTexCoords[2], TexParam, CurPolygonAttr }` — captured **inside `SubmitVertex` after
+  `UpdateClipMatrix()`** (so ClipMatrix is resolved). Capturing matrices per-vertex is fat (~150B)
+  but avoids matrix-stack replay entirely; optimize to on-change later.
+- Verify completeness against everything `SubmitPolygon` also reads (Viewport, clip planes, the
+  poly-attr) — capture any missing field. This is the one place to be exhaustive.
+
+### Replay (same thread first = RIR; then render thread)
+Add a replay entry that, per event: for VERTEX, load the captured ClipMatrix/TexMatrix/attrs into the
+GPU3D members (or a `bool Replaying` that makes `SubmitVertex` read a passed-in matrix instead of
+`UpdateClipMatrix()`), then call the existing `SubmitVertex()`; for BEGIN, set PolygonMode + reset
+assembly. Bit-exact by construction (same functions, same inputs).
+
+### Verification (safe, cannot corrupt output)
+**Passive scratch-replay:** during the frame, execute normally (real bank) AND record. At flush,
+save the geometry members + redirect `CurVertexRAM`/`CurPolygonRAM` to a **scratch bank**, replay the
+log into scratch, `memcmp` scratch vs the real bank, log any mismatch, restore. Rendering is
+untouched — mismatches only print. Iterate the captured-field set until scratch == real bit-exact on
+shrek-race-3400. ONLY THEN flip to replay-only (emu skips inline `SubmitVertex`, replay fills the
+real bank), then move replay to the R4 render thread (G3) + wire the depth-1 handoff (G4).
+
+### Why this is a fresh focused unit, not a tail-of-session slam
+It touches the emulator's most complex, cycle-accurate subsystem; a missed state field = subtle
+geometry corruption. The passive-scratch method makes it safe + iterable, but it's inherently
+multi-step with FBHASH verification at each flip. Execute it with fresh context.
+
 ## T — 2D per-scanline capture offload (secondary)
 
 R4 design line 527 already flags this: "2D compositor needs a capture/submit split." Today the
