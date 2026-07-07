@@ -16,6 +16,8 @@
 #include <optional>
 #include <thread>
 #include <atomic>
+#include <chrono>
+#include <algorithm>
 
 #include "Args.h"
 #include "NDS.h"
@@ -541,10 +543,14 @@ int VerifyInterpConverge(const TraceRunConfig& cfg, int frames)
 // non-MP ROM (e.g. shrek) nothing associates and the run behaves like Phase 0 --
 // proving the MP wiring is inert until a game actually uses wireless.
 // ---------------------------------------------------------------------------
-int MPTest(const TraceRunConfig& cfg, int frames)
+int MPTest(const TraceRunConfig& cfg, int frames,
+           const std::string& script0, const std::string& script1)
 {
     TraceRunConfig c0 = cfg; c0.instanceTag = "mp0";
     TraceRunConfig c1 = cfg; c1.instanceTag = "mp1";
+    // Per-instance scripts (host vs client differ). Fall back to cfg.inputScript.
+    c0.inputScript = script0.empty() ? cfg.inputScript : script0;
+    c1.inputScript = script1.empty() ? cfg.inputScript : script1;
 
     BuiltNDS b0, b1;
     std::string err;
@@ -557,20 +563,22 @@ int MPTest(const TraceRunConfig& cfg, int frames)
     b1.udata->instanceID = 1;
 
     // Distinct MAC per instance so they associate as different wireless players.
-    // (Instance 0 keeps the default MAC; bump the low byte for instance 1.)
     {
         Firmware& fw = b1.nds->GetFirmware();
         fw.GetHeader().MacAddr[5] ^= 0x01;
         fw.UpdateChecksums();
     }
 
-    printf("=== liteDS-headless mp-test (Phase 1: two-instance + local MP wired) ===\n");
-    printf("rom:    %s\n", cfg.rom.c_str());
-    printf("frames: %d\n", frames);
+    printf("=== liteDS-headless mp-test (Phase 2: Shrek 2-player association) ===\n");
+    printf("rom:      %s\n", cfg.rom.c_str());
+    printf("frames:   %d\n", frames);
+    printf("script0:  %s\n", c0.inputScript.c_str());
+    printf("script1:  %s\n", c1.inputScript.c_str());
     fflush(stdout);
 
     std::atomic<int>  done0{0}, done1{0};
     std::atomic<bool> crashed{false};
+    std::atomic<u32>  peakConnected{0};  // highest ConnectedBitmask seen
 
     auto runInstance = [&](BuiltNDS& b, std::atomic<int>& doneCounter)
     {
@@ -583,29 +591,54 @@ int MPTest(const TraceRunConfig& cfg, int frames)
                 doneCounter.store(f + 1, std::memory_order_relaxed);
             }
         }
-        catch (...)
-        {
-            crashed.store(true);
-        }
+        catch (...) { crashed.store(true); }
     };
 
     std::thread t0(runInstance, std::ref(b0), std::ref(done0));
     std::thread t1(runInstance, std::ref(b1), std::ref(done1));
+
+    // Poll MP health from the main thread while the instances run, and log the
+    // first frame the two associate (ConnectedBitmask == 0x3).
+    int firstAssocFrame = -1;
+    while (done0.load() < frames || done1.load() < frames)
+    {
+        u16 mask = MPInterface::Get().ObserveConnectedBitmask();
+        if (mask > peakConnected.load()) peakConnected.store(mask);
+        if (mask == 0x3 && firstAssocFrame < 0)
+        {
+            firstAssocFrame = std::min(done0.load(), done1.load());
+            printf("  [assoc] ConnectedBitmask=0x3 at ~frame %d (cmd=%llu reply=%llu pkt=%llu)\n",
+                   firstAssocFrame,
+                   (unsigned long long)MPInterface::Get().ObserveCmdCount(),
+                   (unsigned long long)MPInterface::Get().ObserveReplyCount(),
+                   (unsigned long long)MPInterface::Get().ObservePacketCount());
+            fflush(stdout);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
     t0.join();
     t1.join();
 
-    u64 h0 = FramebufferPairHash(*b0.nds);
-    u64 h1 = FramebufferPairHash(*b1.nds);
+    u64 cmd = MPInterface::Get().ObserveCmdCount();
+    u64 reply = MPInterface::Get().ObserveReplyCount();
+    u64 pkt = MPInterface::Get().ObservePacketCount();
+    bool ranClean = !crashed.load() && done0.load() == frames && done1.load() == frames;
+    bool associated = (peakConnected.load() == 0x3);
+    bool exchanged = (cmd > 0 || reply > 0 || pkt > 0);
 
-    bool ok = !crashed.load() && done0.load() == frames && done1.load() == frames;
-
-    printf("mp0_frames:    %d\n", done0.load());
-    printf("mp1_frames:    %d\n", done1.load());
-    printf("mp0_hash:      %016llx\n", (unsigned long long)h0);
-    printf("mp1_hash:      %016llx\n", (unsigned long long)h1);
-    printf("concurrent_ok: %s\n", ok ? "yes" : "no");
+    printf("mp0_frames:      %d\n", done0.load());
+    printf("mp1_frames:      %d\n", done1.load());
+    printf("peak_connected:  0x%x\n", peakConnected.load());
+    printf("first_assoc_frame: %d\n", firstAssocFrame);
+    printf("cmd_frames:      %llu\n", (unsigned long long)cmd);
+    printf("reply_frames:    %llu\n", (unsigned long long)reply);
+    printf("packets:         %llu\n", (unsigned long long)pkt);
+    printf("ran_clean:       %s\n", ranClean ? "yes" : "no");
+    printf("associated:      %s\n", associated ? "yes" : "no");
+    printf("exchanged:       %s\n", exchanged ? "yes" : "no");
     fflush(stdout);
-    return ok ? 0 : 1;
+    // Success (for now, the Phase-2 milestone) = ran clean AND the two associated.
+    return (ranClean && associated) ? 0 : 1;
 }
 
 } // namespace liteds

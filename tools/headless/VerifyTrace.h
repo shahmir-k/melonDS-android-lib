@@ -54,6 +54,7 @@ int VerifyInterpConverge(const TraceRunConfig& cfg, int frames);
 // two-instance execution is safe under the LITEV stack. Later phases wire the
 // shared LocalMP + health metrics. Returns 0 iff both instances complete all
 // frames without a crash.
-int MPTest(const TraceRunConfig& cfg, int frames);
+int MPTest(const TraceRunConfig& cfg, int frames,
+           const std::string& script0, const std::string& script1);
 
 } // namespace liteds
