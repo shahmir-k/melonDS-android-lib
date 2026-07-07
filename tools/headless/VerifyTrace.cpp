@@ -14,6 +14,8 @@
 #include <vector>
 #include <memory>
 #include <optional>
+#include <thread>
+#include <atomic>
 
 #include "Args.h"
 #include "NDS.h"
@@ -26,6 +28,9 @@
 #include "PlatformHeadless.h"
 #include "LiteProfile.h"
 #include "InputScript.h"
+#include "MPInterface.h"
+#include "SPI.h"
+#include "SPI_Firmware.h"
 
 using namespace melonDS;
 
@@ -521,6 +526,86 @@ int VerifyInterpConverge(const TraceRunConfig& cfg, int frames)
     fflush(stdout);
 
     return tailClean ? 0 : 3;
+}
+
+// ---------------------------------------------------------------------------
+// --mp-test : two-instance local-multiplayer harness.
+//
+// Phase 0 proved two NDS instances run CONCURRENTLY on two threads under the full
+// LITEV stack with no global/static conflict (NDS::Current is thread_local,
+// NDS.cpp:78; each NDS owns its JIT/memory) -- the same model the Qt frontend uses
+// for local wireless. Phase 1 (this version) WIRES local MP: both instances share
+// one in-process LocalMP (MPInterface::Set(Local)); each carries a distinct
+// instance id + MAC so a wireless test ROM can associate them as two players. The
+// game drives MP_Begin/SendCmd/RecvReplies through Wifi.cpp automatically. With a
+// non-MP ROM (e.g. shrek) nothing associates and the run behaves like Phase 0 --
+// proving the MP wiring is inert until a game actually uses wireless.
+// ---------------------------------------------------------------------------
+int MPTest(const TraceRunConfig& cfg, int frames)
+{
+    TraceRunConfig c0 = cfg; c0.instanceTag = "mp0";
+    TraceRunConfig c1 = cfg; c1.instanceTag = "mp1";
+
+    BuiltNDS b0, b1;
+    std::string err;
+    if (!BuildAndBoot(c0, true, b0, err)) { fprintf(stderr, "error (mp0): %s\n", err.c_str()); return 1; }
+    if (!BuildAndBoot(c1, true, b1, err)) { fprintf(stderr, "error (mp1): %s\n", err.c_str()); return 1; }
+
+    // Install one shared in-process LocalMP and give each instance a distinct id.
+    MPInterface::Set(MPInterface_Local);
+    b0.udata->instanceID = 0;
+    b1.udata->instanceID = 1;
+
+    // Distinct MAC per instance so they associate as different wireless players.
+    // (Instance 0 keeps the default MAC; bump the low byte for instance 1.)
+    {
+        Firmware& fw = b1.nds->GetFirmware();
+        fw.GetHeader().MacAddr[5] ^= 0x01;
+        fw.UpdateChecksums();
+    }
+
+    printf("=== liteDS-headless mp-test (Phase 1: two-instance + local MP wired) ===\n");
+    printf("rom:    %s\n", cfg.rom.c_str());
+    printf("frames: %d\n", frames);
+    fflush(stdout);
+
+    std::atomic<int>  done0{0}, done1{0};
+    std::atomic<bool> crashed{false};
+
+    auto runInstance = [&](BuiltNDS& b, std::atomic<int>& doneCounter)
+    {
+        try
+        {
+            for (int f = 0; f < frames; f++)
+            {
+                b.ApplyInput(f);
+                b.nds->RunFrame();
+                doneCounter.store(f + 1, std::memory_order_relaxed);
+            }
+        }
+        catch (...)
+        {
+            crashed.store(true);
+        }
+    };
+
+    std::thread t0(runInstance, std::ref(b0), std::ref(done0));
+    std::thread t1(runInstance, std::ref(b1), std::ref(done1));
+    t0.join();
+    t1.join();
+
+    u64 h0 = FramebufferPairHash(*b0.nds);
+    u64 h1 = FramebufferPairHash(*b1.nds);
+
+    bool ok = !crashed.load() && done0.load() == frames && done1.load() == frames;
+
+    printf("mp0_frames:    %d\n", done0.load());
+    printf("mp1_frames:    %d\n", done1.load());
+    printf("mp0_hash:      %016llx\n", (unsigned long long)h0);
+    printf("mp1_hash:      %016llx\n", (unsigned long long)h1);
+    printf("concurrent_ok: %s\n", ok ? "yes" : "no");
+    fflush(stdout);
+    return ok ? 0 : 1;
 }
 
 } // namespace liteds

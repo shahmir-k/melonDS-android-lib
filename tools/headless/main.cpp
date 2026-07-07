@@ -42,7 +42,7 @@ using namespace melonDS;
 
 namespace {
 
-enum class RunMode { Benchmark, RecordTrace, VerifyTrace, VerifyInterpConverge };
+enum class RunMode { Benchmark, RecordTrace, VerifyTrace, VerifyInterpConverge, MPTest };
 
 // Native DS screen dimensions; the software renderer writes 256x192 u32 per screen.
 constexpr int kScreenW = 256;
@@ -189,6 +189,7 @@ bool ParseArgs(int argc, char** argv, Options& o)
         else if (a == "--record-trace") { o.mode = RunMode::RecordTrace; o.tracePath = next("--record-trace"); }
         else if (a == "--verify-trace") { o.mode = RunMode::VerifyTrace; o.tracePath = next("--verify-trace"); }
         else if (a == "--verify-interp-converge") o.mode = RunMode::VerifyInterpConverge;
+        else if (a == "--mp-test") o.mode = RunMode::MPTest;
         else if (a == "--help" || a == "-h") Usage(argv[0], 0);
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); return false; }
     }
@@ -322,6 +323,8 @@ int main(int argc, char** argv)
             return liteds::VerifyTrace(cfg, opt.tracePath);
         case RunMode::VerifyInterpConverge:
             return liteds::VerifyInterpConverge(cfg, opt.frames);
+        case RunMode::MPTest:
+            return liteds::MPTest(cfg, opt.frames);
         default:
             break;
         }

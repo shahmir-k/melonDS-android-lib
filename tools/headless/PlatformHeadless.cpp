@@ -14,6 +14,7 @@
 
 #include "Platform.h"
 #include "PlatformHeadless.h"
+#include "MPInterface.h"
 
 #include <cstdio>
 #include <cstdarg>
@@ -403,19 +404,28 @@ void WriteDateTime(int year, int month, int day, int hour, int minute, int secon
 }
 
 // ---------------------------------------------------------------------------
-// Local multiplayer (MP_*) - STUBS (Unit 0): return "no data".
-// A real shared-mem backend is required later by multiplayer_smoke.sh (Unit >0).
+// Local multiplayer (MP_*) - route to the shared in-process MPInterface
+// (a LocalMP, installed by the MP harness via MPInterface::Set(Local)). The
+// instance id comes from the per-NDS InstanceUserData; a null userdata (the
+// single-instance benchmark path) is instance 0. Until the harness installs a
+// LocalMP, MPInterface::Current is a no-op dummy, so normal single-instance runs
+// behave exactly as before. Mirrors src/frontend/qt_sdl/Platform.cpp:460-512.
 // ---------------------------------------------------------------------------
 
-void MP_Begin(void*) {}
-void MP_End(void*) {}
-int MP_SendPacket(u8*, int, u64, void*) { return 0; }
-int MP_RecvPacket(u8*, u64*, void*) { return 0; }
-int MP_SendCmd(u8*, int, u64, void*) { return 0; }
-int MP_SendReply(u8*, int, u64, u16, void*) { return 0; }
-int MP_SendAck(u8*, int, u64, void*) { return 0; }
-int MP_RecvHostPacket(u8*, u64*, void*) { return 0; }
-u16 MP_RecvReplies(u8*, u64, u16, void*) { return 0; }
+static int MPInst(void* userdata)
+{
+    return userdata ? reinterpret_cast<HeadlessHost::InstanceUserData*>(userdata)->instanceID : 0;
+}
+
+void MP_Begin(void* u) { MPInterface::Get().Begin(MPInst(u)); }
+void MP_End(void* u)   { MPInterface::Get().End(MPInst(u)); }
+int MP_SendPacket(u8* d, int l, u64 t, void* u) { return MPInterface::Get().SendPacket(MPInst(u), d, l, t); }
+int MP_RecvPacket(u8* d, u64* t, void* u)       { return MPInterface::Get().RecvPacket(MPInst(u), d, t); }
+int MP_SendCmd(u8* d, int l, u64 t, void* u)    { return MPInterface::Get().SendCmd(MPInst(u), d, l, t); }
+int MP_SendReply(u8* d, int l, u64 t, u16 aid, void* u) { return MPInterface::Get().SendReply(MPInst(u), d, l, t, aid); }
+int MP_SendAck(u8* d, int l, u64 t, void* u)    { return MPInterface::Get().SendAck(MPInst(u), d, l, t); }
+int MP_RecvHostPacket(u8* d, u64* t, void* u)   { return MPInterface::Get().RecvHostPacket(MPInst(u), d, t); }
+u16 MP_RecvReplies(u8* d, u64 t, u16 aidmask, void* u) { return MPInterface::Get().RecvReplies(MPInst(u), d, t, aidmask); }
 
 // ---------------------------------------------------------------------------
 // Networking (Net_*) - STUBS

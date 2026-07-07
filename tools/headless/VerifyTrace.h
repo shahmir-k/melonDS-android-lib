@@ -49,4 +49,11 @@ int VerifyTrace(const TraceRunConfig& cfg, const std::string& tracePath);
 // are all identical. `cfg.jit` is ignored (both modes are built internally).
 int VerifyInterpConverge(const TraceRunConfig& cfg, int frames);
 
+// --mp-test: two-instance local-multiplayer harness. Phase 0 runs two NDS
+// instances concurrently on two threads (no MP wired yet) to prove concurrent
+// two-instance execution is safe under the LITEV stack. Later phases wire the
+// shared LocalMP + health metrics. Returns 0 iff both instances complete all
+// frames without a crash.
+int MPTest(const TraceRunConfig& cfg, int frames);
+
 } // namespace liteds
