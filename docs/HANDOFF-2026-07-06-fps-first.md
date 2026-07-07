@@ -19,11 +19,13 @@ constraint is now LIFTED. Consequences:
 - **The practical floor** (not exactness, but reality): approximations that CRASH or HANG the
   game, or desync it into a softlock, are still failures. "Don't care about exactness" ≠
   "don't care if it runs." Aggressive CPU-cycle skipping is the highest-risk lever for this.
-- **THE ONE THING TO CONFIRM WITH THE USER:** multiplayer was the *entire* project thesis
-  ("match DraStic speed WITH multiplayer, which DraStic lacks"). Several FPS levers below
-  break ARM7/WiFi timing and would kill MP. The ARM9 / render / geometry levers do NOT touch
-  MP — do those first. Only reach for ARM7/timing-breaking levers after confirming MP is
-  expendable. (Ask once; don't assume.)
+- **MULTIPLAYER: CONFIRMED STILL REQUIRED (user, 2026-07-06).** MP was the entire project
+  thesis and stays in. Therefore FPS levers that break ARM7/WiFi timing are OFF THE TABLE
+  (they'd desync MP). The permitted set is the **MP-SAFE subset**: ARM9-side, render,
+  GPU3D geometry, and multi-core parallelism — none of which touch ARM7/WiFi. Concretely this
+  RULES OUT: coarse/relaxed scheduling, ARM7 frame-dropping, any WiFi/IPC timing change. It
+  KEEPS IN: everything in §3a/§3c that lives on the ARM9/GPU/render side. "Exactness
+  expendable" now means *visual/GPU/ARM9-timing* exactness — NOT ARM7/WiFi timing.
 
 ## 1. Where FPS actually goes on the HEAVY scene (the wall)
 The target is the heavy 8-kart in-race scene (slot-2 savestate), 3x GL, on the Anbernic
@@ -102,17 +104,20 @@ approximations. Now permitted. Ranked by expected heavy-scene FPS impact:
    rejected it ("horrible UX"). Re-confirm before doing — under "all I care about is FPS" it
    may now be acceptable, but it's a UX call only the user makes.
 
-## 4. Recommended next steps (FPS-first order)
-1. **Confirm the MP question** (§0) — 10-second decision that gates half the levers.
-2. **Ground the current number end-to-end**: build the app with the shippable core (loads-only
+## 4. Recommended next steps (FPS-first, MP-SAFE order — MP confirmed required)
+1. **Ground the current number end-to-end**: build the app with the shippable core (loads-only
    +pin) merged into liteDS-v2-android (R4), measure cooled heavy-scene FPS. Establishes the
    real baseline the new levers move. (Needs the melonDS-android app repo — NOT cloned locally;
    see §5.)
-3. **Attack the emulation wall via cores (lever 3c.1)** — the honest biggest win. Scope the
-   next off-core split (2D compositor / geometry to helper threads). Exactness-safe.
-4. **Cheap experiments in parallel**: GXFIFO drain (3a) + emulation-frameskip prototype (3c.2),
-   each measured cooled on device, gate = playable + faster. Keep as default-OFF flags.
-5. Re-confirm internal-res (3c.5) with the user if 2–4 don't reach the target.
+2. **Attack the emulation wall via cores (lever 3c.1)** — the honest biggest win AND fully
+   MP-safe (parallelism, no ARM7/WiFi change). Scope the next off-core split (2D compositor /
+   GPU3D geometry to helper threads, DraStic's soft-NEON banded-raster model). Start here.
+3. **Cheap MP-safe experiments in parallel**: GXFIFO accumulate-drain (3a) + a RENDER-side /
+   GPU3D-side frameskip or 3D-LOD prototype (3c.2/3c.3) — all ARM9/GPU-side only. Each a
+   default-OFF flag, measured cooled on device, gate = boots + playable (user check) + faster.
+4. Re-confirm internal-res (3c.5) with the user if 2–3 don't reach the target.
+NOTE: emulation frameskip (3c.2) must skip only RENDER/ARM9-side work — NOT ARM7 or the WiFi
+scheduler — to stay MP-safe. ARM7/timing-breaking variants are excluded by the MP decision.
 
 ## 5. Device / build gotchas (STILL APPLY — the physical constraints didn't change)
 - **Device**: Anbernic RG DS, adb serial e0ca3841840f2ab9. adb-injected GAME INPUT IS DEAD
@@ -156,15 +161,16 @@ playable+faster, not bit-exact. `LITEV_MEM_SWTABLE_STORE` and `LITEV_RELAXED_ARM
 exist but are measured-negative — leave OFF.
 
 ## 7. One-paragraph resume prompt for next session
-Continue liteDS-v2 under the NEW directive: **FPS is the only goal, exactness is expendable**
-(confirm first whether multiplayer is too — it gates the ARM7/timing levers). The heavy 8-kart
-in-race scene is emulation-bound (~24ms, ~31fps) + thermal-throttled, with 3 of 4 cores idle;
-that's the wall. Biggest lever is MULTI-CORE emulation/render (DraStic's model, mostly
-parallelism, exactness-safe) — scope the next off-core split. In parallel, cheap approximation
-experiments now permitted: GXFIFO accumulate-drain, emulation frameskip, 3D LOD — each a
-default-OFF flag, gated on "boots + playable (user visual check) + measurably faster COOLED on
-device", NOT on golden traces. Do NOT re-chase store-side sw-table or RELAXED_ARM9 (both
-measured SLOWER, not an exactness issue) or palette-COW (GL-moot). Verify every FPS number
-yourself on device, cooled; host hides in-order-A55 effects. Ground the baseline with an
-end-to-end app build first (app repo needs cloning). Full history: plan D.7 addenda 1–27 +
+Continue liteDS-v2 under the NEW directive: **FPS is the only goal; visual/GPU/ARM9 exactness
+is expendable, but MULTIPLAYER STAYS IN (user-confirmed) so ARM7/WiFi timing is UNTOUCHABLE.**
+The heavy 8-kart in-race scene is emulation-bound (~24ms, ~31fps) + thermal-throttled, with 3
+of 4 cores idle — that's the wall. Biggest lever is MP-safe: MULTI-CORE emulation/render
+(DraStic's model, pure parallelism) — scope the next off-core split (2D compositor / GPU3D
+geometry to helper threads). In parallel, cheap MP-safe approximation experiments now permitted:
+GXFIFO accumulate-drain, RENDER/GPU-side frameskip, 3D LOD — each a default-OFF flag, gated on
+"boots + playable (user visual check) + measurably faster COOLED on device", NOT on golden
+traces. Do NOT: touch ARM7/WiFi timing (kills MP); re-chase store-side sw-table or RELAXED_ARM9
+(both measured SLOWER, not exactness) or palette-COW (GL-moot). Verify every FPS number yourself
+on device, cooled; host hides in-order-A55 effects. Ground the baseline with an end-to-end app
+build first (app repo needs cloning, see §5). Full history: plan D.7 addenda 1–27 +
 HANDOFF-2026-07-06.md; this pivot: HANDOFF-2026-07-06-fps-first.md.
