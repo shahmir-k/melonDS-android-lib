@@ -360,6 +360,19 @@ if (LITEV_RENDER_THREAD)
     add_compile_definitions(LITEV_RENDER_THREAD=1)
 endif()
 
+# G) geometry-transform offload (ported from core liteDS-v2). Default OFF ->
+# byte-identical to the base geometry pipeline. When ON, the emu thread records
+# resolved SubmitVertex/SubmitPolygon inputs + runs an approximate cycle model,
+# and GPU3D::VBlank replays the exact transform into the real bank (G2, same
+# thread). Adds a GeomEvent member to GPU3D (embedded in GPU/NDS), so it changes
+# sizeof(NDS): MUST flow through the LITEV_* re-export loop below for a single ABI
+# across the out-of-tree JNI frontend. FPS-first: the approx timing breaks GXSTAT/
+# MP exactness (accepted). A later step moves the replay onto the R4 render thread.
+option(LITEV_GEOM_OFFLOAD "G: geometry-transform offload (record on emu thread, replay transform/clip/cull off the inline path)" OFF)
+if (LITEV_GEOM_OFFLOAD)
+    add_compile_definitions(LITEV_GEOM_OFFLOAD=1)
+endif()
+
 add_subdirectory(src)
 
 # --- liteDS-v2 core-fix: export LITEV_* configuration as a PUBLIC usage requirement ---

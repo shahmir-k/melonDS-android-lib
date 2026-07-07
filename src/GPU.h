@@ -100,6 +100,9 @@ public:
     // GPU.cpp scanline call sites under LITEV_RENDER_THREAD; base returns member.
     u64 GetPrep2DNs() const noexcept { return LitevPrep2DNs; }
     u64 LitevPrep2DNs = 0;
+    // LITEV: sprite-processing subset of LitevPrep2DNs (Rend->DrawSprites OAM build).
+    u64 GetPrepSpritesNs() const noexcept { return LitevPrepSpritesNs; }
+    u64 LitevPrepSpritesNs = 0;
     // R4 decisive-split (TEMP): when true, ALL GL render calls (DrawScanline,
     // DrawSprites, Start/Finish/Restart3DRendering, VBlank composite) are skipped
     // while emulation/SPU/events run unchanged. runFrame in this mode = the true

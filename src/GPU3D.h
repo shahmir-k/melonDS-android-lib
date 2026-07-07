@@ -212,6 +212,43 @@ public:
 
     FIFO<CmdFIFOEntry, 64> CmdStallQueue {};
 
+#ifdef LITEV_GEOM_OFFLOAD
+    // G) geometry-transform offload (ported from core liteDS-v2, docs
+    // liteDS-v2-renderprep-offload-scope.md). The emu thread records the resolved
+    // per-vertex inputs SubmitVertex/SubmitPolygon read and SKIPS the real
+    // transform/clip/cull/store (running only an APPROXIMATE cycle model so ARM9
+    // pacing does not collapse). ReplayGeometry() re-runs the EXACT SubmitVertex/
+    // SubmitPolygon from the log into the real bank. G2 (this port) replays at
+    // GPU3D::VBlank on the emu thread; a later step moves the replay onto the R4
+    // render thread (ReplayLog) for the actual FPS win. FPS-first: the approx
+    // timing breaks GXSTAT/MP exactness (accepted).
+    struct GeomEvent
+    {
+        u8  Type;              // 0 = BEGIN, 1 = VERTEX
+        u32 PolygonMode;       // BEGIN
+        // VERTEX: the resolved inputs SubmitVertex reads (post-lighting/texgen).
+        s16 CurVertex[3];
+        s32 ClipMatrix[16];
+        s32 TexMatrix[16];
+        u8  VertexColor[3];
+        s16 TexCoords[2];
+        s16 RawTexCoords[2];
+        u32 TexParam;
+        u32 CurPolygonAttr;
+        u32 Viewport[6];       // SubmitPolygon computes FinalPosition from this
+    };
+    static constexpr u32 GeomEventMax = 8192;  // >= max vertices/frame (VertexRAM = 6144) + begins
+    std::unique_ptr<GeomEvent[]> GeomEventLog;  // allocated lazily; freed by default dtor
+    u32 GeomEventCount = 0;
+    u32 GeomEventPeak = 0;
+    u32 GeomEventOverflow = 0;
+    bool GeomReplaying = false;                // set during the replay (SubmitVertex/SubmitPolygon path)
+    void RecordGeomBegin(u32 polygonMode) noexcept;
+    void RecordGeomVertex() noexcept;
+    void SubmitPolygonTiming() noexcept;   // approximate cycle model for the emu-inline path
+    void ReplayGeometry() noexcept;        // replay the log into the REAL bank (fills geometry)
+#endif
+
     u32 ZeroDotWLimit = 0xFFFFFF;
 
     u32 GXStat = 0;

@@ -21,6 +21,17 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#include <chrono>
+#if defined(__ANDROID__)
+#include <android/log.h>
+#include <sys/system_properties.h>
+#include <cstdlib>
+// Cached debug.litev.* toggle (read once). For 3x GPU-quality reductions.
+static bool litev3DProp(const char* name) {
+    char b[8] = {0};
+    return (__system_property_get(name, b) > 0 && atoi(b) != 0);
+}
+#endif
 #include "NDS.h"
 #include "GPU.h"
 // R3: GL per-frame call counters (after the GL headers above). See LiteProfileGL.h.
@@ -1265,7 +1276,13 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
         glBindBuffer(GL_ARRAY_BUFFER, ClearVertexBufferID);
         glBindVertexArray(ClearVertexArrayID);
 
-        if (RR.RenderDispCnt & (1<<5))
+#if defined(__ANDROID__)
+        static int _noEdge = litev3DProp("debug.litev.noedge") ? 1 : 0;
+        static int _noFog  = litev3DProp("debug.litev.nofog")  ? 1 : 0;
+#else
+        const int _noEdge = 0, _noFog = 0;
+#endif
+        if ((RR.RenderDispCnt & (1<<5)) && !_noEdge)
         {
             // edge marking
             // TODO: depth/polyid values at screen edges
@@ -1277,7 +1294,7 @@ void GLRenderer3D::RenderSceneChunk(int y, int h)
             glDrawArrays(GL_TRIANGLES, 0, 2*3);
         }
 
-        if (RR.RenderDispCnt & (1<<7))
+        if ((RR.RenderDispCnt & (1<<7)) && !_noFog)
         {
             // fog
 
@@ -1370,6 +1387,9 @@ void GLRenderer3D::RenderFrameBodyGeometry()
 
         int npolys = 0;
         int firsttrans = -1;
+#if defined(__ANDROID__)
+        auto _gs0 = std::chrono::steady_clock::now();
+#endif
         for (u32 i = 0; i < GPU3D.RenderNumPolygons; i++)
         {
             if (GPU3D.RenderPolygonRAM[i]->Degenerate) continue;
@@ -1383,7 +1403,13 @@ void GLRenderer3D::RenderFrameBodyGeometry()
         NumFinalPolys = npolys;
         NumOpaqueFinalPolys = firsttrans;
 
+#if defined(__ANDROID__)
+        auto _g0 = std::chrono::steady_clock::now();
+#endif
         BuildPolygons(&PolygonList[0], npolys, captureinfo);
+#if defined(__ANDROID__)
+        auto _g1 = std::chrono::steady_clock::now();
+#endif
         glBindBuffer(GL_ARRAY_BUFFER, VertexBufferID);
         glBufferSubData(GL_ARRAY_BUFFER, 0, NumVertices*7*4, VertexBuffer);
 
@@ -1391,6 +1417,20 @@ void GLRenderer3D::RenderFrameBodyGeometry()
         glBindVertexArray(VertexArrayID);
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, NumIndices * 2, IndexBuffer);
         glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, EdgeIndicesOffset * 2, NumEdgeIndices * 2, IndexBuffer + EdgeIndicesOffset);
+#if defined(__ANDROID__)
+        auto _g2 = std::chrono::steady_clock::now();
+        static double accS = 0, accB = 0, accU = 0; static int gn = 0; static long aV = 0, aP = 0;
+        accS += std::chrono::duration_cast<std::chrono::nanoseconds>(_g0 - _gs0).count() / 1e6;
+        accB += std::chrono::duration_cast<std::chrono::nanoseconds>(_g1 - _g0).count() / 1e6;
+        accU += std::chrono::duration_cast<std::chrono::nanoseconds>(_g2 - _g1).count() / 1e6;
+        aV += NumVertices; aP += npolys;
+        if (++gn >= 60) {
+            __android_log_print(ANDROID_LOG_INFO, "LITEV_GATE",
+                "60f: setup=%.2fms build=%.2fms upload=%.2fms verts=%ld polys=%ld",
+                accS / 60, accB / 60, accU / 60, aV / 60, aP / 60);
+            accS = accB = accU = 0; aV = aP = 0; gn = 0;
+        }
+#endif
     }
 }
 
@@ -1475,6 +1515,15 @@ void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
 
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, MainFramebuffer);
+
+#if defined(__ANDROID__)
+    // debug.litev.noattr: when edge-marking + fog are off, the attr MRT (color
+    // attachment 1) is never read — drop to a SINGLE render target so the per-tile
+    // MRT allocation shrinks. On Mali this may avoid the 2x->3x cliff (MRT tile
+    // footprint forcing extra tile passes at high res). Restored to 2 targets below.
+    static int _noAttr = litev3DProp("debug.litev.noattr") ? 1 : 0;
+    if (_noAttr) { GLenum one[1] = {GL_COLOR_ATTACHMENT0}; glDrawBuffers(1, one); }
+#endif
 
     ShaderConfig.uScreenSize[0] = ScreenW;
     ShaderConfig.uScreenSize[1] = ScreenH;
@@ -1607,8 +1656,15 @@ void GLRenderer3D::RenderFrameBody(u8 clrBitmapDirty)
     // RenderFrameBodyGeometry before the early bank release), NOT live
     // GPU3D.RenderNumPolygons — the emu thread has resumed frame N+1 and may already
     // have overwritten the live count/polygon RAM by the time this raster runs.
-    if (NumFinalPolys)
+    {
+#if defined(__ANDROID__)
+    static int _no3d = litev3DProp("debug.litev.no3d") ? 1 : 0;
+#else
+    const int _no3d = 0;
+#endif
+    if (NumFinalPolys && !_no3d)
         RenderSceneChunk(0, 192);
+    }
 #else
     if (GPU3D.RenderNumPolygons)
     {

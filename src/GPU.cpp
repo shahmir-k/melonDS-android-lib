@@ -1265,9 +1265,14 @@ void GPU::StartHBlank(u32 line) noexcept
 #endif
             if (line < 192)
                 Rend->DrawScanline(line);
+#ifdef LITEV_RENDER_THREAD
+            auto _lsp0 = std::chrono::steady_clock::now();
+#endif
             if (line < 191)
                 Rend->DrawSprites(line+1);
 #ifdef LITEV_RENDER_THREAD
+            LitevPrepSpritesNs += (u64) std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - _lsp0).count();
           }
             LitevPrep2DNs += (u64) std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - _l2d0).count();

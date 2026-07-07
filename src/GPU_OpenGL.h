@@ -299,6 +299,25 @@ private:
     // GLRenderer::RenderScreen). Snapshots FinalPassConfig + regs + aux buffers,
     // then replays RenderScreen from the snapshot. Inline fallback on overflow.
     void RIRRecordFinalPass(int ystart, int yend);
+
+    // Display-capture snapshot header (R4-during-capture): the per-frame scalar
+    // state DoCapture reads live. Under deferred replay these members hold the
+    // END-of-frame value by SubmitFrame, so the capture-moment values are
+    // snapshotted here and restored in ReplayCapture. The aux textures and the
+    // rendered OutputTex2D/3D are consistent by log ordering (a Capture record
+    // replays after the composites for its span and before this frame's final
+    // pass — exactly as the inline path sees them).
+    struct sCaptureHdr
+    {
+        u32 DispCntA;
+        u32 CaptureCnt;
+        s32 Aux0VRAMCap;
+    };
+    // record + (deferred) replay wrapper for a display-capture span. On the
+    // deferred path DoCapture must go through the log so it captures the
+    // already-replayed OutputTex2D/3D instead of not-yet-rendered output.
+    void RIRRecordCapture(int ystart, int yend);
+    void ReplayCapture(const GLLogRecord& r);
 #endif
 
     // The 2D final-composite GL body (per-engine composite + final pass +

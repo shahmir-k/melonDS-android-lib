@@ -27,6 +27,15 @@
 #include "GPU3D.h"
 #include "LiteProfile.h"
 
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#include <cstdlib>
+static bool litevGxProp(const char* name) {
+    char b[8] = {0};
+    return (__system_property_get(name, b) > 0 && atoi(b) != 0);
+}
+#endif
+
 #if defined(LITEV_NEON_GEOMETRY) && defined(__ARM_NEON)
 #include <arm_neon.h>
 #endif
@@ -209,6 +218,9 @@ GPU3D::GPU3D(melonDS::GPU& gpu) noexcept :
     NDS(gpu.NDS),
     GPU(gpu)
 {
+#ifdef LITEV_GEOM_OFFLOAD
+    GeomEventLog = std::make_unique<GeomEvent[]>(GeomEventMax);
+#endif
 }
 
 void Vertex::DoSavestate(Savestate* file) noexcept
@@ -1006,8 +1018,132 @@ bool ClipCoordsEqual(Vertex* a, Vertex* b)
            a->Position[3] == b->Position[3];
 }
 
+#ifdef LITEV_GEOM_OFFLOAD
+void GPU3D::RecordGeomBegin(u32 polygonMode) noexcept
+{
+    if (GeomEventCount >= GeomEventMax) { GeomEventOverflow++; return; }
+    GeomEvent& e = GeomEventLog[GeomEventCount++];
+    e.Type = 0;
+    e.PolygonMode = polygonMode;
+}
+
+void GPU3D::RecordGeomVertex() noexcept
+{
+    if (GeomEventCount >= GeomEventMax) { GeomEventOverflow++; return; }
+    GeomEvent& e = GeomEventLog[GeomEventCount++];
+    e.Type = 1;
+    e.CurVertex[0] = CurVertex[0]; e.CurVertex[1] = CurVertex[1]; e.CurVertex[2] = CurVertex[2];
+    memcpy(e.ClipMatrix, ClipMatrix, sizeof(ClipMatrix));
+    memcpy(e.TexMatrix, TexMatrix, sizeof(TexMatrix));
+    e.VertexColor[0] = VertexColor[0]; e.VertexColor[1] = VertexColor[1]; e.VertexColor[2] = VertexColor[2];
+    e.TexCoords[0] = TexCoords[0]; e.TexCoords[1] = TexCoords[1];
+    e.RawTexCoords[0] = RawTexCoords[0]; e.RawTexCoords[1] = RawTexCoords[1];
+    e.TexParam = TexParam;
+    e.CurPolygonAttr = CurPolygonAttr;
+    memcpy(e.Viewport, Viewport, sizeof(Viewport));
+}
+
+void GPU3D::SubmitPolygonTiming() noexcept
+{
+    // Approximate geometry-engine cycle model for the emu-inline path. The EXACT model needs the
+    // cull/clip result (post-clip vertex count + early-outs) which we've moved off-thread; here we
+    // assume the polygon passes. Not exact -> GXSTAT/timing/MP expendable (FPS-first). Keeps the
+    // engine plausibly busy so ARM9 pacing doesn't collapse to "geometry instant". Mirrors the
+    // cycle writes at SubmitPolygon top + the nverts==4/3 build block.
+    PolygonPipeline = 8;
+    VertexSlotCounter = 1;
+    VertexSlotsFree = 0b11110;
+    if (PolygonMode & 0x1)   // quad
+    {
+        PolygonPipeline = 35;
+        VertexSlotsFree = (PolygonMode & 0x2) ? 0b11100 : 0b11110;
+    }
+    else
+    {
+        PolygonPipeline = 26;
+        VertexSlotsFree = (PolygonMode & 0x2) ? 0b1000 : 0b1110;
+    }
+    LastStripPolygon = NULL;
+}
+
+// STEP G2: replay the recorded geometry log into the REAL bank via the exact SubmitVertex/
+// SubmitPolygon (the emu-inline path recorded but SKIPPED the transform/clip/store). Saves+restores
+// the geometry MATH state (matrices/attrs/assembly/cycle) so the emu's live state survives for the
+// next frame; the bank (NumVertices/NumPolygons + CurVertexRAM/CurPolygonRAM contents) is what the
+// replay FILLS, so it is deliberately NOT restored. Same-thread for now; a later step threads it.
+void GPU3D::ReplayGeometry() noexcept
+{
+    if (GeomEventCount > GeomEventPeak) GeomEventPeak = GeomEventCount;
+
+    u32 saveVertexNum = VertexNum, saveVertexNumInPoly = VertexNumInPoly, saveNumConsec = NumConsecutivePolygons;
+    Polygon* saveLastStrip = LastStripPolygon;
+    u32 savePolygonMode = PolygonMode;
+    Vertex saveTemp[4]; memcpy(saveTemp, TempVertexBuffer, sizeof(saveTemp));
+    s32 saveCycle = CycleCount, saveVP = VertexPipeline, savePP = PolygonPipeline, saveNP = NormalPipeline;
+    s32 saveVSC = VertexSlotCounter, saveVSF = VertexSlotsFree;
+    s16 saveCurVertex[3]; memcpy(saveCurVertex, CurVertex, sizeof(saveCurVertex));
+    s32 saveClip[16]; memcpy(saveClip, ClipMatrix, sizeof(saveClip));
+    s32 saveTexM[16]; memcpy(saveTexM, TexMatrix, sizeof(saveTexM));
+    u8  saveVColor[3]; memcpy(saveVColor, VertexColor, sizeof(saveVColor));
+    s16 saveTexC[2]; memcpy(saveTexC, TexCoords, sizeof(saveTexC));
+    s16 saveRawTexC[2]; memcpy(saveRawTexC, RawTexCoords, sizeof(saveRawTexC));
+    u32 saveTexParam = TexParam, saveCurPolyAttr = CurPolygonAttr;
+    u32 saveViewport[6]; memcpy(saveViewport, Viewport, sizeof(saveViewport));
+
+    // the frame's bank is empty (emu-inline skipped the store); the replay fills it from 0.
+    NumVertices = 0; NumPolygons = 0; NumOpaquePolygons = 0;
+    VertexNum = 0; VertexNumInPoly = 0; NumConsecutivePolygons = 0; LastStripPolygon = NULL;
+
+    GeomReplaying = true;
+    for (u32 i = 0; i < GeomEventCount; i++)
+    {
+        const GeomEvent& e = GeomEventLog[i];
+        if (e.Type == 0)
+        {
+            PolygonMode = e.PolygonMode;
+            VertexNum = 0; VertexNumInPoly = 0; NumConsecutivePolygons = 0; LastStripPolygon = NULL;
+        }
+        else
+        {
+            CurVertex[0] = e.CurVertex[0]; CurVertex[1] = e.CurVertex[1]; CurVertex[2] = e.CurVertex[2];
+            memcpy(ClipMatrix, e.ClipMatrix, sizeof(ClipMatrix));
+            memcpy(TexMatrix, e.TexMatrix, sizeof(TexMatrix));
+            VertexColor[0] = e.VertexColor[0]; VertexColor[1] = e.VertexColor[1]; VertexColor[2] = e.VertexColor[2];
+            TexCoords[0] = e.TexCoords[0]; TexCoords[1] = e.TexCoords[1];
+            RawTexCoords[0] = e.RawTexCoords[0]; RawTexCoords[1] = e.RawTexCoords[1];
+            TexParam = e.TexParam;
+            CurPolygonAttr = e.CurPolygonAttr;
+            memcpy(Viewport, e.Viewport, sizeof(Viewport));
+            SubmitVertex();
+        }
+    }
+    GeomReplaying = false;
+
+    // restore MATH state -- but NOT NumVertices/NumPolygons/NumOpaquePolygons or the bank contents,
+    // which now hold the replay's output that the renderer consumes this frame.
+    VertexNum = saveVertexNum; VertexNumInPoly = saveVertexNumInPoly; NumConsecutivePolygons = saveNumConsec;
+    LastStripPolygon = saveLastStrip; PolygonMode = savePolygonMode;
+    memcpy(TempVertexBuffer, saveTemp, sizeof(saveTemp));
+    CycleCount = saveCycle; VertexPipeline = saveVP; PolygonPipeline = savePP; NormalPipeline = saveNP;
+    VertexSlotCounter = saveVSC; VertexSlotsFree = saveVSF;
+    memcpy(CurVertex, saveCurVertex, sizeof(saveCurVertex));
+    memcpy(ClipMatrix, saveClip, sizeof(saveClip));
+    memcpy(TexMatrix, saveTexM, sizeof(saveTexM));
+    memcpy(VertexColor, saveVColor, sizeof(saveVColor));
+    memcpy(TexCoords, saveTexC, sizeof(saveTexC));
+    memcpy(RawTexCoords, saveRawTexC, sizeof(saveRawTexC));
+    TexParam = saveTexParam; CurPolygonAttr = saveCurPolyAttr;
+    memcpy(Viewport, saveViewport, sizeof(Viewport));
+}
+#endif
+
 void GPU3D::SubmitPolygon() noexcept
 {
+#ifdef LITEV_GEOM_OFFLOAD
+    // G2 OFFLOAD: emu-inline runs only an APPROXIMATE cycle model (the exact one needs the
+    // cull/clip result, which we've moved off-thread). FPS-first: MP/exactness expendable.
+    if (!GeomReplaying) { SubmitPolygonTiming(); return; }
+#endif
     Vertex clippedvertices[10];
     Vertex* reusedvertices[2];
     int clipstart = 0;
@@ -1416,7 +1552,20 @@ void GPU3D::SubmitVertex() noexcept
     s64 vertex[4] = {(s64)CurVertex[0], (s64)CurVertex[1], (s64)CurVertex[2], 0x1000};
     Vertex* vertextrans = &TempVertexBuffer[VertexNumInPoly];
 
+#ifdef LITEV_GEOM_OFFLOAD
+    // G2 OFFLOAD: emu-inline records the resolved per-vertex inputs and SKIPS the transform+clip+
+    // store (the replay does all of it off the critical path). Replay transforms using the captured
+    // ClipMatrix/attrs, so UpdateClipMatrix (recompute from live matrices) is skipped there.
+    if (!GeomReplaying)
+    {
+        UpdateClipMatrix();
+        RecordGeomVertex();
+    }
+    if (GeomReplaying)
+#else
     UpdateClipMatrix();
+#endif
+    {
 #if defined(LITEV_NEON_GEOMETRY) && defined(__ARM_NEON)
     // vertex[] components fit in s32 (CurVertex is s16, w = 0x1000), so the
     // widening 32x32->64 NEON multiply matches the scalar s64 products exactly.
@@ -1453,6 +1602,7 @@ void GPU3D::SubmitVertex() noexcept
     }
 
     vertextrans->Clipped = false;
+    }  // end transform block (offload: replay-only)
 
     VertexNum++;
     VertexNumInPoly++;
@@ -2175,6 +2325,9 @@ void GPU3D::ExecuteCommand() noexcept
             NumConsecutivePolygons = 0;
             LastStripPolygon = NULL;
             CurPolygonAttr = PolygonAttr;
+#ifdef LITEV_GEOM_OFFLOAD
+            RecordGeomBegin(PolygonMode);
+#endif
             goto gxf_end;
 
         gxf_41: // end polygons
@@ -2519,6 +2672,9 @@ void GPU3D::ExecuteCommand() noexcept
             NumConsecutivePolygons = 0;
             LastStripPolygon = NULL;
             CurPolygonAttr = PolygonAttr;
+#ifdef LITEV_GEOM_OFFLOAD
+            RecordGeomBegin(PolygonMode);
+#endif
             break;
 
         case 0x41: // end polygons
@@ -3058,6 +3214,25 @@ void GPU3D::Run() noexcept
     CycleCount -= cycles;
     Timestamp = NDS.ARM9Timestamp >> NDS.ARM9ClockShift;
 
+#if defined(__ANDROID__)
+    // ITEM 4: GXFIFO accumulate-then-drain. debug.litev.gxdrain=1 drains the WHOLE
+    // command list this call (ignoring the per-command cycle budget), so the FIFO
+    // never appears full -> GXFIFOUnstall fires -> ARM9 never stalls on GXFIFO, and
+    // the per-command cycle-metering loop overhead is removed. Breaks GXSTAT/FIFO
+    // timing (MP-expendable); FBHASH + playability gated.
+    static int _gxdrain = litevGxProp("debug.litev.gxdrain") ? 1 : 0;
+    if (_gxdrain && CycleCount <= 0)
+    {
+        while (!CmdPIPE.IsEmpty())
+        {
+            if (NumPushPopCommands == 0) GXStat &= ~(1<<14);
+            if (NumTestCommands == 0)    GXStat &= ~(1<<0);
+            ExecuteCommand();
+        }
+        CycleCount = 0;
+    }
+    else
+#endif
     if (CycleCount <= 0)
     {
         while (CycleCount <= 0 && !CmdPIPE.IsEmpty())
@@ -3116,6 +3291,16 @@ void GPU3D::VBlank() noexcept
 {
     if (GeometryEnabled)
     {
+#ifdef LITEV_GEOM_OFFLOAD
+        // STEP G2: the emu-inline path recorded the geometry but SKIPPED the transform/clip/store.
+        // Replay the log into the REAL bank NOW -- BEFORE the polygon sort below consumes
+        // NumPolygons/CurPolygonRAM. (A later step moves this replay onto the R4 render thread.)
+        if (FlushRequest)
+        {
+            ReplayGeometry();
+            GeomEventCount = 0;
+        }
+#endif
         if (RenderingEnabled)
         {
             if (FlushRequest)

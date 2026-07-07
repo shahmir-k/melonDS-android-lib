@@ -25,6 +25,16 @@
 #include "DMA_Timings.h"
 #include "Platform.h"
 
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#include <cstring>
+#include <cstdlib>
+static bool litevDmaProp(const char* name) {
+    char b[8] = {0};
+    return (__system_property_get(name, b) > 0 && atoi(b) != 0);
+}
+#endif
+
 namespace melonDS
 {
 using Platform::Log;
@@ -581,6 +591,35 @@ void DMA::Run9()
     }
     else
     {
+#if defined(__ANDROID__)
+        // ITEM 5: bulk block-mover for the common case — sequential 32-bit
+        // MainRAM->MainRAM copy. memmove the whole run instead of per-unit
+        // dispatch through ARM9Read32/Write32, and account the cycles in bulk.
+        // Bit-exact bytes (same memory); only the fine-grained interleave timing
+        // differs. Prop-gated debug.litev.dmabulk; FBHASH gated.
+        static int _dmabulk = litevDmaProp("debug.litev.dmabulk") ? 1 : 0;
+        if (_dmabulk && !Stall && IterCount > 0 && SrcAddrInc == 1 && DstAddrInc == 1
+            && (CurSrcAddr & 0xFF000000) == 0x02000000
+            && (CurDstAddr & 0xFF000000) == 0x02000000)
+        {
+            s32 unit = UnitTimings9_32(false); if (unit < 1) unit = 1;
+            u64 budget = (NDS.ARM9Target - NDS.ARM9Timestamp) >> NDS.ARM9ClockShift;
+            u32 canDo = (u32)(budget / (u64)unit);
+            if (canDo > IterCount) canDo = IterCount;
+            u32 sOff = CurSrcAddr & NDS.MainRAMMask, dOff = CurDstAddr & NDS.MainRAMMask;
+            u32 bytes = canDo << 2;
+            if (canDo > 1 && (sOff + bytes) <= (NDS.MainRAMMask + 1) && (dOff + bytes) <= (NDS.MainRAMMask + 1))
+            {
+                std::memmove(&NDS.MainRAM[dOff], &NDS.MainRAM[sOff], bytes);
+                NDS.ARM9Timestamp += ((UnitTimings9_32(burststart) + (s32)(canDo - 1) * unit) << NDS.ARM9ClockShift);
+                burststart = false;
+                CurSrcAddr += (SrcAddrInc << 2) * canDo;
+                CurDstAddr += (DstAddrInc << 2) * canDo;
+                IterCount -= canDo;
+                RemCount -= canDo;
+            }
+        }
+#endif
         while (IterCount > 0 && !Stall)
         {
             NDS.ARM9Timestamp += (UnitTimings9_32(burststart) << NDS.ARM9ClockShift);

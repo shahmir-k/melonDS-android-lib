@@ -30,6 +30,19 @@
 #if LITEV_PROFILE && defined(__ANDROID__)
 #include <android/log.h>
 #endif
+#ifdef __ANDROID__
+#include <sys/system_properties.h>
+#include <cstdlib>
+// LITEV hybrid renderer: read an integer debug.litev.* property (default 0).
+static inline int litevGpuProp(const char* name)
+{
+    char v[PROP_VALUE_MAX] = {0};
+    if (__system_property_get(name, v) > 0) return atoi(v);
+    return 0;
+}
+#else
+static inline int litevGpuProp(const char*) { return 0; }
+#endif
 
 namespace melonDS
 {
@@ -421,11 +434,20 @@ void GLRenderer::SetRenderSettings(RendererSettings& settings)
 {
     SetScaleFactor(settings.ScaleFactor);
 
+    // LITEV hybrid renderer (debug.litev.hybrid): run the 2D compositor pipeline
+    // at NATIVE res while 3D stays at full ScaleFactor. The per-pixel 2D priority/
+    // window/blend loop (2DCompositorFS) is the heavy cost at high scale (~9x the
+    // fragments at 3x); dropping it to native reclaims it, and the final pass
+    // upscales the native 2D output for free. 3D remains crisp at ScaleFactor and
+    // is re-merged sharp in a later step. When off, behaves exactly as before.
+    int scale2d = settings.ScaleFactor;
+    if (litevGpuProp("debug.litev.hybrid") != 0) scale2d = 1;
+
     auto rend2d = dynamic_cast<GLRenderer2D*>(Rend2D_A.get());
-    rend2d->SetScaleFactor(settings.ScaleFactor);
+    rend2d->SetScaleFactor(scale2d);
 
     rend2d = dynamic_cast<GLRenderer2D*>(Rend2D_B.get());
-    rend2d->SetScaleFactor(settings.ScaleFactor);
+    rend2d->SetScaleFactor(scale2d);
 
     if (IsCompute)
     {
@@ -542,7 +564,11 @@ void GLRenderer::DrawScanline(u32 line)
 
     if (need_capture && (line > 0))
     {
-        DoCapture(LastCapLine, line);
+#ifdef LITEV_RENDER_THREAD
+        if (RIRMode || DeferReplay) RIRRecordCapture(LastCapLine, line);
+        else
+#endif
+            DoCapture(LastCapLine, line);
         LastCapLine = line;
     }
 
@@ -755,6 +781,12 @@ void GLRenderer::VBlank()
         Rend2D_A->VBlank();                 // records RenderSpritesSpan + Composite2D
         Rend2D_B->VBlank();
         RIRRecordFinalPass(LastLine, 192);  // records FinalPassSpan
+        // R4-during-capture: the end-of-frame display capture (inline path does
+        // this in VBlankSubmit after the final pass) must be recorded too, else a
+        // deferred capture frame silently drops it. Ordered after the final pass
+        // to match the inline sequence; it reads the composite OutputTex2D/3D
+        // (produced by the Composite2D/Render3D records), not the final pass.
+        if (GPU.CaptureEnable) RIRRecordCapture(LastCapLine, 192);
         LastLine = 0;
         LastCapLine = 0;
         SubmitPending = true;
@@ -1178,7 +1210,15 @@ void GLRenderer::StartFrameLog()
     // Phase 2: decide the deferred replay mode for this frame. RIR bring-up mode
     // (record + immediate replay) takes precedence and is NOT deferred. A
     // capture-active frame (Tier 1) records no log and runs synchronously.
-    DeferReplay = !RIRMode && !GPU.CaptureActiveThisFrame;
+    // R4-during-capture (debug.litev.defercapture): normally capture frames run
+    // synchronously (Tier 1) because DoCapture ran inline and would capture not-
+    // yet-rendered output under deferral. Now DoCapture is recorded as GLOp::Capture
+    // and replayed in-order, so capture frames CAN be deferred — engaging the render
+    // thread on games (e.g. Shrek's minimap) that only DISPLAY the capture. The one
+    // remaining hazard is a CPU readback of captured VRAM mid-frame (SyncVRAMCapture);
+    // guarded separately. Read once (per-frame prop reads are too costly).
+    static int _deferCapture = litevGpuProp("debug.litev.defercapture");
+    DeferReplay = !RIRMode && (_deferCapture || !GPU.CaptureActiveThisFrame);
     ShadowCopyNs = 0;
     ShadowCopyBytes = 0;
 }
@@ -1351,6 +1391,54 @@ void GLRenderer::ReplayFinalPass(const GLLogRecord& r)
     RenderScreen(r.YStart, r.YEnd);
 }
 
+void GLRenderer::RIRRecordCapture(int ystart, int yend)
+{
+    // R4-during-capture: snapshot the scalar capture state and record a Capture
+    // op so DoCapture replays IN-ORDER at SubmitFrame — after the composites for
+    // this span (so it reads the replayed OutputTex2D/3D, not not-yet-rendered
+    // output) and before this frame's final pass (matching the inline aux state).
+    // Mirrors RIRRecordFinalPass.
+    GLLogRecord* rec = LogBuild->AppendWithPayload(GLOp::Capture, nullptr, sizeof(sCaptureHdr));
+    if (rec)
+    {
+        rec->YStart = ystart;
+        rec->YEnd = yend;
+
+        sCaptureHdr h;
+        h.DispCntA    = DispCntA;
+        h.CaptureCnt  = CaptureCnt;
+        h.Aux0VRAMCap = Aux0VRAMCap;
+        memcpy(LogBuild->Payload(*rec), &h, sizeof(h));
+
+        RIRReplayCount++;
+        if (RIRMode)
+        {
+            ReplayCapture(*rec);   // immediate replay (bring-up)
+            LogBuild->Reset();
+        }
+        // else deferred: ReplayLog() replays this record at SubmitFrame.
+    }
+    else
+    {
+        // Overflow. In RIR mode an inline capture is bit-exact (same moment). In
+        // deferred mode the composites feeding it are still unreplayed, so an
+        // inline capture would read garbage — rely on arena sizing (RIRInlineGL).
+        RIRInlineGL++;
+        if (RIRMode) { DoCapture(ystart, yend); LogBuild->Reset(); }
+    }
+}
+
+void GLRenderer::ReplayCapture(const GLLogRecord& r)
+{
+    const u8* p = ReplaySrc()->Payload(r);   // replay bank, not live LogBuild
+    sCaptureHdr h;
+    memcpy(&h, p, sizeof(h));
+    DispCntA    = h.DispCntA;
+    CaptureCnt  = h.CaptureCnt;
+    Aux0VRAMCap = h.Aux0VRAMCap;
+    DoCapture(r.YStart, r.YEnd);
+}
+
 // Replay the entire deferred log in record (timeline) order. Each 2D op routes to
 // its owning engine's RIRReplay; FinalPassSpan to ReplayFinalPass. Render3D is not
 // recorded in deferred mode (the raster stays inline at VCount 215); any stray
@@ -1402,6 +1490,11 @@ void GLRenderer::ReplayLog()
         {
         case GLOp::FinalPassSpan:
             ReplayFinalPass(r);
+            break;
+        case GLOp::Capture:
+            // R4-during-capture: display-capture span replayed in-order, after the
+            // 2D composites for its scanlines have written OutputTex2D.
+            ReplayCapture(r);
             break;
         case GLOp::Render3D:
             // OutputTex3D-writing raster half; geometry already consumed above.
