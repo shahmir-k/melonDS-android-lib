@@ -7,18 +7,30 @@ add_executable(liteDS-headless
     PlatformHeadless.cpp
     VerifyTrace.cpp
     InputScript.cpp
+    # Local multiplayer: compile LocalMP + a Local-only MPInterface directly into
+    # the harness (NOT the net-utils lib, which drags in ENet/Slirp for LAN/Netplay).
+    # LocalMP only needs Platform mutex/semaphore from core.
+    "${CMAKE_SOURCE_DIR}/src/net/LocalMP.cpp"
+    MPLocal.cpp
 )
 
 target_link_libraries(liteDS-headless PRIVATE core)
 
 # core's INTERFACE include dir already points at src/, so "types.h",
-# "xxhash/xxhash.h", etc. resolve. Add our own dir for the local headers.
-target_include_directories(liteDS-headless PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+# "xxhash/xxhash.h", etc. resolve. Add our own dir + src/net for the MP headers.
+target_include_directories(liteDS-headless PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_SOURCE_DIR}/src/net")
 
 # Profiler compile-out discipline: LITE_PROFILE_* macros vanish unless
 # LITEV_PROFILE=1 is set (default OFF, upstream-identical).
 if (LITEV_PROFILE)
     target_compile_definitions(liteDS-headless PRIVATE LITEV_PROFILE=1)
+endif()
+
+# G1b geometry-offload verify output in the summary needs the flag on the harness too.
+if (LITEV_GEOM_OFFLOAD)
+    target_compile_definitions(liteDS-headless PRIVATE LITEV_GEOM_OFFLOAD=1)
 endif()
 
 # dlopen/dlsym for the Platform dynamic-library backend.

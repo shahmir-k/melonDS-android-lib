@@ -1892,3 +1892,293 @@ Remaining gap to 60: wall 18.1ms vs 16.6ms = ~1.5ms, in the render/gate + therma
 The banked emulation-core efficiency (FIXEDREG flag traffic, device-pending) + the
 residual overlap headroom (runFrame was 14ms at 63-70C, ~11ms cold) close it. This
 is the headline win of the campaign.
+
+### D.7 addendum 24 — R4 render CORRECTNESS solved via framebuffer-hash gate; correct build ~40-45fps, early-release ~55 still racy
+
+The flicker root cause (found by the FBHASH gate, invisible to eyes/screenshots):
+the deferred ReplayLog read the LIVE LogBuild pointer, which StartFrameLog flips to
+the emu's NEXT bank every frame — so under the render thread it drained the WRONG
+bank (every bank=0 frame blank, bank=1 correct) = the every-other-frame flicker.
+Fixed (core 4492c0e1: ReplaySrc reads the true replay bank; app 8440dc09) + removed
+a 2nd bug (updateRenderer re-registering the early-release callback).
+
+THE GATE (the missing tool all along): debug.litev.fbhash=1 → glReadPixels the
+composited output → per-frame hash → logcat (works on the HW-overlay SurfaceView
+screencap can't read; RTC pinned + frame-index reset at loadState for determinism;
+zero cost off). Proves correctness WITHOUT the user: same deterministic savestate,
+serial vs threaded hashes must match under the fixed 1-frame offset. RESULT:
+threaded==serial 274/274 frames bit-exact. The threaded render is PROVABLY correct.
+
+HONEST SPEED: the shipped gate-PASSING build uses DELAYED release (emu freed only
+after SubmitFrame's emu-state reads finish; only GPU present overlaps, gate ~8ms):
+~31fps throttled / ~40-45 cooled. The ~55fps figure was EARLY release — which the
+gate proves STILL has 2 residual races (systematic 3D-latency shift + a
+non-deterministic 2D live-race), so it was NOT shipped (correctness-first). Pushed
+liteDS-v2-android 4492c0e1 + liteDS-v2-app-r4 8440dc09 (full-stack: R4+FIXEDREG+
+GXFIFO+mem-tiers, all flags ON). Device has the correct build.
+
+NEXT: close the 2 early-release races (now that the FBHASH gate exists to prove
+them) → reclaim ~55fps proven-correct. That is the path to the fast AND correct
+build; the delayed-release ~40-45 build is the safe correct floor meanwhile.
+
+### D.7 addendum 25 — GLOBALREG: DraStic cross-block register residency BUILT + bit-exact, but the lever is mis-aimed (ARM9 is 18% of the frame, not 50%+); measured ARM9 cut ~3-5% ≈ <1% frame
+
+THE AIM (STEP 0, heavy 8-kart in-race savestate, window 60:960). Decomposed
+runFrame with LITEV_PROFILE, HOST (Apple M-series) and DEVICE (RG DS / A55, the
+real in-order target). Shares of runFrame:
+| bucket        | host % | device % (A55) |
+|---------------|-------:|---------------:|
+| ARM9 exec     | 13.1   | **18.6**       |
+| GPU3D geom    |  6.5   |  5.1           |
+| ARM7 exec     |  4.4   |  4.0           |
+| DMA           |  4.3   |  3.7           |
+| RunSystem     | 60.4   | **63.2**       |
+| residual      | 11.3   |  5.4           |
+RunSystem (scheduler event handlers: 2D software-raster scanline events + SPU mix
++ timers/DMA scheduling; ~2935 events/frame) DOMINATES; ARM9 is only ~18% even on
+the in-order A55. ARM9 is ALSO ~1373 idle-hits/frame (main loop idle-waits). So
+the register lever targets ≤18% of the frame, and register-boundary traffic is a
+sub-fraction of that — the lever is mis-aimed for THIS workload (as STEP 0's own
+go/no-go anticipated). NB the headless RunSystem includes software 2D raster that
+the real app runs on the GL render thread (R4), so on-app the ARM9 share is even
+smaller relative to the wall.
+
+THE LEVER, BUILT ANYWAY (the mandate was to attempt the real thing). New flag
+LITEV_JIT_GLOBALREG (default OFF, on FIXEDREG+DISPATCH). Design that fits melonDS:
+guest r0..r6 pinned to callee-saved host w19..w25, LOADED ONCE at ARM_Dispatch
+(slice entry) + SPILLED ONCE at ARM_Ret (slice exit); kept live across every
+block / the emitted dispatcher / linked chains (callee-saved => preserved for
+free, incl. across C helper BLs). The per-block RegisterCache no longer
+reload-on-first-use or spill-at-block-end the pinned regs (UnloadRegister/
+PrepareExit no-op them; Prepare's evictor skips them) — removing the block-
+boundary traffic DraStic eliminates (~49k first-loads + ~117k writebacks/frame).
+KEY SIMPLIFICATION: pin only the never-mode-banked regs (r0..r7), so mode/
+exception switches (which reorder the register file) never relocate them — the
+SOLE file-coherence point is the interpreter fallback, bracketed spill-before/
+reload-after. Block transfers stay coherent via MapReg; literal folding writes
+the host reg before PutLiteral.
+
+REGISTER-BUDGET CEILING (structural, aarch64): x26/x27/x28/x29 are reserved
+(RMemBase/RCPSR/RCycles/RCPU), leaving exactly 7 free callee-saved regs. DraStic's
+full r0..r14 (15-reg) global pin is NOT representable on this host without evicting
+the fastmem base / CPSR / cycle counter. 7 regs (r0..r6) is the architectural
+maximum here, and STEP 2 reaches it.
+
+GATE — ALL bit-exact flag-ON, every commit, torture-with-script, host arm64 =
+shipped ARMJIT_A64 backend: shrek-600, shrek-race-3400, armwrestler-arm-600
+(+script), rockwrestler-600 (+script), shrek-600-eventslices. Flag-OFF unchanged.
+DEVICE: GLOBALREG final-frame hashes byte-identical to the FIXEDREG baseline every
+run (5d5920a469598405/a432f5f7e3b7bfa6) — bit-exact on the A55 too.
+
+MEASURED ARM9 delta (arm9_exec_ns/frame, in-race window):
+- HOST, event-slices ON (A/B, noisy): OFF ~516us → ON ~484us ≈ -6% ARM9.
+  (event-slices OFF makes ON *slower*: tiny fixed-cap slices => ARM_Dispatch/Ret
+  fires ~3600x/frame and the 7-reg load+spill outweighs the few-blocks-per-slice
+  boundary savings. The lever only pays with large slices.)
+- DEVICE A55 (full+ES stack, throttled ~83C, matched back-to-back pairs):
+  pair1 10521→10009us (-4.9%), pair2 10884→10604us (-2.6%). ~3-5% of ARM9 exec.
+Since ARM9 exec is ~18.6% of the frame, that is ~0.6-0.9% of total frame time;
+wall/FPS flat within device thermal noise (17.16→17.58, 16.55→16.56).
+
+VERDICT. The lever is CONSTRUCTIBLE and BIT-EXACT (5 torture goldens host + device
+hash parity) — DraStic's #1 core technique, actually built on melonDS, not
+simulated. But its payoff is <1% of frame for this workload, bounded by THREE
+independent walls: (a) ARM9 is only ~18% of the frame here (STEP 0 — the lever is
+mis-aimed); (b) aarch64 caps the pin at 7 regs, not DraStic's 15; (c) the per-
+reentry ARM_Dispatch/ARM_Ret spill (~3600 reentries/frame) claws back ~30% of the
+boundary savings. This CONFIRMS addendum 22's measured null-prediction — now with
+a real bit-exact implementation and A55 measurement, not a within-block
+simulation. The flag is landed OFF by default for optional widening/experiment;
+the real FPS lever remains R4 render-thread overlap (addenda 23/24).
+
+### D.7 addendum 26 — ★ DraStic branchless fastmem + widened register pin: −7.4% ARM9 on device (MEASURED, bit-exact) ★
+
+The coupled DraStic core architecture, built + torture-gated + measured on the A55.
+This CONTRADICTED my own "core is at its floor / per-access check will be net-negative"
+prediction — the coupling (memory model frees a reg → widens the register pin) is what
+makes it pay off, exactly why the pieces measured small in isolation.
+
+STEP 1 (c0b750ab, LITEV_MEM_SWTABLE, default OFF): DraStic branchless software page-table
+fastmem on the JIT LOAD hot path. Flat per-CPU 2KB-page delta table (2^21 x 8B),
+load = LSR/LDR/CBZ/ADD/LDR — one predicated branch, no SIGSEGV handler. Bit-exact by
+construction (delta = the same host pointer fault-based fastmem maps; lazy-installed on
+miss returning the exact SlowRead; loads-only so SMC/JIT invalidation untouched; table
+flushed on DTCM/SWRAM/NWRAM remap+ITCM resize+reset). Table base in ARM::FastMemPageTable
+loaded per-access from context — NOT a reserved host reg (the key: frees MemBase x26).
+
+STEP 2 (d3a0ddfa): with the sw-table, x26/RMemBase is unused → freed and added to the
+LITEV_JIT_GLOBALREG pin as the 8th reg (guest r7 → W26), the AArch64 max.
+
+MEASURED A55 (arm9_exec_ns_per_frame, in-race window 60:960, fault-based baseline
+--fastmem on vs sw-table --fastmem off, interleaved 3-rep, ~83C/1.6GHz):
+  baseline 11.56ms → sw-table 10.73ms (−7.2%) → sw-table+pin 10.69ms (−7.4%).
+Slow u32 load-helper calls 1.54M → 0.28M/frame (branchless table inlines ~82% of the
+loads fault-based left on the slow path — WHY it wins on the in-order A55). Host arm64
+flat (OoO absorbs it — device is the truth). All 5 torture goldens (incl armwrestler/
+rockwrestler WITH scripts) bit-exact at every commit, RE-VERIFIED by orchestrator;
+default byte-identical.
+
+This is the first MEASURED emulation-core win of real size, and it's the DraStic memory
+model + register ABI working together. Honest follow-on (not yet done): store-side
+sw-table + SMC write-table (STEP 1 is loads-only), and whether the ~−7% ARM9 (~0.5-0.8ms
+of the frame) plus store-side compounds to a felt FPS change on the heavy scene — to be
+measured end-to-end in the app.
+
+### D.7 addendum 27 — mem-swtable STORE side landed (bit-exact, 8ef81c3d); GXFIFO twin-stream drain CLOSED (timing-incompatible)
+
+STORE-side branchless sw-table fastmem, the sanctioned loads-only follow-on. Landed on
+`liteDS-v2` @ **8ef81c3d**, default OFF, bit-exact. This is the untouched half of the hot
+memory path (STEP 1/addendum 26 was loads-only; stores always took the exact SlowWrite).
+
+Design: a DEDICATED store page-table (loads and stores map differently). A page gets a
+non-zero store delta ONLY for plain writable flat RAM whose backing byte is exactly
+`delta+addr` — MainRAM/DTCM/SharedWRAM/WRAM7. **NWRAM is excluded** even though it is
+fastmem-compatible for LOADS: a DSi NWRAM bank write mirrors into every mapped part
+(`DSi::ARM9Write32` loops over `NWRAMMap`), so one raw store would miss the others — it
+stays on the exact SlowWrite. IO/VRAM/ITCM/BIOS excluded by IsFastmemCompatible. SMC/JIT
+invalidation preserved EXACTLY (approach A): after the raw store the codegen reproduces
+`CheckAndInvalidate<num,region>` INLINE against the real `CodeMemRegions[].Code` bitmap
+(per-page base cached in a second store table, 0 for never-executable DTCM) and diverts to
+the exact `SlowWrite*SW` only when a code bit is set. The inline test reads the identical
+byte+bit CheckAndInvalidate uses (low 11 bits preserved by 2KB-page-aligned localisation),
+so it can never false-negative a needed invalidation — the safety-critical direction. Store
+tables populated in lockstep with the load table in InstallFastEntry, flushed together in
+FlushFastTables (every remap/reset). Cost: +64MB when ON (two 16M-entry tables per CPU);
+default OFF so zero normally. Store fast path scratch W1/W2/W3/W5/W6/W7 sits outside the
+GLOBALREG pin (W19..W26) and the mapped set {W4,W8-W15,W19-W25} — no collision.
+
+GATE (orchestrator-verified across 4 build configs, individual commands — NOT trusted from
+the agent, which only gated SWTABLE in isolation and missed the coupled config):
+- SWTABLE-only exact: shrek-600, shrek-race-3400, armwrestler+script, rockwrestler+script — ALL OK
+- Coupled exact (DISPATCH+LINK+DTCM_BLOCK+MAINRAM_LOAD+SWTABLE+FIXEDREG+GLOBALREG): same
+  four ALL OK — proves the store path bit-exact UNDER the GLOBALREG W19..W26 pin (the
+  register interaction the agent never tested).
+- Coupled+EVENT_SLICES: shrek-600-eventslices, ne-multiplemodels-600-eventslices — OK.
+- flag-OFF byte-identical by construction (every diff behind #ifdef LITEV_MEM_SWTABLE).
+TWO false-alarm traps caught & correctly diagnosed (both the exact class §5 warns about):
+(1) rockwrestler "MISMATCH at frame 3" under an EVENT_SLICES build — reproduced IDENTICALLY
+without the store change (coupled-minus-store build), so it is EVENT_SLICES re-timing, not a
+regression; rockwrestler/armwrestler are exact-timing-only oracles (no ES golden exists), so
+verifying them against an ES build is the addendum-17 mistake. (2) A shell-loop arg-parse bug
+made three scripted goldens exit-2 with the Usage text (not a mismatch) — re-run as individual
+commands → all OK. Lesson re-confirmed: torture goldens gate on EXACT-timing builds; run each
+as its own command; re-verify the orchestrator's OWN harness invocation.
+
+PERF — MEASURED on device (RG DS 4×A55, in-race window 60:960, cooled <52°C, 1.992GHz,
+3 interleaved reps, all bit-exact hash 5d5920a4...): the STORE side is a NET ARM9
+REGRESSION. arm9_exec_ns/frame: baseline `full` (fault-based fastmem) 7.795ms → loads-only
+swtable-pin 7.041ms (−9.67%) → loads+STORES swtable-pin 7.458ms (−4.32%). Store-side
+marginal = **+5.92% ARM9** (C>B every rep: 7458/7523/7397 vs 7014/7120/7041 µs), giving
+back ~60% of the loads-only win; window_fps corroborates (B 25.10 → C 24.70 = baseline).
+Mechanism: the store fast path inlines two dependent table-pointer loads + the SMC-bitmap
+check into EVERY store — memory-latency-bound work that stalls the in-order A55 — whereas
+melonDS's exact SlowWrite is a single predicted call to a hot helper. Stores never had the
+heavy slow path that made LOADS win (the load slow-helper was called 1.54M/frame; there is
+no comparable store slow-helper cost), so a branchless store table can only add overhead.
+
+DECISION: the store side is CLOSED-NEGATIVE, split behind its OWN flag LITEV_MEM_SWTABLE_STORE
+(default OFF). LITEV_MEM_SWTABLE alone now = loads-only (the shipped −9.67% win, stores back
+on the exact SlowWrite, +64MB store tables not allocated); +STORE = the regressing variant,
+kept for the record / future re-aim (e.g. packing delta+codeBase into one 16-byte entry to
+halve the context loads). Re-gated after the split: loads-only and loads+stores BOTH pass all
+exact torture goldens; flag-OFF byte-identical. This is the honest outcome — implemented
+bit-exact, measured on the target core, found net-negative, gated OFF, loads-only win intact.
+Store-side commit 8ef81c3d (loads+stores under one flag) → flag-split follow-up 5cd17c5e.
+
+ORCHESTRATOR-INDEPENDENT PERF VERIFICATION (not trusting the agent's number — the §5
+discipline): re-ran the agent's OWN device binaries myself (liteDS-B-loads vs liteDS-C-stores,
+cooled): B 7.002ms vs C 7.363ms ARM9/frame (+5.16%), window_fps 25.27 → 24.88 — reproduces
+the agent's B/C. Also built a CLEAN same-commit A/B (HEAD, only the LITEV_MEM_SWTABLE_STORE
+flag differs, eliminating any ae1a040e-vs-HEAD question): loads-only 7.162ms vs loads+stores
+7.400ms (+3.32%), window_fps 25.03 → 24.88. Direction unanimous across all measurements
+(agent 3/3 + two orchestrator pairs on three binary pairs): the store side is a real ARM9
+regression (magnitude ~+3-6% with thermal state), window_fps always drops. Gate-off confirmed.
+
+CORE-CAMPAIGN STATUS after this session: the shippable core is UNCHANGED from the handoff's
+measured state — loads-only sw-table + widened register pin (−9.67% ARM9 vs fault-fastmem),
+already landed pre-session at ae1a040e. This session added the store side (the sole remaining
+core lever), proved it bit-exact, measured it net-negative on the A55, and gated it OFF. Every
+other DraStic-teardown optimization is landed-or-closed-with-code-level-evidence (GXFIFO drain
+/ DMA chunk = timing-incompatible with melonDS's cycle-metered model; idle-loop / palette-COW =
+moot for the target). So the end-to-end app FPS would reconfirm the handoff's ~31fps heavy-scene
+ceiling (the shippable core did not change) — the honest conclusion is that the core campaign is
+COMPLETE and the felt-FPS wall is the emulation/thermal ceiling, exactly as §3 assessed.
+
+GXFIFO twin-stream de-interleaved batch drain (addendum-19 item 3, remaining 2/3) — CLOSED.
+Split verdict: the branchless jump-table DISPATCH (the safe, valuable third) is already
+landed in LITEV_GXFIFO_BATCH and is bit-exact because it changes HOW the opcode dispatches,
+not WHEN commands execute. DraStic's actual speed mechanism — accumulate the whole display
+list then drain it in one branchless loop at SWAP — is ARCHITECTURALLY INCOMPATIBLE with
+melonDS's timing-exact GX model, verified in code: `GPU3D::Run()` (GPU3D.cpp:3048) is
+cycle-metered (executes commands only as ARM9 cycles are consumed), and `CmdFIFO.Level()`
+directly gates the GXFIFO IRQ (CheckFIFOIRQ:3088) and DMA (CheckFIFODMA:3098). Draining all
+at once changes the FIFO-level trajectory → IRQ/DMA timing → CPU execution → breaks the
+golden gate (shrek-race-3400 captures GX timing) and the ARM7/MP-timing-exact non-negotiable.
+The storage-only de-interleave (twin cmd-byte/param-word buffers for D-cache locality,
+preserving execution order) is separable but a massive timing-fragile rewrite of the
+CmdFIFO/CmdPIPE ring buffers + savestate format for an evidence-predicted-marginal win
+(NEON_GEOMETRY, same dispatch-dominated 271ns/cmd target, already closed-negative ~1%).
+Re-openable only as that storage-only locality experiment.
+
+### D.7 addendum 28 — ★ STORE-side sw-table RETRY (DraStic-faithful) lands: −4.0% ARM9 on device, bit-exact ★
+
+The store side was CLOSED-NEGATIVE in addendum 27 (+5–6% ARM9). Per the STANDING PRINCIPLE
+(never give up on a DraStic lever; assume OUR impl is wrong), it was rebuilt DraStic-faithfully
+and now WINS: **−4.0% ARM9 on device (cooled, interleaved), bit-exact, MP-safe.** DraStic proved
+the technique; our two prior impls were wrong. Landed on `liteDS-v2`, default OFF behind
+`LITEV_MEM_SWTABLE_STORE` (requires `LITEV_MEM_SWTABLE`).
+
+TWO impl bugs, fixed in two steps:
+
+STEP A — kill the dependent-load chain (addendum-27 diagnosis §3d bugs 1–3). The old store fast
+path inlined a ~4-deep dependent-load chain per store: `LDR base,[RCPU,StoreTable]` +
+`LDR delta` + `LDR base,[RCPU,StoreCodeTable]` + `LDR codeBase` + `LDR AddressRange.Code` +
+bit test. Replaced with a path the SAME shape as the WINNING load path — one context load, one
+indexed load, one raw store — by FOLDING the SMC decision into the delta entry:
+- ONE store table (dropped the 2nd "code base" table). `FastMemStoreTable[page] != 0` ⟺ the page
+  is store-eligible flat RAM (MainRAM or DTCM) AND its enclosing code-protection page is code-free.
+- Code-gain punch: `ARMJIT_Memory::PunchStoreCode(region, localOffset)` zeroes every store entry
+  aliasing a just-compiled MainRAM page (all guest mirrors × both CPUs; over-punch is safe), hooked
+  at the single empty→code transition in `CompileBlock` (ARMJIT.cpp, alongside SetCodeProtection).
+  DTCM is never executable (`CodeMemRegions[DTCM]==NULL`) so it never needs punching. Literals are
+  covered for free: literal pages are folded into a block's addressRanges (ARMJIT.cpp), so they are
+  Code-protected and punched like code.
+- Store-eligible restricted to **MainRAM + DTCM** (the hot store targets). SharedWRAM/WRAM7 dropped
+  from store-fastmem (small; avoids their mirror/WRAMCNT bookkeeping); NWRAM excluded (a DSi bank
+  write mirrors into every mapped part). All stay on the exact SlowWrite.
+Result after STEP A: **+1.0% ARM9** (S vs loads-only) — regression nearly gone but not a win.
+
+STEP B — the residual was the per-slow-store `InstallFastEntry`. Every store that MISSED the fast
+path (SMC/ineligible) called `SlowWrite*SW`, which ran `InstallFastEntry`
+(ClassifyAddress + GetMirrorLocation + PageContainsCode) — work the loads-only build's plain
+`BL SlowWrite9` never did. But the store table is ALREADY populated as a side effect of load misses
+(`SlowRead*SW` installs BOTH tables) plus the code-gain punch, so per-slow-store install is
+redundant. The store slow path now calls the exact `SlowWrite9/SlowWrite7` directly (no install;
+the `SlowWrite*SW` store wrappers were deleted). Isolated cost of the redundant install: ~5% ARM9.
+
+DEVICE PERF (RG DS 4×A55, in-race 8-kart scene, savestate slot-2, window 60:960, cooled <48 °C,
+interleaved, all bit-exact final_top=5d5920a4…), arm9_exec_ns/frame mean. Isolating 3-way A/B
+(loads-only / store STEP-A / store STEP-A+B, one session):
+- loads-only (swtable-pin)                    7,106,734 ns  (baseline)
+- store, STEP A only (per-store install)      7,178,769 ns  (+1.0%)
+- store, STEP A+B (no per-store install)  **6,819,346 ns  (−4.0%)**
+Final shipped-source re-confirm (loads-only vs store, separate session): 7,093,937 → 6,875,866 =
+**−3.1%**. Net store-side win **~−3 to −4% ARM9** (session thermal variance), store faster every rep.
+window_fps corroborates (loads 24.99 → store 25.21). Stacks on the loads-only −9.67%: the unified
+fast-memory path (loads + stores) is now ~−12–13% ARM9 vs fault-based fastmem.
+
+GATE (bit-exact, orchestrator-verified, individual commands):
+- EXACT-timing host build (no EVENT_SLICES) + STORE passes ALL committed exact goldens:
+  armwrestler-arm-600 + rockwrestler-600 (SMC torture ROMs — the decisive SMC-fold test),
+  shrek-600, shrek-race-3400 (3400 frames of live gameplay: main-RAM stores + SMC + literals).
+- ES build: store == loads-only byte-for-byte (both diverge identically from the plain-`es`
+  shrek-600-eventslices golden, which predates the coupled config — a pre-existing incomparability,
+  NOT the store change). Direct A/B proof the store path is inert under EVENT_SLICES.
+- Device: final_top/final_bot identical across loads / store, every rep.
+- flag-OFF byte-identical by construction (all diffs behind `#ifdef LITEV_MEM_SWTABLE_STORE`).
+
+Open follow-on (not needed for the win): a code→free refasten hook (ARMJIT.cpp InvalidateByAddr)
+could re-fasten store entries for ex-code pages whose LOAD entry is already cached (so no load
+miss re-installs them). The −4.0% is measured WITHOUT it; it can only help scenes with heavy code
+churn. Note: DraStic DOES install on its slow store path, but its install is cheap (part of the
+MMIO region walk it already needs); relying on load-install is the melonDS-specific adaptation.

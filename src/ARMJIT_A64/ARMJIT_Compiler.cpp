@@ -59,6 +59,56 @@ static_assert(offsetof(ARM, FastBlockLookupSize) == ARM_FastBlockLookupSize_offs
     "ARM_FastBlockLookupSize_offset out of sync with ARM::FastBlockLookupSize");
 static_assert(offsetof(ARM, FastBlockLookup) == ARM_FastBlockLookup_offset,
     "ARM_FastBlockLookup_offset out of sync with ARM::FastBlockLookup");
+#ifdef LITEV_JIT_GLOBALREG
+// GLOBALREG: the ARM_Dispatch/ARM_Ret linkage loads/spills pinned guest regs at
+// ARM_R_offset + reg*4; prove that base against the real ARM::R[] layout.
+static_assert(offsetof(ARM, R) == ARM_R_offset,
+    "ARM_R_offset out of sync with ARM::R");
+#endif
+#endif
+
+#ifdef LITEV_JIT_GLOBALREG
+// GLOBALREG global fixed register map. STEP 1 pins the single hottest never-banked
+// guest reg (r0) to a callee-saved host reg (W19). Only r0..r7 are eligible: they
+// are never mode-banked, so a mode/exception switch (which reorders R_FIQ/R_SVC/...
+// via the register file) never relocates them and needs no sync. The host regs are
+// the leading entries of NativeRegAllocOrder (callee-saved => preserved for free
+// across the emitted dispatcher, linked chains, and any C helper BL). Widening =
+// append pairs here AND the matching `ldr/str wNN` in ARMJIT_Linkage.S.
+static const struct { int GuestReg; Arm64Gen::ARM64Reg HostReg; } GlobalRegPins[] =
+{
+    // STEP 2: the full free callee-saved pool. AArch64 reserves x26/x27/x28/x29
+    // (RMemBase/RCPSR/RCycles/RCPU), so W19..W25 (7 regs) are the architectural
+    // maximum for a global pin here — a full DraStic r0..r14 (15-reg) pin is not
+    // representable on this host without evicting the fastmem/CPSR/cycle regs.
+    // Guest r0..r6 (never mode-banked) map to the leading NativeRegAllocOrder
+    // entries the dynamic cache used to hand out.
+    { 0, Arm64Gen::W19 },
+    { 1, Arm64Gen::W20 },
+    { 2, Arm64Gen::W21 },
+    { 3, Arm64Gen::W22 },
+    { 4, Arm64Gen::W23 },
+    { 5, Arm64Gen::W24 },
+    { 6, Arm64Gen::W25 },
+#ifdef LITEV_MEM_SWTABLE
+    // STEP 2 (coupled DraStic ABI): the software page table loads pt_base from the
+    // ARM context per access, so it does NOT need the permanently-reserved MemBase
+    // host reg (x26) that fault-based fastmem pins. With LITEV_MEM_SWTABLE the load
+    // path never touches RMemBase, so x26/W26 is freed and joins the global pin as
+    // the 8th entry: guest r7 -> W26. This is only sound when fault-based fastmem is
+    // NOT the mechanism (run --fastmem off): the block prologue's MemBase load and
+    // the block-transfer fastmem path (the only other RMemBase users) are suppressed
+    // under this configuration so W26 stays exclusively guest r7. ARM_Dispatch/Ret
+    // load/spill w26 in lockstep (ARMJIT_Linkage.S, same guard).
+    { 7, Arm64Gen::W26 },
+#endif
+};
+static constexpr int NumGlobalRegPins = sizeof(GlobalRegPins) / sizeof(GlobalRegPins[0]);
+#ifdef LITEV_MEM_SWTABLE
+static constexpr u16 GlobalRegPinnedMask = 0x00FF; // r0..r7 (x26 freed by sw-table)
+#else
+static constexpr u16 GlobalRegPinnedMask = 0x007F; // r0..r6
+#endif
 #endif
 
 /*
@@ -974,6 +1024,16 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
     CurCPU = cpu;
     ConstantCycles = 0;
     RegCache = RegisterCache<Compiler, ARM64Reg>(this, instrs, instrsCount, true);
+#ifdef LITEV_JIT_GLOBALREG
+    // GLOBALREG: install the fixed guest->host map. These regs are already resident
+    // in their host regs (loaded by ARM_Dispatch at slice entry, preserved across
+    // block boundaries / the dispatcher / linked chains), so the cache marks them
+    // loaded WITHOUT emitting any per-block reload, and never spills them at a
+    // block boundary. That removes the block-entry first-load + block-exit
+    // writeback traffic for the pinned subset.
+    for (int i = 0; i < NumGlobalRegPins; i++)
+        RegCache.PinRegister(GlobalRegPins[i].GuestReg, GlobalRegPins[i].HostReg);
+#endif
     CPSRDirty = false;
 #ifdef LITEV_JIT_FIXEDREG
     NZCVDeferred = 0;
@@ -986,8 +1046,14 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
     LastInstrCompiledNonBranch = false;
 #endif
 
+#if defined(LITEV_MEM_SWTABLE) && defined(LITEV_JIT_GLOBALREG)
+    // STEP 2: x26 is now pinned to guest r7 (the sw-table load path does not use
+    // RMemBase). Do NOT clobber it with the fault-based MemBase; the sw-table is the
+    // load mechanism and the block-transfer fastmem path is suppressed below.
+#else
     if (hasMemInstr)
         MOVP2R(RMemBase, Num == 0 ? NDS.JIT.Memory.FastMem9Start : NDS.JIT.Memory.FastMem7Start);
+#endif
 
     for (int i = 0; i < instrsCount; i++)
     {
@@ -1031,6 +1097,15 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
             SaveCycles();
             SaveCPSR();
             RegCache.Flush();
+#ifdef LITEV_JIT_GLOBALREG
+            // GLOBALREG: the interpreter reads/writes the guest register FILE
+            // directly, but pinned regs live in host regs and Flush() deliberately
+            // did NOT spill them. Spill them to the file now so the interpreter
+            // sees the authoritative value; the matching reload runs after the
+            // interpreter call (the sole file-coherence point for pinned r0..r7).
+            for (int p = 0; p < NumGlobalRegPins; p++)
+                SaveReg(GlobalRegPins[p].GuestReg, GlobalRegPins[p].HostReg);
+#endif
         }
         else
             RegCache.Prepare(Thumb, i);
@@ -1132,6 +1207,14 @@ JitBlockEntry Compiler::CompileBlock(ARM* cpu, bool thumb, FetchedInstr instrs[]
         {
             LoadCycles();
             LoadCPSR();
+#ifdef LITEV_JIT_GLOBALREG
+            // GLOBALREG: the interpreter may have written the pinned guest regs in
+            // the file (e.g. an ALU/LDM/SWI fallback targeting r0). Reload them into
+            // their fixed host regs so the pinned invariant holds for the rest of
+            // the block / the chained successor.
+            for (int p = 0; p < NumGlobalRegPins; p++)
+                LoadReg(GlobalRegPins[p].GuestReg, GlobalRegPins[p].HostReg);
+#endif
         }
 
 #ifdef LITEV_JIT_LINK

@@ -144,6 +144,11 @@ void ARMv5::UpdateITCMSetting()
     {
         ITCMSize = 0;
     }
+#ifdef LITEV_MEM_SWTABLE
+    // ITCM size change reclassifies low addresses (ITCM vs MainRAM); any installed
+    // MainRAM delta over the affected span could now be wrong. Wipe -> re-resolve.
+    NDS.JIT.Memory.FlushFastTables();
+#endif
 }
 
 

@@ -535,6 +535,11 @@ void ARMJIT_Memory::SetCodeProtection(int region, u32 offset, bool protect) noex
 
 void ARMJIT_Memory::RemapDTCM(u32 newBase, u32 newSize) noexcept
 {
+#ifdef LITEV_MEM_SWTABLE
+    // DTCM geometry change: every installed delta (MainRAM pages the window may now
+    // shadow, or old DTCM pages) could be stale. Wipe -> lazily re-resolved.
+    FlushFastTables();
+#endif
     // this first part could be made more efficient
     // by unmapping DTCM first and then map the holes
     u32 oldDTCMBase = NDS.ARM9.DTCMBase;
@@ -586,6 +591,10 @@ void ARMJIT_Memory::RemapNWRAM(int num) noexcept
     if (NDS.ConsoleType == 0)
         return;
 
+#ifdef LITEV_MEM_SWTABLE
+    FlushFastTables();
+#endif
+
     auto* dsi = static_cast<DSi*>(&NDS);
     for (int i = 0; i < Mappings[memregion_SharedWRAM].Length;)
     {
@@ -610,6 +619,9 @@ void ARMJIT_Memory::RemapNWRAM(int num) noexcept
 
 void ARMJIT_Memory::RemapSWRAM() noexcept
 {
+#ifdef LITEV_MEM_SWTABLE
+    FlushFastTables();
+#endif
     Log(LogLevel::Debug, "remapping SWRAM\n");
     for (int i = 0; i < Mappings[memregion_WRAM7].Length;)
     {
@@ -930,6 +942,23 @@ ARMJIT_Memory::ARMJIT_Memory(melonDS::NDS& nds, bool fastmem) : NDS(nds)
     // effectively enabled. When it is off (or unsupported), no handler is
     // registered so unrelated faults are never intercepted.
     SetFastMemHandler(fastmem && IsFastMemSupported());
+
+#ifdef LITEV_MEM_SWTABLE
+    // DraStic software page tables: one flat 16 MB (2M x 8-byte) delta table per
+    // CPU. calloc zero-fills (all entries slow); entries are installed lazily.
+    FastMemTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    FastMemTable7 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    assert(FastMemTable9 && FastMemTable7);
+#ifdef LITEV_MEM_SWTABLE_STORE
+    // Dedicated STORE table (one per CPU): host-pointer delta that doubles as the SMC
+    // gate. A non-zero entry means store-eligible AND code-free (see InstallFastEntry /
+    // PunchStoreCode); the SMC decision is folded in, so no separate code table is
+    // needed. calloc zero-fills (all slow).
+    FastMemStoreTable9 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    FastMemStoreTable7 = (u64*)calloc(FastTableEntries, sizeof(u64));
+    assert(FastMemStoreTable9 && FastMemStoreTable7);
+#endif
+#endif
 }
 
 void ARMJIT_Memory::SetFastMemHandler(bool enabled) noexcept
@@ -947,6 +976,15 @@ void ARMJIT_Memory::SetFastMemHandler(bool enabled) noexcept
 ARMJIT_Memory::~ARMJIT_Memory() noexcept
 {
     SetFastMemHandler(false);
+
+#ifdef LITEV_MEM_SWTABLE
+    free(FastMemTable9); FastMemTable9 = nullptr;
+    free(FastMemTable7); FastMemTable7 = nullptr;
+#ifdef LITEV_MEM_SWTABLE_STORE
+    free(FastMemStoreTable9); FastMemStoreTable9 = nullptr;
+    free(FastMemStoreTable7); FastMemStoreTable7 = nullptr;
+#endif
+#endif
 
 #if defined(__SWITCH__)
     virtmemLock();
@@ -1036,7 +1074,159 @@ void ARMJIT_Memory::Reset() noexcept
     }
 
     Log(LogLevel::Debug, "done resetting jit mem\n");
+
+#ifdef LITEV_MEM_SWTABLE
+    FlushFastTables();
+#endif
 }
+
+#ifdef LITEV_MEM_SWTABLE
+void ARMJIT_Memory::FlushFastTables() noexcept
+{
+    if (FastMemTable9)
+        memset(FastMemTable9, 0, (size_t)FastTableEntries * sizeof(u64));
+    if (FastMemTable7)
+        memset(FastMemTable7, 0, (size_t)FastTableEntries * sizeof(u64));
+#ifdef LITEV_MEM_SWTABLE_STORE
+    // The store table is populated in lockstep with the load table by InstallFastEntry,
+    // so it must be flushed together to stay coherent on every geometry change.
+    if (FastMemStoreTable9)
+        memset(FastMemStoreTable9, 0, (size_t)FastTableEntries * sizeof(u64));
+    if (FastMemStoreTable7)
+        memset(FastMemStoreTable7, 0, (size_t)FastTableEntries * sizeof(u64));
+#endif
+}
+
+void ARMJIT_Memory::InstallFastEntry(u32 num, u32 addr) noexcept
+{
+    u64* table = num == 0 ? FastMemTable9 : FastMemTable7;
+    if (!table)
+        return;
+
+    int region = num == 0 ? ClassifyAddress9(addr) : ClassifyAddress7(addr);
+
+    // Only flat, contiguous, MemoryBase-backed RAM regions are eligible -- exactly
+    // the set fault-based fastmem maps (OffsetsPerRegion != UINT32_MAX): MainRAM,
+    // DTCM, SharedWRAM, ARM7WRAM (+ DSi NWRAM). ITCM/BIOS/VRAM/IO stay slow.
+    if (!IsFastmemCompatible(region))
+        return;
+
+    const u32 pageMask = (1u << FastTableShift) - 1;       // 0x7FF
+    u32 pageStart = addr & ~pageMask;
+    u32 pageEnd   = pageStart + (pageMask + 1);             // exclusive
+
+    // Guarantee the WHOLE 2 KB page has a single backing, so one delta is valid for
+    // every byte the fast path may compute. The DTCM overlay is the only movable
+    // window that can split a page at a finer granularity than the region ranges.
+    if (num == 0)
+    {
+        u32 dtcmStart = NDS.ARM9.DTCMBase;
+        u32 dtcmSize  = ~NDS.ARM9.DTCMMask + 1;             // 0 when DTCM disabled
+        if (dtcmSize)
+        {
+            u32 dtcmEnd = dtcmStart + dtcmSize;
+            if (region == memregion_DTCM)
+            {
+                // page must lie entirely inside the DTCM window
+                if (!(pageStart >= dtcmStart && pageEnd <= dtcmEnd))
+                    return;
+            }
+            else
+            {
+                // page must not touch the DTCM window at all
+                if (dtcmStart < pageEnd && dtcmEnd > pageStart)
+                    return;
+            }
+        }
+    }
+
+    u32 memoryOffset, mirrorStart, mirrorSize;
+    if (!GetMirrorLocation(region, num, addr, memoryOffset, mirrorStart, mirrorSize))
+        return;
+
+    // page must be wholly contained in the contiguous mirror
+    if (!(pageStart >= mirrorStart && pageEnd <= mirrorStart + mirrorSize))
+        return;
+
+    // host(a) = MemoryBase + OffsetsPerRegion[region] + memoryOffset + (a - mirrorStart)
+    // Store delta so that host(a) = delta + a  for every a in the page.
+    u8* backingBase = MemoryBase + OffsetsPerRegion[region] + memoryOffset;
+    u64 delta = (u64)(uintptr_t)backingBase - (u64)mirrorStart;
+    u32 page = addr >> FastTableShift;
+    table[page] = delta;
+
+#ifdef LITEV_MEM_SWTABLE_STORE
+    // ---- STORE-side eligibility (DraStic-faithful, SMC folded into the entry) ----
+    // A non-zero store entry means BOTH (a) a raw host store to (delta + addr) is
+    // byte-identical to the exact SlowWrite, and (b) no SMC invalidation is needed. So a
+    // page is store-eligible ONLY when it is plain writable flat RAM whose backing byte
+    // IS `delta + a` AND it currently holds no compiled code:
+    //   * MainRAM: eligible only while its enclosing code-protection page is code-free.
+    //     PunchStoreCode() zeroes the entry the instant a block is compiled onto the page
+    //     (ARMJIT::CompileBlock); the entry re-fastens the next time a LOAD miss on the page
+    //     runs InstallFastEntry (SlowRead*SW), which re-checks code-free. The store slow path
+    //     itself does NOT install (redundant with loads; that cost was the A55 regression).
+    //   * DTCM: always eligible -- it is never executable (CodeMemRegions[DTCM] == NULL),
+    //     so no SMC check is ever needed.
+    // SharedWRAM/WRAM7 are deliberately left on the exact SlowWrite (small regions; not
+    // worth their mirror/WRAMCNT bookkeeping). NWRAM is excluded because a DSi bank write
+    // mirrors into every mapped part, so a single raw store is NOT equivalent. Everything
+    // else already failed IsFastmemCompatible above.
+    u64* storeTable = num == 0 ? FastMemStoreTable9 : FastMemStoreTable7;
+    if (storeTable)
+    {
+        u64 storeDelta = 0;
+        if (region == memregion_DTCM)
+        {
+            storeDelta = delta;                        // never executable
+        }
+        else if (region == memregion_MainRAM)
+        {
+            AddressRange* cmr = NDS.JIT.CodeMemRegions[region];
+            u32 localBase = LocaliseAddress(region, num, pageStart) & 0x7FFFFFF;
+            u32 pageAligned = localBase & ~(PageSize - 1);
+            if (!PageContainsCode(&cmr[pageAligned / 512], PageSize))
+                storeDelta = delta;                    // code-free -> fast-eligible
+        }
+        // Explicit write (incl. 0 for ineligible/code-present) keeps the entry coherent
+        // if this page was previously installed with a different state.
+        storeTable[page] = storeDelta;
+    }
+#endif // LITEV_MEM_SWTABLE_STORE
+}
+
+#ifdef LITEV_MEM_SWTABLE_STORE
+void ARMJIT_Memory::PunchStoreCode(int region, u32 localOffset) noexcept
+{
+    // A block was just compiled onto a previously code-free page (ARMJIT::CompileBlock,
+    // at the empty->code transition). Zero every store-table entry that could alias that
+    // physical page so subsequent stores fall to the exact SlowWrite (which invalidates).
+    // Only MainRAM is both store-eligible AND executable; DTCM (the other store-eligible
+    // region) is never executable, so it never reaches here. MainRAM is shared by both
+    // CPUs and mirrored across the 0x02000000..0x03000000 guest window, so we punch every
+    // mirror of the enclosing code-protection page in BOTH CPUs' tables. Over-punching is
+    // safe: a wrongly-zeroed entry only forces a slow store, which self-heals via
+    // InstallFastEntry (called from SlowWrite*SW) once the page is code-free again.
+    if (region != memregion_MainRAM)
+        return;
+    if (!FastMemStoreTable9 && !FastMemStoreTable7)
+        return;
+
+    const u32 mirrorSize = NDS.MainRAMMask + 1;              // physical RAM size (DS: 4 MB)
+    const u32 physPage = (localOffset & 0x7FFFFFF) & (mirrorSize - 1) & ~(PageSize - 1);
+    for (u32 base = 0x02000000; base < 0x03000000; base += mirrorSize)
+    {
+        u32 guest = base + physPage;
+        for (u32 sub = 0; sub < PageSize; sub += (1u << FastTableShift))
+        {
+            u32 page = (guest + sub) >> FastTableShift;
+            if (FastMemStoreTable9) FastMemStoreTable9[page] = 0;
+            if (FastMemStoreTable7) FastMemStoreTable7[page] = 0;
+        }
+    }
+}
+#endif // LITEV_MEM_SWTABLE_STORE
+#endif
 
 bool ARMJIT_Memory::IsFastmemCompatible(int region) const noexcept
 {

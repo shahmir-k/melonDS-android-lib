@@ -103,6 +103,16 @@ template <typename T, int ConsoleType> void SlowWrite7(u32 addr, u32 val);
 template <bool Write, int ConsoleType> void SlowBlockTransfer9(u32 addr, u64* data, u32 num, ARMv5* cpu);
 template <bool Write, int ConsoleType> void SlowBlockTransfer7(u32 addr, u64* data, u32 num);
 
+#ifdef LITEV_MEM_SWTABLE
+// DraStic software page-table load resolvers (install page delta, then exact read).
+template <typename T, int ConsoleType> T SlowRead9SW(u32 addr, ARMv5* cpu);
+template <typename T, int ConsoleType> T SlowRead7SW(u32 addr);
+// The STORE side has no dedicated *SW resolver: its slow path calls the exact
+// SlowWrite9/SlowWrite7 directly. The store table is populated by load misses (SlowRead*SW
+// installs BOTH tables) plus the code-gain punch (PunchStoreCode), so a per-slow-store
+// install is redundant (and was the measured A55 regression; plan D.7 addendum 28).
+#endif
+
 }
 
 #endif

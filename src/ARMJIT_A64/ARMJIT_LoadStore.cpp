@@ -185,6 +185,187 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
     if (!(flags & memop_Post) && (flags & memop_Writeback))
         MOV(rnMapped, W0);
 
+#ifdef LITEV_MEM_SWTABLE
+    // ---- DraStic branchless software page table (loads) --------------------
+    // Replaces melonDS's fault-based fastmem on the load hot path. W0 holds the
+    // access address. Index the per-CPU delta table (loaded from RCPU context, so
+    // no reserved MemBase reg is needed); a non-zero delta gives the backing host
+    // pointer directly (one predicated branch), a zero entry diverts to the
+    // resolver SlowRead*SW which lazily installs the page and returns the exact
+    // value. STORES take no fast path (they call the exact SlowWrite helper), so
+    // JIT/SMC block invalidation is byte-for-byte unchanged.
+    if (!(flags & memop_Store))
+    {
+        // X1 = table base; W2 = page index (addr >> 11); X3 = entry (delta or 0).
+        LDR(INDEX_UNSIGNED, X1, RCPU, offsetof(ARM, FastMemPageTable));
+        LSR(W2, W0, ARMJIT_Memory::FastTableShift);
+        LDR(X3, X1, ArithOption(W2, true));           // ldr x3, [x1, w2, uxtw #3]
+        FixupBranch slow = CBZ(X3);
+
+        // fast: host = (addr & alignMask) + delta ; rd = *(T*)host
+        if (size > 8)
+            ANDI2R(W4, W0, addressMask);
+        else
+            MOV(W4, W0);
+        ADD(X4, X4, X3);                              // X4 = host pointer
+        LDRGeneric(size, flags & memop_SignExtend, INDEX_UNSIGNED, rdMapped, X4, 0);
+        if (size == 32)
+        {
+            // rotate right by (addr & 3) * 8, matching SlowRead9/7's unaligned ROR.
+            UBFIZ(W0, W0, 3, 2);
+            RORV(rdMapped, rdMapped, W0);
+        }
+        FixupBranch fastDone = B();
+
+        SetJumpTarget(slow);
+        // allowUnload=false: the fast path above bypasses this Push/Pop, so evicting
+        // a mapped reg here would desync the register cache at the merge point.
+        PushRegs(false, false, false);
+        if (Num == 0)
+        {
+            MOV(X1, RCPU);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowRead9SW<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowRead9SW<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowRead9SW<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowRead9SW<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowRead9SW<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowRead9SW<u8,  1>); break;
+            }
+        }
+        else
+        {
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowRead7SW<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowRead7SW<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowRead7SW<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowRead7SW<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowRead7SW<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowRead7SW<u8,  1>); break;
+            }
+        }
+        PopRegs(false, false);
+        if (size == 32)
+            MOV(rdMapped, W0);                          // SlowRead*SW already ROR'd
+        else if (flags & memop_SignExtend)
+            SBFX(rdMapped, W0, 0, size);
+        else
+            UBFX(rdMapped, W0, 0, size);
+
+        SetJumpTarget(fastDone);
+    }
+    else
+    {
+#if defined(LITEV_MEM_SWTABLE_STORE)
+        // ---- STORE fast path (branchless software page table) ---------------
+        // DraStic-faithful retry (plan D.7 addendum 28). The prior impl (addendum 27)
+        // regressed +5% ARM9 on the in-order A55 because every store inlined a ~4-deep
+        // dependent-load chain: two context table-base loads + two indexed table loads +
+        // an AddressRange SMC-bitmap load. This version folds the SMC decision INTO the
+        // delta entry so the common store is the SAME shape as the WINNING load path --
+        // one context load + one indexed load + one raw store, nothing else.
+        //
+        // Invariant (maintained by InstallFastEntry + PunchStoreCode):
+        //   FastMemStoreTable[page] != 0  <=>  the page is store-eligible flat RAM
+        //   (MainRAM or DTCM) AND its enclosing code-protection page holds NO compiled
+        //   code. So a non-zero delta means both: (a) a raw host store to (delta+addr) is
+        //   byte-identical to the exact SlowWrite, and (b) no SMC invalidation is needed.
+        // A zero entry (ineligible -- SWRAM/WRAM7/NWRAM/IO/VRAM -- OR code-present) diverts
+        // to SlowWrite*SW, which does the exact write + exact CheckAndInvalidate and lazily
+        // (re)installs the page. => every store is byte-identical to the pure-SlowWrite
+        // baseline, and code pages ALWAYS take the slow path, so JIT/SMC invalidation is
+        // preserved exactly (MP-safe). W0 = access address. Scratch: W1/W2/X3/W5/X6.
+        LDR(INDEX_UNSIGNED, X1, RCPU, offsetof(ARM, FastMemStoreTable));
+        LSR(W2, W0, ARMJIT_Memory::FastTableShift);
+        LDR(X3, X1, ArithOption(W2, true));           // ldr x3, [x1, w2, uxtw #3]  (delta or 0)
+        FixupBranch slow = CBZ(X3);                    // 0 => ineligible OR code-present -> slow
+
+        // fast raw store: host = (addr & alignMask) + delta ; *(T*)host = rd
+        if (size > 8)
+            ANDI2R(W5, W0, addressMask);
+        else
+            MOV(W5, W0);                               // W5 = aligned address
+        ADD(X6, X5, X3);                               // X6 = host pointer
+        STRGeneric(size, INDEX_UNSIGNED, rdMapped, X6, 0);
+        FixupBranch fastDone = B();
+
+        SetJumpTarget(slow);
+        // allowUnload=false: the fast path above bypasses this Push/Pop, so evicting a
+        // mapped reg here would desync the register cache at the merge point.
+        // Slow path calls the EXACT SlowWrite (write + CheckAndInvalidate); it does NOT
+        // (re)install a store-table entry. The store table is populated as a side effect
+        // of load misses (SlowRead*SW installs BOTH tables) plus the code-gain punch, so a
+        // per-slow-store install is redundant -- and its ClassifyAddress/GetMirrorLocation/
+        // PageContainsCode cost was the measured A55 regression (plan D.7 addendum 28).
+        PushRegs(false, false, false);
+        if (Num == 0)
+        {
+            MOV(X1, RCPU);
+            MOV(W2, rdMapped);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowWrite9<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite9<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite9<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite9<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite9<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite9<u8,  1>); break;
+            }
+        }
+        else
+        {
+            MOV(W1, rdMapped);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowWrite7<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite7<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite7<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite7<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite7<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite7<u8,  1>); break;
+            }
+        }
+        PopRegs(false, false);
+
+        SetJumpTarget(fastDone);                       // fast + slow merge here
+#else
+        // store: exact SlowWrite helper (no fast path -> invalidation untouched).
+        // This is the SHIPPED loads-only SWTABLE store path (store fast path is
+        // closed-negative on the A55; see LITEV_MEM_SWTABLE_STORE above).
+        PushRegs(false, false);
+        if (Num == 0)
+        {
+            MOV(X1, RCPU);
+            MOV(W2, rdMapped);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowWrite9<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite9<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite9<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite9<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite9<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite9<u8,  1>); break;
+            }
+        }
+        else
+        {
+            MOV(W1, rdMapped);
+            switch (size | NDS.ConsoleType)
+            {
+            case 32: QuickCallFunction(X3, SlowWrite7<u32, 0>); break;
+            case 33: QuickCallFunction(X3, SlowWrite7<u32, 1>); break;
+            case 16: QuickCallFunction(X3, SlowWrite7<u16, 0>); break;
+            case 17: QuickCallFunction(X3, SlowWrite7<u16, 1>); break;
+            case 8:  QuickCallFunction(X3, SlowWrite7<u8,  0>); break;
+            case 9:  QuickCallFunction(X3, SlowWrite7<u8,  1>); break;
+            }
+        }
+        PopRegs(false, false);
+#endif // LITEV_MEM_SWTABLE_STORE
+    }
+#else
     u32 expectedTarget = Num == 0
         ? NDS.JIT.Memory.ClassifyAddress9(addrIsStatic ? staticAddress : CurInstr.DataRegion)
         : NDS.JIT.Memory.ClassifyAddress7(addrIsStatic ? staticAddress : CurInstr.DataRegion);
@@ -379,6 +560,7 @@ void Compiler::Comp_MemAccess(int rd, int rn, Op2 offset, int size, int flags)
             SetJumpTarget(mainramDone);
 #endif
     }
+#endif // LITEV_MEM_SWTABLE (else)
 
     if (CurInstr.Info.Branches())
     {
@@ -550,6 +732,14 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
     bool compileFastPath = NDS.JIT.FastMemoryEnabled()
         && store && !usermode && (CurInstr.Cond() < 0xE || NDS.JIT.Memory.IsFastmemCompatible(expectedTarget));
+
+#if defined(LITEV_MEM_SWTABLE) && defined(LITEV_JIT_GLOBALREG)
+    // STEP 2: x26/RMemBase is pinned to guest r7. The block-transfer fastmem path is
+    // the only remaining RMemBase user (ADD X1, RMemBase, X0); suppress it so W26 is
+    // never clobbered. Block transfers use the exact SlowBlockTransfer helper (as
+    // they already do under --fastmem off, the sw-table regime).
+    compileFastPath = false;
+#endif
 
     {
         s32 offset = decrement

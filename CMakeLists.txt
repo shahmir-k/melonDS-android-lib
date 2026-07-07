@@ -171,6 +171,30 @@ if (LITEV_JIT_FIXEDREG)
     endif()
 endif()
 
+# GLOBALREG (DraStic teardown 01 §6.1 — global cross-block fixed register
+# allocation). Builds ON TOP of LITEV_JIT_FIXEDREG + LITEV_JIT_DISPATCH. Pins a
+# SUBSET of the never-banked guest GP registers (r0..r7) to fixed callee-saved
+# host registers (W19..) GLOBALLY: they are loaded ONCE at ARM_Dispatch (JIT
+# slice entry), spilled ONCE at ARM_Ret (slice exit), and kept LIVE across block
+# boundaries / the emitted dispatcher / linked chains (callee-saved => preserved
+# for free across the dispatcher and any C helper). The per-block RegisterCache
+# no longer reload-on-first-use or spill-at-block-end the pinned regs, removing
+# the block-boundary register traffic DraStic eliminates. Pinning only r0..r7
+# (never mode-banked) keeps mode/exception switches transparent; the sole
+# file-coherence point is the interpreter fallback, which is bracketed with an
+# explicit spill-before / reload-after. Codegen-only: cycles/timing/register-file
+# semantics unchanged, so flag-ON must stay bit-exact on the exact-timing +
+# torture goldens. Default OFF -> emission-identical to the FIXEDREG tree.
+# AArch64 only (the x64 JIT keeps the upstream dynamic per-block register cache).
+option(LITEV_JIT_GLOBALREG "GLOBALREG: globally pin never-banked guest regs to fixed host regs across block boundaries (AArch64)" OFF)
+if (LITEV_JIT_GLOBALREG)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_GLOBALREG=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_GLOBALREG requires an AArch64 target.")
+    endif()
+endif()
+
 # Unit 4: direct block linking (patch, don't dispatch). Builds ON TOP of the
 # Unit 3 dispatcher: an eligible block exit whose next PC is a compile-time
 # constant emits a per-hop-commit guard followed by a patchable `B` (initially to
@@ -291,6 +315,45 @@ if (LITEV_MEM_MAINRAM_BLOCK)
     endif()
 endif()
 
+# DraStic memory model (docs/drastic-teardown/02-memory.md §2): a BRANCHLESS
+# software page table replacing melonDS's fault-based (SIGSEGV) fastmem on the
+# single-access load hot path. Each JIT guest load indexes a flat per-CPU table
+# of packed host-pointer deltas by (addr >> 11) (2 KB pages, 2M entries, 16 MB),
+# tests the entry, and on a non-zero delta reads the backing store directly with
+# one predicated branch; a zero entry diverts to a resolver that lazily installs
+# the delta (for fastmem-compatible flat RAM: MainRAM/DTCM/SharedWRAM/ARM7WRAM)
+# and returns the exact SlowRead value. LOADS-only in this first tranche (stores
+# keep the exact SlowWrite helper, so JIT/SMC invalidation is completely
+# untouched). The table pointer lives in the ARM context (loaded per-access from
+# RCPU), NOT in a permanently-reserved host reg, so it does not consume the
+# MemBase reg that fault-based fastmem pins -- STEP 2 (LITEV_JIT_GLOBALREG) frees
+# x26 and widens the global pin. Default OFF -> emission-identical to upstream.
+option(LITEV_MEM_SWTABLE "DraStic-style branchless software page-table fastmem (load hot path, AArch64)" OFF)
+if (LITEV_MEM_SWTABLE)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_MEM_SWTABLE=1)
+    else()
+        message(FATAL_ERROR "LITEV_MEM_SWTABLE requires an AArch64 target "
+                            "(the software page table is emitted by ARMJIT_A64).")
+    endif()
+endif()
+
+# STORE-side branchless sw-table (extends the load table to JIT stores + inline SMC
+# check). Built + bit-exact + torture-gated, but MEASURED a NET ARM9 REGRESSION on the
+# in-order A55 (+5.92% marginal; gives back ~60% of the loads-only win) -- the inline
+# per-store table-pointer chase + SMC bitmap check costs more than melonDS's predicted
+# SlowWrite call, and stores never had the heavy slow path that made LOADS win. So this
+# is CLOSED-NEGATIVE and split behind its OWN flag, default OFF: LITEV_MEM_SWTABLE alone
+# = loads-only (the -9.67% win), stores keep the exact SlowWrite. Kept (not deleted) for
+# the record / future re-aim. Requires LITEV_MEM_SWTABLE. See plan D.7 addendum 27.
+option(LITEV_MEM_SWTABLE_STORE "STORE-side branchless sw-table (closed-negative on A55; default OFF)" OFF)
+if (LITEV_MEM_SWTABLE_STORE)
+    if (NOT LITEV_MEM_SWTABLE)
+        message(FATAL_ERROR "LITEV_MEM_SWTABLE_STORE requires LITEV_MEM_SWTABLE.")
+    endif()
+    add_compile_definitions(LITEV_MEM_SWTABLE_STORE=1)
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
@@ -368,6 +431,8 @@ endif()
 # sizeof(NDS): MUST flow through the LITEV_* re-export loop below for a single ABI
 # across the out-of-tree JNI frontend. FPS-first: the approx timing breaks GXSTAT/
 # MP exactness (accepted). A later step moves the replay onto the R4 render thread.
+# (Merge note: kept this branch's more-advanced G2 offload over liteDS-v2's earlier
+# G1b passive-verify stage; swtable/emu-core opts merged in via the non-conflicting files.)
 option(LITEV_GEOM_OFFLOAD "G: geometry-transform offload (record on emu thread, replay transform/clip/cull off the inline path)" OFF)
 if (LITEV_GEOM_OFFLOAD)
     add_compile_definitions(LITEV_GEOM_OFFLOAD=1)

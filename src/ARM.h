@@ -220,6 +220,30 @@ public:
     // Transient (recomputed every slice) -> never serialized in DoSavestate.
     s32 CyclesBudget = 0;
 
+#ifdef LITEV_MEM_SWTABLE
+    // DraStic software page table (docs/drastic-teardown/02-memory.md §2). Flat
+    // per-CPU table of packed host-pointer deltas indexed by (guest addr >> 11);
+    // entry 0 => slow. Loaded per JIT load access from RCPU context so it costs no
+    // permanently-reserved host reg (unlike fault-based fastmem's MemBase). Set by
+    // ARMJIT_Memory once the tables are allocated; stable for the object lifetime.
+    // Placed AFTER the offset-critical hot fields (Cycles/StopExecution/CPSR/
+    // CyclesBudget) so it cannot disturb their hard-coded/static_asserted offsets.
+    u64* FastMemPageTable = nullptr;
+
+    // STORE-side branchless page table (liteDS-v2, DraStic-faithful). Loads and stores
+    // map DIFFERENTLY, so this is a separate table from FastMemPageTable. A non-zero entry
+    // (host-pointer delta) means the page is BOTH (a) plain writable flat RAM where a raw
+    // host store is byte-identical to the exact SlowWrite -- MainRAM or DTCM -- AND (b)
+    // currently code-free. The SMC decision is FOLDED into the entry: a page holding
+    // compiled code has its entry zeroed (ARMJIT_Memory::PunchStoreCode) so its stores hit
+    // the exact SlowWrite (which invalidates); the entry re-fastens once the code is
+    // invalidated. SharedWRAM/WRAM7 (small) and NWRAM (a DSi bank write mirrors into every
+    // mapped part) stay on the exact SlowWrite; IO/VRAM/ITCM/BIOS are not fastmem-compatible.
+#ifdef LITEV_MEM_SWTABLE_STORE
+    u64* FastMemStoreTable = nullptr;
+#endif
+#endif
+
     static const u32 ConditionTable[16];
 #ifdef GDBSTUB_ENABLED
     Gdb::GdbStub GdbStub;

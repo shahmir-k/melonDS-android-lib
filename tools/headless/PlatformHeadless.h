@@ -22,5 +22,10 @@ struct InstanceUserData
 {
     // Filename stem for this instance's NDS/GBA saves, e.g. "headless-jit".
     std::string savePrefix = "headless";
+
+    // Local-multiplayer instance id (0..15), routed to MPInterface by the
+    // headless MP_* callbacks. Distinct per NDS instance so two instances
+    // associate as different wireless players. 0 for the single-instance path.
+    int instanceID = 0;
 };
 }

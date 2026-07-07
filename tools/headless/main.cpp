@@ -42,7 +42,7 @@ using namespace melonDS;
 
 namespace {
 
-enum class RunMode { Benchmark, RecordTrace, VerifyTrace, VerifyInterpConverge };
+enum class RunMode { Benchmark, RecordTrace, VerifyTrace, VerifyInterpConverge, MPTest };
 
 // Native DS screen dimensions; the software renderer writes 256x192 u32 per screen.
 constexpr int kScreenW = 256;
@@ -65,6 +65,8 @@ struct Options
     // Unit 1 trace/verify modes.
     RunMode mode = RunMode::Benchmark;
     std::string tracePath;
+    std::string mpScript0;              // --mp-test host (instance 0) input script
+    std::string mpScript1;              // --mp-test client (instance 1) input script
     long long fixedRtc = liteds::kDefaultRtcEpoch;
 
     AudioInterpolation interp = AudioInterpolation::None;
@@ -189,6 +191,9 @@ bool ParseArgs(int argc, char** argv, Options& o)
         else if (a == "--record-trace") { o.mode = RunMode::RecordTrace; o.tracePath = next("--record-trace"); }
         else if (a == "--verify-trace") { o.mode = RunMode::VerifyTrace; o.tracePath = next("--verify-trace"); }
         else if (a == "--verify-interp-converge") o.mode = RunMode::VerifyInterpConverge;
+        else if (a == "--mp-test") o.mode = RunMode::MPTest;
+        else if (a == "--mp-script0") o.mpScript0 = next("--mp-script0");
+        else if (a == "--mp-script1") o.mpScript1 = next("--mp-script1");
         else if (a == "--help" || a == "-h") Usage(argv[0], 0);
         else { fprintf(stderr, "error: unknown argument '%s'\n", a.c_str()); return false; }
     }
@@ -322,6 +327,8 @@ int main(int argc, char** argv)
             return liteds::VerifyTrace(cfg, opt.tracePath);
         case RunMode::VerifyInterpConverge:
             return liteds::VerifyInterpConverge(cfg, opt.frames);
+        case RunMode::MPTest:
+            return liteds::MPTest(cfg, opt.frames, opt.mpScript0, opt.mpScript1);
         default:
             break;
         }
@@ -601,6 +608,13 @@ int main(int argc, char** argv)
         printf("window_wall_s: %.4f\n", windowSec);
         printf("window_fps:  %.2f\n", windowFps);
     }
+#ifdef LITEV_GEOM_OFFLOAD
+    // G1b passive verify: replayed geometry vs inline geometry (0 mismatches => split proven).
+    printf("geom_verify_frames:     %llu\n", (unsigned long long)nds->GPU.GPU3D.GeomVerifyFrames);
+    printf("geom_verify_mismatches: %llu\n", (unsigned long long)nds->GPU.GPU3D.GeomVerifyMismatches);
+    printf("geom_event_peak:        %u\n", nds->GPU.GPU3D.GeomEventPeak);
+    printf("geom_event_overflow:    %u\n", nds->GPU.GPU3D.GeomEventOverflow);
+#endif
     printf("final_top:   %016llx\n", (unsigned long long)lastTopHash);
     printf("final_bot:   %016llx\n", (unsigned long long)lastBotHash);
     printf("fb_changing: %s\n", anyChange ? "yes" : "no");
