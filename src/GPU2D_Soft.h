@@ -90,6 +90,12 @@ public:
     void LoadLineState(const S2DLineState& s);
     void LoadSprState(const S2DSprState& s);
 
+    // Async depth-1 pipeline: at VBlank the emu thread copies the just-completed
+    // frame's per-line snapshots into the *R (render-owned) arrays, then the async
+    // render thread reads ONLY the *R copies while the emu overwrites LineSnap/
+    // SprSnap for the next frame. Avoids a per-scanline read/write race.
+    void CopyLineSnaps();
+
     // Deferred (no per-scanline VRAM coherence; that runs once/frame at VBlank).
     void SyncVRAM_BG();
     void SyncVRAM_OBJ();
@@ -105,7 +111,15 @@ public:
     // consumed by the deferred (batched, later banded-threaded) render at VBlank.
     S2DLineState LineSnap[192];
     S2DSprState  SprSnap[192];
+    // Render-owned copies (see CopyLineSnaps): read by the async render thread.
+    S2DLineState LineSnapR[192];
+    S2DSprState  SprSnapR[192];
 #endif
+
+    // Palette base the deferred/banded draws read. Defaults to the live GPU.Palette
+    // (non-threaded/inline path); the async render points it at a per-frame snapshot
+    // (PaletteSnap) so frame N's render doesn't race the emu's palette writes in N+1.
+    const u8* CurPalette = nullptr;
 
 private:
     SoftRenderer& Parent;

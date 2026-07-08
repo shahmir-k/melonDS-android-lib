@@ -26,7 +26,18 @@ SoftRenderer2D::SoftRenderer2D(melonDS::GPU2D& gpu2D, SoftRenderer& parent)
     : Renderer2D(gpu2D), Parent(parent)
 {
     // mosaic table is initialized at compile-time
+    // Default the render-time palette base to the live palette; the async render
+    // path overrides this per-frame with a snapshot (PaletteSnap).
+    CurPalette = GPU.Palette;
 }
+
+#ifdef LITEV_SOFT2D_THREADED
+void SoftRenderer2D::CopyLineSnaps()
+{
+    memcpy(LineSnapR, LineSnap, sizeof(LineSnap));
+    memcpy(SprSnapR,  SprSnap,  sizeof(SprSnap));
+}
+#endif
 
 SoftRenderer2D::~SoftRenderer2D()
 {
@@ -462,9 +473,9 @@ void SoftRenderer2D::DrawScanline_BGOBJ(u32 line, u32* dst)
 {
     u64 backdrop;
     if (GPU2D.Num)
-        backdrop = *(u16*)&GPU.Palette[0x400];
+        backdrop = *(u16*)&CurPalette[0x400];
     else
-        backdrop = *(u16*)&GPU.Palette[0];
+        backdrop = *(u16*)&CurPalette[0];
 
     {
         u8 r = (backdrop & 0x001F) << 1;
@@ -582,14 +593,14 @@ void SoftRenderer2D::DrawBG_Text(u32 line, u32 bgnum)
         tilesetaddr = ((bgcnt & 0x003C) << 12);
         tilemapaddr = ((bgcnt & 0x1F00) << 3);
 
-        pal = (u16*)&GPU.Palette[0x400];
+        pal = (u16*)&CurPalette[0x400];
     }
     else
     {
         tilesetaddr = ((GPU2D.DispCnt & 0x07000000) >> 8) + ((bgcnt & 0x003C) << 12);
         tilemapaddr = ((GPU2D.DispCnt & 0x38000000) >> 11) + ((bgcnt & 0x1F00) << 3);
 
-        pal = (u16*)&GPU.Palette[0];
+        pal = (u16*)&CurPalette[0];
     }
 
     // adjust Y position in tilemap
@@ -752,14 +763,14 @@ void SoftRenderer2D::DrawBG_Affine(u32 line, u32 bgnum)
         tilesetaddr = ((bgcnt & 0x003C) << 12);
         tilemapaddr = ((bgcnt & 0x1F00) << 3);
 
-        pal = (u16*)&GPU.Palette[0x400];
+        pal = (u16*)&CurPalette[0x400];
     }
     else
     {
         tilesetaddr = ((GPU2D.DispCnt & 0x07000000) >> 8) + ((bgcnt & 0x003C) << 12);
         tilemapaddr = ((GPU2D.DispCnt & 0x38000000) >> 11) + ((bgcnt & 0x1F00) << 3);
 
-        pal = (u16*)&GPU.Palette[0];
+        pal = (u16*)&CurPalette[0];
     }
 
     u16 curtile;
@@ -893,8 +904,8 @@ void SoftRenderer2D::DrawBG_Extended(u32 line, u32 bgnum)
         {
             // 256-color bitmap
 
-            if (GPU2D.Num) pal = (u16*)&GPU.Palette[0x400];
-            else           pal = (u16*)&GPU.Palette[0];
+            if (GPU2D.Num) pal = (u16*)&CurPalette[0x400];
+            else           pal = (u16*)&CurPalette[0];
 
             u8 color;
 
@@ -952,14 +963,14 @@ void SoftRenderer2D::DrawBG_Extended(u32 line, u32 bgnum)
             tilesetaddr = ((bgcnt & 0x003C) << 12);
             tilemapaddr = ((bgcnt & 0x1F00) << 3);
 
-            pal = (u16*)&GPU.Palette[0x400];
+            pal = (u16*)&CurPalette[0x400];
         }
         else
         {
             tilesetaddr = ((GPU2D.DispCnt & 0x07000000) >> 8) + ((bgcnt & 0x003C) << 12);
             tilemapaddr = ((GPU2D.DispCnt & 0x38000000) >> 11) + ((bgcnt & 0x1F00) << 3);
 
-            pal = (u16*)&GPU.Palette[0];
+            pal = (u16*)&CurPalette[0];
         }
 
         u16 curtile;
@@ -1058,8 +1069,8 @@ void SoftRenderer2D::DrawBG_Large(u32 line) // BG is always BG2
 
     // 256-color bitmap
 
-    if (GPU2D.Num) pal = (u16*)&GPU.Palette[0x400];
-    else           pal = (u16*)&GPU.Palette[0];
+    if (GPU2D.Num) pal = (u16*)&CurPalette[0x400];
+    else           pal = (u16*)&CurPalette[0];
 
     u8 color;
 
@@ -1144,7 +1155,7 @@ void SoftRenderer2D::ApplySpriteMosaicX()
 void SoftRenderer2D::InterleaveSprites(u32 prio)
 {
     u32 attrmask = (prio << 16) | OBJ_IsOpaque;
-    u16* pal = (u16*)&GPU.Palette[GPU2D.Num ? 0x600 : 0x200];
+    u16* pal = (u16*)&CurPalette[GPU2D.Num ? 0x600 : 0x200];
     u16* extpal = GPU2D.GetOBJExtPal();
 
     for (u32 i = 0; i < 256; i++)

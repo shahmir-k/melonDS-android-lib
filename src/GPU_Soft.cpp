@@ -20,6 +20,7 @@
 #include "NDS.h"
 #include "GPU_Soft.h"
 #include "GPU_ColorOp.h"
+#include "Platform.h"
 
 #if defined(LITEV_NEON_RENDERER) && defined(__aarch64__)
 #include "GPU2D_NEON.h"
@@ -41,10 +42,20 @@ SoftRenderer::SoftRenderer(melonDS::NDS& nds)
     Rend2D_A = std::make_unique<SoftRenderer2D>(GPU.GPU2D_A, *this);
     Rend2D_B = std::make_unique<SoftRenderer2D>(GPU.GPU2D_B, *this);
     Rend3D = std::make_unique<SoftRenderer3D>(GPU.GPU3D, *this);
+
+#ifdef LITEV_SOFT2D_THREADED
+    AsyncStart = Platform::Semaphore_Create();
+    AsyncDone  = Platform::Semaphore_Create();
+#endif
 }
 
 SoftRenderer::~SoftRenderer()
 {
+#ifdef LITEV_SOFT2D_THREADED
+    StopAsyncThread();
+    Platform::Semaphore_Free(AsyncStart);
+    Platform::Semaphore_Free(AsyncDone);
+#endif
     delete[] Framebuffer[0][0];
     delete[] Framebuffer[0][1];
     delete[] Framebuffer[1][0];
@@ -53,6 +64,11 @@ SoftRenderer::~SoftRenderer()
 
 void SoftRenderer::Reset()
 {
+#ifdef LITEV_SOFT2D_THREADED
+    FlushAsyncRender();
+    AsyncEverProduced = false;
+    AsyncPresentBuf = 1;
+#endif
     const size_t len = 256 * 192 * sizeof(u32);
     memset(Framebuffer[0][0], 0, len);
     memset(Framebuffer[0][1], 0, len);
@@ -66,6 +82,10 @@ void SoftRenderer::Reset()
 
 void SoftRenderer::Stop()
 {
+#ifdef LITEV_SOFT2D_THREADED
+    // flush any in-flight async render so we don't clear a buffer mid-write
+    FlushAsyncRender();
+#endif
     // clear framebuffers to black
     const size_t len = 256 * 192 * sizeof(u32);
     memset(Framebuffer[0][0], 0, len);
@@ -77,6 +97,10 @@ void SoftRenderer::Stop()
 
 void SoftRenderer::PreSavestate()
 {
+#ifdef LITEV_SOFT2D_THREADED
+    // ensure no async 2D render is reading emu state while it is (de)serialized
+    FlushAsyncRender();
+#endif
     auto rend3d = dynamic_cast<SoftRenderer3D*>(Rend3D.get());
     if (rend3d->IsThreaded())
         rend3d->SetupRenderThread();
@@ -247,39 +271,46 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
 
     for (u32 line = y0; line < y1; line++)
     {
-        FrameLineSnap& f = FrameSnap[line];
+        // Read the render-owned snapshot copies (frame N) — the emu thread is
+        // concurrently overwriting the live FrameSnap/LineSnap/SprSnap/Snap3D for
+        // frame N+1, so we must NOT touch those here.
+        FrameLineSnap& f = FrameSnapR[line];
         if (!f.Valid) continue;
 
         // --- BG/OBJ raster into this band's per-engine line buffers ---
-        rA->Cur3DLine = Snap3D[line];
-        rA->CurOAM = GPU.OAM;
-        rA->DrawSpritesDeferred(mainA->SprSnap[line], line);
-        rA->DrawScanlineDeferred(mainA->LineSnap[line], line, BandOut2D[0][line]);
+        rA->Cur3DLine = Snap3DR[line];
+        rA->CurOAM = OAMSnap;
+        rA->CurPalette = PaletteSnap;
+        rA->DrawSpritesDeferred(mainA->SprSnapR[line], line);
+        rA->DrawScanlineDeferred(mainA->LineSnapR[line], line, BandOut2D[0][line]);
 
-        rB->Cur3DLine = Snap3D[line];
-        rB->CurOAM = GPU.OAM;
-        rB->DrawSpritesDeferred(mainB->SprSnap[line], line);
-        rB->DrawScanlineDeferred(mainB->LineSnap[line], line, BandOut2D[1][line]);
+        rB->Cur3DLine = Snap3DR[line];
+        rB->CurOAM = OAMSnap;
+        rB->CurPalette = PaletteSnap;
+        rB->DrawSpritesDeferred(mainB->SprSnapR[line], line);
+        rB->DrawScanlineDeferred(mainB->LineSnapR[line], line, BandOut2D[1][line]);
 
         // --- final composite + capture + expand into the framebuffer (banded too) ---
         u32 dstoffset = 256 * line;
         u32 *dstA, *dstB;
+        // Write the buffer captured at signal time (NOT the live BackBuffer, which
+        // FinishFrame swaps while this async render is still running).
         if (f.ScreenSwap)
         {
-            dstA = &Framebuffer[BackBuffer][0][dstoffset];
-            dstB = &Framebuffer[BackBuffer][1][dstoffset];
+            dstA = &Framebuffer[AsyncTargetBuf][0][dstoffset];
+            dstB = &Framebuffer[AsyncTargetBuf][1][dstoffset];
         }
         else
         {
-            dstA = &Framebuffer[BackBuffer][1][dstoffset];
-            dstB = &Framebuffer[BackBuffer][0][dstoffset];
+            dstA = &Framebuffer[AsyncTargetBuf][1][dstoffset];
+            dstB = &Framebuffer[AsyncTargetBuf][0][dstoffset];
         }
 
         DrawScanlineA(line, dstA, BandOut2D[0][line], f.DispCntA, f.MasterBrightnessA);
         DrawScanlineB(line, dstB, BandOut2D[1][line], f.DispCntB, f.MasterBrightnessB);
 
         if (f.CaptureEnable)
-            DoCapture(line, BandOut2D[0][line], Snap3D[line]);
+            DoCapture(line, BandOut2D[0][line], Snap3DR[line]);
 
         if (f.ScreensEnabled)
         {
@@ -295,28 +326,12 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
     }
 }
 
-void SoftRenderer::RenderDeferredFrame()
+// The banded raster+composite+capture+expand for one frame. Runs entirely on the
+// persistent async render thread (spawning short-lived band helpers for the other
+// cores), reading ONLY the render-owned snapshots the emu thread published at the
+// signalling VBlank. The emu thread is emulating frame N+1 concurrently.
+void SoftRenderer::AsyncRenderFrame()
 {
-    if (!S2DBandsInit) InitBands();
-
-    auto* r2a = static_cast<SoftRenderer2D*>(Rend2D_A.get());
-    auto* r2b = static_cast<SoftRenderer2D*>(Rend2D_B.get());
-
-    // Once-per-frame VRAM coherence (sequential, before the parallel section).
-    r2a->SyncVRAM_BG(); r2a->SyncVRAM_OBJ();
-    r2b->SyncVRAM_BG(); r2b->SyncVRAM_OBJ();
-
-    // Seed each band's private units with the frame-level register state (per-line
-    // varying fields are overridden by LoadLineState inside the deferred draws).
-    for (int b = 0; b < S2D_NBANDS; b++)
-    {
-        S2DBands[b].unit[0]->CopyRenderState(GPU.GPU2D_A);
-        S2DBands[b].unit[1]->CopyRenderState(GPU.GPU2D_B);
-    }
-
-    // N-way banded raster across idle cores. Emu thread renders band 0; helpers do
-    // the rest. (Emu is blocked here, so its core + the idle 3D thread's core are
-    // available.)
     const u32 rows = 192 / S2D_NBANDS;
     std::thread helpers[S2D_NBANDS - 1];
     for (int b = 1; b < S2D_NBANDS; b++)
@@ -327,10 +342,99 @@ void SoftRenderer::RenderDeferredFrame()
     }
     RenderBand(0, 0, rows);
     for (int b = 0; b < S2D_NBANDS - 1; b++) helpers[b].join();
+}
 
-    // Composite + capture + expand now happen INSIDE each band (per line), so the
-    // whole 2D pipeline is off the sequential emu-thread path.
+void SoftRenderer::AsyncRenderThreadFunc()
+{
+    for (;;)
+    {
+        Platform::Semaphore_Wait(AsyncStart);
+        if (!AsyncThreadRunning.load(std::memory_order_acquire))
+            break;
+        AsyncRenderFrame();
+        Platform::Semaphore_Post(AsyncDone);
+    }
+}
+
+void SoftRenderer::StartAsyncThread()
+{
+    if (!AsyncThreadRunning.load(std::memory_order_relaxed))
+    {
+        AsyncThreadRunning.store(true, std::memory_order_release);
+        AsyncThread = Platform::Thread_Create([this]() { AsyncRenderThreadFunc(); });
+    }
+}
+
+void SoftRenderer::StopAsyncThread()
+{
+    FlushAsyncRender();
+    if (AsyncThreadRunning.load(std::memory_order_relaxed))
+    {
+        AsyncThreadRunning.store(false, std::memory_order_release);
+        Platform::Semaphore_Post(AsyncStart);   // wake the loop so it can exit
+        Platform::Thread_Wait(AsyncThread);
+        Platform::Thread_Free(AsyncThread);
+        AsyncThread = nullptr;
+    }
+}
+
+// Barrier: wait for the in-flight render (frame N-1) to finish, then publish the
+// buffer it wrote as the present buffer. Safe to call when nothing is in flight.
+void SoftRenderer::FlushAsyncRender()
+{
+    if (AsyncInFlight)
+    {
+        Platform::Semaphore_Wait(AsyncDone);
+        AsyncInFlight = false;
+        AsyncPresentBuf = AsyncTargetBuf;
+        AsyncEverProduced = true;
+    }
+}
+
+// Depth-1 async VBlank: barrier the previous frame, snapshot the emu-mutable render
+// inputs for THIS frame, then signal the render thread and return immediately so the
+// emu can start frame N+1. emu frame time -> max(emu, render) instead of emu+render.
+void SoftRenderer::VBlank()
+{
+    if (!S2DDeferActive)
+        return;   // nothing was snapshotted this frame (e.g. frameskip)
+
+    // (a) BARRIER: wait for the previous frame's render, publish it as present.
+    FlushAsyncRender();
+
+    StartAsyncThread();
+
+    if (!S2DBandsInit) InitBands();
+
+    // (b) Snapshot the emu-mutable state the async render reads. The per-scanline
+    // regs (LineSnap/SprSnap/FrameSnap) + 3D (Snap3D) are copied into render-owned
+    // buffers; palette + OAM are snapshotted; VRAMFlat is built here (on the emu
+    // thread, coherent for frame N) and band units are seeded with frame-N regs.
+    memcpy(Snap3DR, Snap3D, sizeof(Snap3D));
+    memcpy(FrameSnapR, FrameSnap, sizeof(FrameSnap));
+    static_cast<SoftRenderer2D*>(Rend2D_A.get())->CopyLineSnaps();
+    static_cast<SoftRenderer2D*>(Rend2D_B.get())->CopyLineSnaps();
+    memcpy(PaletteSnap, GPU.Palette, sizeof(PaletteSnap));
+    memcpy(OAMSnap, GPU.OAM, sizeof(OAMSnap));
+
+    auto* r2a = static_cast<SoftRenderer2D*>(Rend2D_A.get());
+    auto* r2b = static_cast<SoftRenderer2D*>(Rend2D_B.get());
+    r2a->SyncVRAM_BG(); r2a->SyncVRAM_OBJ();
+    r2b->SyncVRAM_BG(); r2b->SyncVRAM_OBJ();
+    for (int b = 0; b < S2D_NBANDS; b++)
+    {
+        S2DBands[b].unit[0]->CopyRenderState(GPU.GPU2D_A);
+        S2DBands[b].unit[1]->CopyRenderState(GPU.GPU2D_B);
+    }
+
+    // (c) SIGNAL the render thread to raster frame N into the current back buffer.
+    // Capture the buffer index now: FinishFrame will swap BackBuffer while the render
+    // runs, but the render must keep writing the buffer we chose here.
+    AsyncTargetBuf = BackBuffer;
+    AsyncInFlight = true;
     S2DDeferActive = false;
+    Platform::Semaphore_Post(AsyncStart);
+    // (d) return immediately — emu emulates frame N+1 while the render thread runs.
 }
 #endif
 
@@ -628,6 +732,12 @@ void SoftRenderer::ExpandColor(u32* dst)
 bool SoftRenderer::GetFramebuffers(void** top, void** bottom)
 {
     int frontbuf = BackBuffer ^ 1;
+#ifdef LITEV_SOFT2D_THREADED
+    // In async mode the swapped-in "front" buffer may still be mid-render; return
+    // the last buffer the render thread actually COMPLETED (published at the last
+    // VBlank barrier). Depth-1: this is frame N-1 while frame N renders.
+    frontbuf = AsyncPresentBuf;
+#endif
     *top = Framebuffer[frontbuf][0];
     *bottom = Framebuffer[frontbuf][1];
     return true;
