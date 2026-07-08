@@ -78,11 +78,19 @@ config_flags() {
     full)
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON" ;;
     soft2d)
-      # Banded deferred software-2D raster (LITEV_SOFT2D_THREADED) on top of the
-      # `full` stack. A/B against `full` (inline per-scanline 2D) isolates the
-      # 2D-off-critical-path delta on the A55. MUST be bit-exact vs `full`
-      # (final_top/final_bot/audio_hash identical).
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON" ;;
+      # Banded deferred software-2D raster (LITEV_SOFT2D_THREADED) + banded
+      # multi-core software-3D raster (LITEV_SOFT3D_BANDED) on top of the `full`
+      # stack. A/B against `full` isolates the software-raster-off-critical-path
+      # delta on the A55. MUST be bit-exact vs `full` (final_top/final_bot/audio
+      # identical).
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON" ;;
+    soft3dfast)
+      # soft2d stack (2D threading + banded 3D) PLUS subaffine (approximate)
+      # software-3D span interpolation (LITEV_SOFT3D_FAST). FPS-first: kills the
+      # per-pixel perspective-correct divide in RenderPolygonScanline. Deliberately
+      # NOT bit-exact vs soft2d/full — A/B against `full` for the fps delta and
+      # eyeball the framebuffer for recognizability.
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`

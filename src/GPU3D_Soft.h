@@ -444,7 +444,21 @@ private:
 
     };
 
+#ifdef LITEV_SOFT3D_BANDED
+    // Banded software 3D raster: the incremental per-polygon edge state and the
+    // shadow stencil are PER-BAND (each band thread walks all scanlines to keep the
+    // edge walk correct but only writes its own [BandY0,BandY1) rows). Making these
+    // static thread_local gives every band std::thread its own copy while the
+    // unqualified member references in the scanline methods keep resolving to them.
+    static thread_local RendererPolygon PolygonList[2048];
+    // Per-band scanline write window [BandY0, BandY1). Default full-frame so the
+    // non-banded (threaded==false / main-thread) path is unchanged.
+    static thread_local s32 BandY0;
+    static thread_local s32 BandY1;
+    void RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1);
+#else
     RendererPolygon PolygonList[2048];
+#endif
     void TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha) const;
     u32 RenderPixel(const Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t) const;
     void PlotTranslucentPixel(u32 pixeladdr, u32 color, u32 z, u32 polyattr, u32 shadow);
@@ -485,8 +499,13 @@ private:
     // bit22: translucent flag
     // bit24-29: polygon ID for opaque pixels
 
+#ifdef LITEV_SOFT3D_BANDED
+    static thread_local u8 StencilBuffer[256*2];
+    static thread_local bool PrevIsShadowMask;
+#else
     u8 StencilBuffer[256*2];
     bool PrevIsShadowMask;
+#endif
 
     bool Enabled;
 

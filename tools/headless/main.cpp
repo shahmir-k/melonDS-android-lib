@@ -372,6 +372,20 @@ int main(int argc, char** argv)
     // main thread stack).
     auto nds = std::make_unique<NDS>(std::move(args), nullptr);
     nds->SetRenderer(std::make_unique<SoftRenderer>(*nds));
+    // The qt_sdl frontend enables 3D render threading via SetRenderSettings;
+    // the headless harness never did, so the (banded) threaded soft-3D path was
+    // dead code here. Enable it (default on; LITEV_3DTHREAD=0 forces serial) so
+    // the banded raster + render-thread overlap are actually exercised.
+    {
+        const char* e = getenv("LITEV_3DTHREAD");
+        bool threaded = !(e && e[0] == '0');
+        melonDS::RendererSettings rs{};
+        rs.ScaleFactor = 1;
+        rs.Threaded = threaded;
+        rs.HiresCoordinates = false;
+        rs.BetterPolygons = false;
+        nds->GPU.GetRenderer().SetRenderSettings(rs);
+    }
     nds->SetNDSCart(std::move(cart));
     nds->Reset();
 

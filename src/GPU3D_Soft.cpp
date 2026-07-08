@@ -29,6 +29,17 @@ namespace melonDS
 
 void RenderThreadFunc();
 
+#ifdef LITEV_SOFT3D_BANDED
+// Per-band render state (see GPU3D_Soft.h). thread_local => one copy per band thread.
+thread_local SoftRenderer3D::RendererPolygon SoftRenderer3D::PolygonList[2048];
+thread_local u8 SoftRenderer3D::StencilBuffer[256*2];
+thread_local bool SoftRenderer3D::PrevIsShadowMask;
+// Default full-frame window: on any thread that never runs a band (the main/emu
+// thread or the non-threaded render path) the y-range gate is a no-op.
+thread_local s32 SoftRenderer3D::BandY0 = 0;
+thread_local s32 SoftRenderer3D::BandY1 = 192;
+#endif
+
 
 void SoftRenderer3D::StopRenderThread()
 {
@@ -744,6 +755,20 @@ void SoftRenderer3D::RenderShadowMaskScanline(RendererPolygon* rp, s32 y)
         }
     }
 
+#ifdef LITEV_SOFT3D_BANDED
+    // Banded raster: this scanline belongs to another band. The edge walk (above)
+    // and the per-scanline slope Step (below) MUST still run so the incremental
+    // state is correct when we reach our own rows, but we write nothing here.
+    // The memset + PrevIsShadowMask bookkeeping above also always runs so the
+    // stencil group state matches the single-threaded sequence.
+    if (y < BandY0 || y >= BandY1)
+    {
+        rp->XL = rp->SlopeL.Step();
+        rp->XR = rp->SlopeR.Step();
+        return;
+    }
+#endif
+
     Vertex *vlcur, *vlnext, *vrcur, *vrnext;
     s32 xstart, xend;
     bool l_filledge, r_filledge;
@@ -936,10 +961,71 @@ void SoftRenderer3D::RenderShadowMaskScanline(RendererPolygon* rp, s32 y)
     rp->XR = rp->SlopeR.Step();
 }
 
+#ifdef LITEV_SOFT3D_FAST
+// Subaffine span interpolation (FPS-first, approximate — NOT bit-exact).
+// Instead of a perspective-correct divide (Interpolator::SetX -> num/den) every
+// pixel, we anchor the true perspective-correct attributes (z,r,g,b,s,t) only
+// every SA_SUB pixels (2 divides per block) and LINEARLY step 16.16 fixed-point
+// accumulators in between. The per-pixel depth test, stencil/shadow, RenderPixel,
+// alpha test and plot are untouched — only attribute interpolation is approximate.
+#define SA_SUB   8
+#define SA_FRAC  16
+// Refresh-or-step the accumulators and produce z for the depth test. Steps every
+// pixel (even those the depth/stencil test will 'continue' past) so the linear
+// walk stays aligned with x. xlimit is this span segment's exclusive upper bound.
+#define SA_STEP_Z() \
+    s32 z; \
+    { \
+        if (sa_rem == 0) \
+        { \
+            interpX.SetX(x); \
+            sa_z = (s64)interpX.InterpolateZ(zl, zr) << SA_FRAC; \
+            sa_r = (s64)interpX.Interpolate(rl, rr) << SA_FRAC; \
+            sa_g = (s64)interpX.Interpolate(gl, gr) << SA_FRAC; \
+            sa_b = (s64)interpX.Interpolate(bl, br) << SA_FRAC; \
+            sa_s = (s64)interpX.Interpolate(sl, sr) << SA_FRAC; \
+            sa_t = (s64)interpX.Interpolate(tl, tr) << SA_FRAC; \
+            s32 sa_xn = x + SA_SUB; \
+            if (sa_xn > xlimit - 1) sa_xn = xlimit - 1; \
+            s32 sa_span = sa_xn - x; \
+            if (sa_span < 1) \
+            { \
+                sa_dz = sa_dr = sa_dg = sa_db = sa_ds = sa_dt = 0; \
+                sa_rem = 1; \
+            } \
+            else \
+            { \
+                interpX.SetX(sa_xn); \
+                sa_dz = (((s64)interpX.InterpolateZ(zl, zr) << SA_FRAC) - sa_z) / sa_span; \
+                sa_dr = (((s64)interpX.Interpolate(rl, rr) << SA_FRAC) - sa_r) / sa_span; \
+                sa_dg = (((s64)interpX.Interpolate(gl, gr) << SA_FRAC) - sa_g) / sa_span; \
+                sa_db = (((s64)interpX.Interpolate(bl, br) << SA_FRAC) - sa_b) / sa_span; \
+                sa_ds = (((s64)interpX.Interpolate(sl, sr) << SA_FRAC) - sa_s) / sa_span; \
+                sa_dt = (((s64)interpX.Interpolate(tl, tr) << SA_FRAC) - sa_t) / sa_span; \
+                sa_rem = sa_span; \
+            } \
+        } \
+        else \
+        { \
+            sa_z += sa_dz; sa_r += sa_dr; sa_g += sa_dg; \
+            sa_b += sa_db; sa_s += sa_ds; sa_t += sa_dt; \
+        } \
+        sa_rem--; \
+        z = (s32)(sa_z >> SA_FRAC); \
+    }
+#define SA_LOAD_RGBST() \
+    u32 vr = (u32)(sa_r >> SA_FRAC); \
+    u32 vg = (u32)(sa_g >> SA_FRAC); \
+    u32 vb = (u32)(sa_b >> SA_FRAC); \
+    s16 s = (s16)(sa_s >> SA_FRAC); \
+    s16 t = (s16)(sa_t >> SA_FRAC);
+#endif
+
 void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 {
     Polygon* polygon = rp->PolyData;
 
+#ifndef LITEV_SOFT3D_FAST
     u32 polyattr = (polygon->Attr & 0x3F008000);
     if (!polygon->FacingView) polyattr |= (1<<4);
 
@@ -953,6 +1039,7 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
         fnDepthTest = DepthTest_LessThan_FrontFacing;
     else
         fnDepthTest = DepthTest_LessThan;
+#endif
 
     PrevIsShadowMask = false;
 
@@ -968,6 +1055,35 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
             SetupPolygonRightEdge(rp, y);
         }
     }
+
+#ifdef LITEV_SOFT3D_BANDED
+    // Banded raster: not our row. Advance the incremental edge state (Step) but
+    // write no spans. See RenderShadowMaskScanline for the rationale.
+    if (y < BandY0 || y >= BandY1)
+    {
+        rp->XL = rp->SlopeL.Step();
+        rp->XR = rp->SlopeR.Step();
+        return;
+    }
+#endif
+
+#ifdef LITEV_SOFT3D_FAST
+    // Lever 1: compute the per-scanline polygon constants only for in-band rows
+    // (the out-of-band Step-only path above never touches them).
+    u32 polyattr = (polygon->Attr & 0x3F008000);
+    if (!polygon->FacingView) polyattr |= (1<<4);
+
+    u32 polyalpha = (polygon->Attr >> 16) & 0x1F;
+    bool wireframe = (polyalpha == 0);
+
+    bool (*fnDepthTest)(s32 dstz, s32 z, u32 dstattr);
+    if (polygon->Attr & (1<<14))
+        fnDepthTest = polygon->WBuffer ? DepthTest_Equal_W : DepthTest_Equal_Z;
+    else if (polygon->FacingView)
+        fnDepthTest = DepthTest_LessThan_FrontFacing;
+    else
+        fnDepthTest = DepthTest_LessThan;
+#endif
 
     Vertex *vlcur, *vlnext, *vrcur, *vrnext;
     s32 xstart, xend;
@@ -1101,6 +1217,101 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 
     s32 xcov = 0;
 
+#ifdef LITEV_SOFT3D_FAST
+    // subaffine span accumulators (16.16 fixed point) + per-pixel deltas
+    s64 sa_z = 0, sa_r = 0, sa_g = 0, sa_b = 0, sa_s = 0, sa_t = 0;
+    s64 sa_dz = 0, sa_dr = 0, sa_dg = 0, sa_db = 0, sa_ds = 0, sa_dt = 0;
+    s32 sa_rem = 0;
+
+    // Lever 2: hoist RenderPixel's per-POLYGON invariants (blend mode, toon /
+    // highlight mode, texture-enable, palette + toon table pointers) out of the
+    // per-pixel loop. RenderPixel re-derived all of these from polygon->Attr /
+    // polygon->TexParam / RenderDispCnt on EVERY texel; they are constant for the
+    // whole scanline. shadeFast captures them once and only varies s,t + vertex
+    // colour per pixel. Result is exact vs RenderPixel (still calls TextureLookup
+    // for the texel fetch, which is memory-bound and not hoistable).
+    const u32  f_attr      = polygon->Attr;
+    const u32  f_blendmode = (f_attr >> 4) & 0x3;
+    const u32  f_dispcnt   = GPU3D.RenderDispCnt;
+    const bool f_toon      = (f_blendmode == 2);
+    const bool f_highlight = f_toon && (f_dispcnt & (1<<1));
+    const bool f_decal     = (f_blendmode & 0x1) != 0;
+    const u32  f_texparam  = polygon->TexParam;
+    const u32  f_texfmt    = (f_texparam >> 26) & 0x7;
+    const bool f_texEnable = (f_dispcnt & 0x1) && (f_texfmt != 0);
+    const u32  f_texpal    = polygon->TexPalette;
+    const u16* f_toontbl   = GPU3D.RenderToonTable;
+    const u32  f_polyalpha = polyalpha;
+    const bool f_wireframe = wireframe;
+
+    auto shadeFast = [&](u32 vr, u32 vg, u32 vb, s16 s, s16 t) -> u32
+    {
+        u8 r, g, b, a;
+
+        if (f_toon)
+        {
+            if (f_highlight) { vg = vr; vb = vr; }
+            else
+            {
+                u16 tc = f_toontbl[vr >> 1];
+                vr = (tc << 1) & 0x3E; if (vr) vr++;
+                vg = (tc >> 4) & 0x3E; if (vg) vg++;
+                vb = (tc >> 9) & 0x3E; if (vb) vb++;
+            }
+        }
+
+        if (f_texEnable)
+        {
+            u16 tcolor; u8 talpha;
+            TextureLookup(f_texparam, f_texpal, s, t, &tcolor, &talpha);
+
+            u8 tr = (tcolor << 1) & 0x3E; if (tr) tr++;
+            u8 tg = (tcolor >> 4) & 0x3E; if (tg) tg++;
+            u8 tb = (tcolor >> 9) & 0x3E; if (tb) tb++;
+
+            if (f_decal)
+            {
+                if (talpha == 0)       { r = vr; g = vg; b = vb; }
+                else if (talpha == 31) { r = tr; g = tg; b = tb; }
+                else
+                {
+                    r = ((tr * talpha) + (vr * (31-talpha))) >> 5;
+                    g = ((tg * talpha) + (vg * (31-talpha))) >> 5;
+                    b = ((tb * talpha) + (vb * (31-talpha))) >> 5;
+                }
+                a = f_polyalpha;
+            }
+            else
+            {
+                r = ((tr+1) * (vr+1) - 1) >> 6;
+                g = ((tg+1) * (vg+1) - 1) >> 6;
+                b = ((tb+1) * (vb+1) - 1) >> 6;
+                a = ((talpha+1) * (f_polyalpha+1) - 1) >> 5;
+            }
+        }
+        else
+        {
+            r = vr; g = vg; b = vb; a = f_polyalpha;
+        }
+
+        if (f_highlight)
+        {
+            u16 tc = f_toontbl[vr >> 1];
+            u8 hr = (tc << 1) & 0x3E; if (hr) hr++;
+            u8 hg = (tc >> 4) & 0x3E; if (hg) hg++;
+            u8 hb = (tc >> 9) & 0x3E; if (hb) hb++;
+
+            int rr = r + hr; if (rr > 63) rr = 63; r = (u8)rr;
+            int gg = g + hg; if (gg > 63) gg = 63; g = (u8)gg;
+            int bb = b + hb; if (bb > 63) bb = 63; b = (u8)bb;
+        }
+
+        if (f_wireframe) a = 31;
+
+        return r | (g << 8) | (b << 16) | ((u32)a << 24);
+    };
+#endif
+
     // part 1: left edge
     edge = yedge | 0x1;
     xlimit = xstart+l_edgelen;
@@ -1113,7 +1324,10 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
     }
 
     if (!l_filledge) x = xlimit;
-    else
+    else {
+#ifdef LITEV_SOFT3D_FAST
+    sa_rem = 0;
+#endif
     for (; x < xlimit; x++)
     {
         u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
@@ -1131,9 +1345,13 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 dstattr &= ~0xF; // quick way to prevent drawing the shadow under antialiased edges
         }
 
+#ifdef LITEV_SOFT3D_FAST
+        SA_STEP_Z();
+#else
         interpX.SetX(x);
 
         s32 z = interpX.InterpolateZ(zl, zr);
+#endif
 
         // if depth test against the topmost pixel fails, test
         // against the pixel underneath
@@ -1147,14 +1365,22 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 continue;
         }
 
+#ifdef LITEV_SOFT3D_FAST
+        SA_LOAD_RGBST();
+#else
         u32 vr = interpX.Interpolate(rl, rr);
         u32 vg = interpX.Interpolate(gl, gr);
         u32 vb = interpX.Interpolate(bl, br);
 
         s16 s = interpX.Interpolate(sl, sr);
         s16 t = interpX.Interpolate(tl, tr);
+#endif
 
+#ifdef LITEV_SOFT3D_FAST
+        u32 color = shadeFast(vr>>3, vg>>3, vb>>3, s, t);
+#else
         u32 color = RenderPixel(polygon, vr>>3, vg>>3, vb>>3, s, t);
+#endif
         u8 alpha = color >> 24;
 
         // alpha test
@@ -1201,6 +1427,7 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 PlotTranslucentPixel(pixeladdr+BufferSize, color, z, polyattr, polygon->IsShadow);
         }
     }
+    }
 
     // part 2: polygon inside
     edge = yedge;
@@ -1209,7 +1436,10 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
     if (xlimit > 256) xlimit = 256;
 
     if (wireframe && !edge) x = std::max(x, xlimit);
-    else
+    else {
+#ifdef LITEV_SOFT3D_FAST
+    sa_rem = 0;
+#endif
     for (; x < xlimit; x++)
     {
         u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
@@ -1227,9 +1457,13 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 dstattr &= ~0xF; // quick way to prevent drawing the shadow under antialiased edges
         }
 
+#ifdef LITEV_SOFT3D_FAST
+        SA_STEP_Z();
+#else
         interpX.SetX(x);
 
         s32 z = interpX.InterpolateZ(zl, zr);
+#endif
 
         // if depth test against the topmost pixel fails, test
         // against the pixel underneath
@@ -1243,14 +1477,22 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 continue;
         }
 
+#ifdef LITEV_SOFT3D_FAST
+        SA_LOAD_RGBST();
+#else
         u32 vr = interpX.Interpolate(rl, rr);
         u32 vg = interpX.Interpolate(gl, gr);
         u32 vb = interpX.Interpolate(bl, br);
 
         s16 s = interpX.Interpolate(sl, sr);
         s16 t = interpX.Interpolate(tl, tr);
+#endif
 
+#ifdef LITEV_SOFT3D_FAST
+        u32 color = shadeFast(vr>>3, vg>>3, vb>>3, s, t);
+#else
         u32 color = RenderPixel(polygon, vr>>3, vg>>3, vb>>3, s, t);
+#endif
         u8 alpha = color >> 24;
 
         // alpha test
@@ -1290,6 +1532,7 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 PlotTranslucentPixel(pixeladdr+BufferSize, color, z, polyattr, polygon->IsShadow);
         }
     }
+    }
 
     // part 3: right edge
     edge = yedge | 0x2;
@@ -1301,7 +1544,10 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
         if (xcov == 0x3FF) xcov = 0;
     }
 
-    if (r_filledge)
+    if (r_filledge) {
+#ifdef LITEV_SOFT3D_FAST
+    sa_rem = 0;
+#endif
     for (; x < xlimit; x++)
     {
         u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
@@ -1319,9 +1565,13 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 dstattr &= ~0xF; // quick way to prevent drawing the shadow under antialiased edges
         }
 
+#ifdef LITEV_SOFT3D_FAST
+        SA_STEP_Z();
+#else
         interpX.SetX(x);
 
         s32 z = interpX.InterpolateZ(zl, zr);
+#endif
 
         // if depth test against the topmost pixel fails, test
         // against the pixel underneath
@@ -1335,14 +1585,22 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 continue;
         }
 
+#ifdef LITEV_SOFT3D_FAST
+        SA_LOAD_RGBST();
+#else
         u32 vr = interpX.Interpolate(rl, rr);
         u32 vg = interpX.Interpolate(gl, gr);
         u32 vb = interpX.Interpolate(bl, br);
 
         s16 s = interpX.Interpolate(sl, sr);
         s16 t = interpX.Interpolate(tl, tr);
+#endif
 
+#ifdef LITEV_SOFT3D_FAST
+        u32 color = shadeFast(vr>>3, vg>>3, vb>>3, s, t);
+#else
         u32 color = RenderPixel(polygon, vr>>3, vg>>3, vb>>3, s, t);
+#endif
         u8 alpha = color >> 24;
 
         // alpha test
@@ -1389,10 +1647,18 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 PlotTranslucentPixel(pixeladdr+BufferSize, color, z, polyattr, polygon->IsShadow);
         }
     }
+    }
 
     rp->XL = rp->SlopeL.Step();
     rp->XR = rp->SlopeR.Step();
 }
+
+#ifdef LITEV_SOFT3D_FAST
+#undef SA_SUB
+#undef SA_FRAC
+#undef SA_STEP_Z
+#undef SA_LOAD_RGBST
+#endif
 
 void SoftRenderer3D::RenderScanline(s32 y, int npolys)
 {
@@ -1709,8 +1975,111 @@ void SoftRenderer3D::ClearBuffers()
     }
 }
 
+#ifdef LITEV_SOFT3D_BANDED
+// One band worker: sets up ALL polygons into this thread's own PolygonList, then
+// walks every scanline 0..191 to keep the incremental edge/stencil state correct,
+// but only writes ColorBuffer/DepthBuffer/AttrBuffer for its own [y0,y1) rows
+// (the y-range gate lives in RenderPolygonScanline / RenderShadowMaskScanline).
+// Scanline writes across bands are disjoint, so no shared-write race.
+void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1)
+{
+    BandY0 = y0;
+    BandY1 = y1;
+
+    int j = 0;
+    for (int i = 0; i < npolys; i++)
+    {
+        if (polygons[i]->Degenerate) continue;
+#ifdef LITEV_SOFT3D_FAST
+        // Lever 3: a band only writes [y0, y1) and its edge/stencil state is
+        // thread-local (never shared with other bands), so a polygon that never
+        // touches [y0, y1) contributes nothing to this band. Dropping it here
+        // shrinks the O(polys * scanlines) per-scanline Y-range scan in
+        // RenderScanline (the dominant RenderBand self-cost), and each band ends
+        // up owning only ~its share of the polygons.
+        {
+            s32 pt = polygons[i]->YTop;
+            s32 pb = polygons[i]->YBottom;
+            bool relevant = (pt == pb) ? (pt >= y0 && pt < y1)   // flat: renders only at YTop
+                                       : (pt < y1 && pb > y0);   // spans [YTop, YBottom)
+            if (!relevant) continue;
+        }
+#endif
+        SetupPolygon(&PolygonList[j++], polygons[i]);
+    }
+
+#ifdef LITEV_SOFT3D_FAST
+    // Lever 1: the band only writes [BandY0, BandY1). Rows below BandY0 are still
+    // walked to keep the incremental edge state exact (Step-only, see the early
+    // gate in RenderPolygonScanline), but rows at/after BandY1 are never used by
+    // this band, so stop there instead of re-walking [BandY1, 192).
+    for (s32 y = 0; y < y1; y++)
+        RenderScanline(y, j);
+#else
+    for (s32 y = 0; y < 192; y++)
+        RenderScanline(y, j);
+#endif
+}
+#endif
+
 void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npolys)
 {
+    // DIAGNOSTIC (throwaway): LITEV_SKIP3D skips the raster but still posts the 192
+    // scanline semaphores so the emu thread's per-scanline GetLine doesn't hang.
+    // Isolates the single-threaded 3D-raster cost from the rest of the frame.
+    static const bool _skip3d = getenv("LITEV_SKIP3D") != nullptr;
+    if (_skip3d)
+    {
+        if (threaded)
+            for (int k = 0; k < 192; k++) Platform::Semaphore_Post(Sema_ScanlineCount);
+        return;
+    }
+
+#ifdef LITEV_SOFT3D_BANDED
+    if (threaded)
+    {
+        // Parallel banded 3D raster. ClearBuffers() has already run on the render
+        // thread. Split the 192 scanlines into N contiguous bands; each band walks
+        // all scanlines (edge state) but only rasterizes its own rows.
+        // Band count is tunable at runtime (LITEV_BANDS, default 2) so the sweet
+        // spot vs the emu thread's core contention can be found without rebuilding.
+        // On the 4-core (all-A55) target NB=2 is the sweet spot: the emu JIT thread
+        // plus the threaded 2D renderer already occupy the other cores, so NB>=3
+        // oversubscribes and regresses (measured). See the render-thread analysis.
+        static const int NB = []{
+            const char* e = getenv("LITEV_BANDS");
+            int n = e ? atoi(e) : 2;
+            if (n < 1) n = 1;
+            if (n > 8) n = 8;
+            return n;
+        }();
+        s32 bnd[8 + 1];
+        for (int b = 0; b <= NB; b++) bnd[b] = (192 * b) / NB;
+
+        std::thread workers[8];
+        for (int b = 0; b < NB; b++)
+            workers[b] = std::thread(&SoftRenderer3D::RenderBand, this,
+                                     polygons, npolys, bnd[b], bnd[b + 1]);
+        for (int b = 0; b < NB; b++)
+            workers[b].join();
+
+        // Phase 2: the per-scanline final pass (edge marking / fog / anti-aliasing)
+        // reads neighbouring scanlines, so it must run only after ALL bands have
+        // finished rasterizing. It is only ~4% of the 3D cost (measured: ~3.5ms vs
+        // ~90ms raster), so it is NOT the cause of the flat NB scaling and is not
+        // worth parallelizing -- banding it was measured to REGRESS fps because the
+        // per-frame thread spawn/join cost exceeds the tiny savings. Run it serially
+        // top-to-bottom and post each scanline as it completes, so the emu thread's
+        // GetLine compositing can overlap the remaining final-pass rows.
+        for (s32 y = 0; y < 192; y++)
+        {
+            ScanlineFinalPass(y);
+            Platform::Semaphore_Post(Sema_ScanlineCount);
+        }
+        return;
+    }
+#endif
+
     int j = 0;
     for (int i = 0; i < npolys; i++)
     {

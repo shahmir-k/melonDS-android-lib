@@ -123,6 +123,25 @@ option(LITEV_SOFT2D_THREADED "liteV: banded deferred software 2D raster off the 
 if (LITEV_SOFT2D_THREADED)
     add_compile_definitions(LITEV_SOFT2D_THREADED=1)
 endif()
+# Banded software 3D rasterizer: split GPU3D_Soft's single render-thread scanline
+# raster into N contiguous scanline bands across cores. Each band walks all
+# scanlines (to keep the incremental edge state exact) but only writes its own
+# rows; disjoint scanline writes => no shared-write race. Flag-OFF is byte-identical
+# (all changes behind #ifdef LITEV_SOFT3D_BANDED); flag-ON must be bit-exact.
+option(LITEV_SOFT3D_BANDED "liteV: banded (multi-core) software 3D rasterizer" OFF)
+if (LITEV_SOFT3D_BANDED)
+    add_compile_definitions(LITEV_SOFT3D_BANDED=1)
+endif()
+# Subaffine 3D span interpolation: replaces the per-pixel perspective-correct
+# divide (Interpolator::SetX) in RenderPolygonScanline's span loops with a
+# perspective-correct anchor every 8 pixels + linear stepping in between.
+# FPS-first, APPROXIMATE (deliberately NOT bit-exact — some texture warp on
+# large near polys is expected). All changes behind #ifdef LITEV_SOFT3D_FAST;
+# flag-OFF is byte-identical.
+option(LITEV_SOFT3D_FAST "liteV: subaffine (approximate) software 3D span interpolation" OFF)
+if (LITEV_SOFT3D_FAST)
+    add_compile_definitions(LITEV_SOFT3D_FAST=1)
+endif()
 # Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
 # implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
 option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)
