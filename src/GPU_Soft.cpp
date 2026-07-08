@@ -16,6 +16,7 @@
     with melonDS. If not, see http://www.gnu.org/licenses/.
 */
 
+#include <thread>
 #include "NDS.h"
 #include "GPU_Soft.h"
 #include "GPU_ColorOp.h"
@@ -219,15 +220,39 @@ void SoftRenderer::SnapshotCompositeLine(u32 line)
 // per-scanline critical path. Milestone 1: single-thread, reusing the inline
 // draw functions after restoring each line's snapshot. Bit-exact-gated vs the
 // per-scanline inline path before band-threading.
+// Render all 192 lines of one 2D engine into its full-frame buffer, from the
+// per-scanline snapshots. Engine A and B are fully independent (separate GPU2D
+// unit, SoftRenderer2D instance, and scanline temp buffers), so the two calls run
+// concurrently with no shared mutable state.
+void SoftRenderer::RenderEngine2D(int eng)
+{
+    auto* r2 = static_cast<SoftRenderer2D*>((eng == 0 ? Rend2D_A : Rend2D_B).get());
+    for (u32 line = 0; line < 192; line++)
+    {
+        if (!FrameSnap[line].Valid) continue;
+        r2->Cur3DLine = Snap3D[line];   // consumed in lockstep during the visible period
+        r2->CurOAM = GPU.OAM;
+        r2->DrawSpritesDeferred(line);
+        r2->DrawScanlineDeferred(line, BandOut2D[eng][line]);
+    }
+}
+
 void SoftRenderer::RenderDeferredFrame()
 {
     auto* r2a = static_cast<SoftRenderer2D*>(Rend2D_A.get());
     auto* r2b = static_cast<SoftRenderer2D*>(Rend2D_B.get());
 
-    // Once-per-frame VRAM coherence (was per-scanline inline).
+    // Once-per-frame VRAM coherence (sequential; disjoint A/B regions but keep it
+    // off the parallel section to be safe).
     r2a->SyncVRAM_BG(); r2a->SyncVRAM_OBJ();
     r2b->SyncVRAM_BG(); r2b->SyncVRAM_OBJ();
 
+    // M2 step 1: render the two engines in parallel into BandOut2D.
+    std::thread tB([this]{ RenderEngine2D(1); });
+    RenderEngine2D(0);
+    tB.join();
+
+    // Sequential final composite (reads both engines' output + snapshotted regs).
     for (u32 line = 0; line < 192; line++)
     {
         FrameLineSnap& f = FrameSnap[line];
@@ -246,19 +271,9 @@ void SoftRenderer::RenderDeferredFrame()
             dstB = &Framebuffer[BackBuffer][0][dstoffset];
         }
 
-        // this line's 3D output was copied in lockstep during the visible period
-        Output3D = Snap3D[line];
-        r2a->Cur3DLine = Output3D; r2b->Cur3DLine = Output3D;
-        r2a->CurOAM = GPU.OAM;     r2b->CurOAM = GPU.OAM;
+        memcpy(Output2D[0], BandOut2D[0][line], 256 * sizeof(u32));
+        memcpy(Output2D[1], BandOut2D[1][line], 256 * sizeof(u32));
 
-        // BG/OBJ into the per-engine scanline buffers, from the snapshot
-        r2a->DrawSpritesDeferred(line);
-        r2a->DrawScanlineDeferred(line, Output2D[0]);
-        r2b->DrawSpritesDeferred(line);
-        r2b->DrawScanlineDeferred(line, Output2D[1]);
-
-        // final composite reads GPU.GPU2D_*.DispCnt / MasterBrightness* live, so
-        // restore this line's snapshot into them first (single-thread safe).
         GPU.GPU2D_A.DispCnt = f.DispCntA;
         GPU.GPU2D_B.DispCnt = f.DispCntB;
         GPU.MasterBrightnessA = f.MasterBrightnessA;

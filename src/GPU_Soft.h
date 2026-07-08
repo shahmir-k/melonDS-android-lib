@@ -83,9 +83,14 @@ private:
     // 2D batch at VBlank then reads these copies instead of re-calling GetLine, which
     // would race the 3D render thread's frame schedule).
     alignas(8) u32 Snap3D[192][256];
+    // Full-frame per-engine 2D output, so engine A and engine B (independent GPU2D
+    // units + SoftRenderer2D instances + buffers) can render in parallel before the
+    // sequential composite reads both. (M2 step 1: 2-way A||B; later: line bands.)
+    alignas(8) u32 BandOut2D[2][192][256];
     bool S2DDeferActive = false;   // set per-frame: no capture/edge → safe to defer
     void SnapshotCompositeLine(u32 line);
     void RenderDeferredFrame();    // called at VBlank
+    void RenderEngine2D(int eng);  // render all 192 lines of one engine into BandOut2D
 #endif
 
     void DrawScanlineA(u32 line, u32* dst);
