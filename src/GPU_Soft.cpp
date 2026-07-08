@@ -130,15 +130,11 @@ void SoftRenderer::DrawScanline(u32 line)
     // matches the inline path when VCount==line (the normal case).
     if (line < 192)
     {
-        u32 vline = GPU.VCount;
-        if (vline < 192)
-        {
-            // Consume this line's 3D output NOW (in lockstep with the threaded-3D
-            // render thread's per-scanline semaphore) and copy it; the deferred 2D
-            // batch reads the copy at VBlank.
-            u32* l3d = Rend3D->GetLine(vline);
-            memcpy(Snap3D[line], l3d, 256 * sizeof(u32));
-        }
+        // DraStic model: the emu thread NEVER touches the 3D. It only snapshots the
+        // 2D per-scanline register state. The whole raster (incl. consuming the 3D via
+        // GetLine, paced by the 3D render thread) runs on the async render thread, so
+        // the emu is never blocked per-scanline waiting on the 3D. (Requires the async
+        // render to be single-threaded — S2D_NBANDS=1 — so GetLine is consumed in order.)
         static_cast<SoftRenderer2D*>(Rend2D_A.get())->SnapshotLineState(line);
         static_cast<SoftRenderer2D*>(Rend2D_B.get())->SnapshotLineState(line);
         SnapshotCompositeLine(line);
@@ -271,20 +267,26 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
 
     for (u32 line = y0; line < y1; line++)
     {
+        // DraStic model: consume the 3D line HERE, on the async render thread, paced by
+        // the 3D render thread's per-scanline semaphore — NOT on the emu thread. Must
+        // GetLine EVERY line (0..191) to keep the semaphore count balanced even for
+        // skipped lines. (Single-threaded async render — S2D_NBANDS=1 — so in-order.)
+        u32* l3d = Rend3D->GetLine(line);
+
         // Read the render-owned snapshot copies (frame N) — the emu thread is
-        // concurrently overwriting the live FrameSnap/LineSnap/SprSnap/Snap3D for
-        // frame N+1, so we must NOT touch those here.
+        // concurrently overwriting the live FrameSnap/LineSnap/SprSnap for frame N+1,
+        // so we must NOT touch those here.
         FrameLineSnap& f = FrameSnapR[line];
         if (!f.Valid) continue;
 
         // --- BG/OBJ raster into this band's per-engine line buffers ---
-        rA->Cur3DLine = Snap3DR[line];
+        rA->Cur3DLine = l3d;
         rA->CurOAM = OAMSnap;
         rA->CurPalette = PaletteSnap;
         rA->DrawSpritesDeferred(mainA->SprSnapR[line], line);
         rA->DrawScanlineDeferred(mainA->LineSnapR[line], line, BandOut2D[0][line]);
 
-        rB->Cur3DLine = Snap3DR[line];
+        rB->Cur3DLine = l3d;
         rB->CurOAM = OAMSnap;
         rB->CurPalette = PaletteSnap;
         rB->DrawSpritesDeferred(mainB->SprSnapR[line], line);
@@ -310,7 +312,7 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
         DrawScanlineB(line, dstB, BandOut2D[1][line], f.DispCntB, f.MasterBrightnessB);
 
         if (f.CaptureEnable)
-            DoCapture(line, BandOut2D[0][line], Snap3DR[line]);
+            DoCapture(line, BandOut2D[0][line], l3d);
 
         if (f.ScreensEnabled)
         {
@@ -407,10 +409,10 @@ void SoftRenderer::VBlank()
     if (!S2DBandsInit) InitBands();
 
     // (b) Snapshot the emu-mutable state the async render reads. The per-scanline
-    // regs (LineSnap/SprSnap/FrameSnap) + 3D (Snap3D) are copied into render-owned
-    // buffers; palette + OAM are snapshotted; VRAMFlat is built here (on the emu
-    // thread, coherent for frame N) and band units are seeded with frame-N regs.
-    memcpy(Snap3DR, Snap3D, sizeof(Snap3D));
+    // regs (LineSnap/SprSnap/FrameSnap) are copied into render-owned buffers; palette
+    // + OAM are snapshotted; VRAMFlat is built here (on the emu thread, coherent for
+    // frame N) and band units are seeded with frame-N regs. The 3D is NOT snapshotted
+    // here — the async render consumes it directly via GetLine (off the emu thread).
     memcpy(FrameSnapR, FrameSnap, sizeof(FrameSnap));
     static_cast<SoftRenderer2D*>(Rend2D_A.get())->CopyLineSnaps();
     static_cast<SoftRenderer2D*>(Rend2D_B.get())->CopyLineSnaps();
