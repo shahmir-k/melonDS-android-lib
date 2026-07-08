@@ -291,10 +291,8 @@ void SoftRenderer2D::SyncVRAM_OBJ()
 
 // Deferred BG+OBJ raster for one scanline, restoring that line's snapshot first.
 // (Milestone 1: single-thread batched at VBlank, reusing DrawScanline_BGOBJ.)
-void SoftRenderer2D::DrawScanlineDeferred(u32 line, u32* dst)
+void SoftRenderer2D::DrawScanlineDeferred(const S2DLineState& s, u32 line, u32* dst)
 {
-    const S2DLineState& s = LineSnap[line];
-
     if (!s.Enabled)
     {
         u32 fillcolor = (GPU2D.Num == 0) ? 0xFF000000 : 0xFF3F3F3F;
@@ -311,9 +309,9 @@ void SoftRenderer2D::DrawScanlineDeferred(u32 line, u32* dst)
     DrawScanline_BGOBJ(line, dst);
 }
 
-void SoftRenderer2D::DrawSpritesDeferred(u32 line)
+void SoftRenderer2D::DrawSpritesDeferred(const S2DSprState& s, u32 line)
 {
-    LoadSprState(SprSnap[line]);
+    LoadSprState(s);
     DrawSprites(line);
 }
 #endif // LITEV_SOFT2D_THREADED

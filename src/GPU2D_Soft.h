@@ -93,8 +93,10 @@ public:
     // Deferred (no per-scanline VRAM coherence; that runs once/frame at VBlank).
     void SyncVRAM_BG();
     void SyncVRAM_OBJ();
-    void DrawSpritesDeferred(u32 line);        // reads CurOAM + loaded regs
-    void DrawScanlineDeferred(u32 line, u32* dst);
+    // Snapshot passed by ref so a per-band private renderer can read the shared
+    // main snapshot arrays and load into its OWN GPU2D unit.
+    void DrawSpritesDeferred(const S2DSprState& s, u32 line);
+    void DrawScanlineDeferred(const S2DLineState& s, u32 line, u32* dst);
 
     u32* Cur3DLine = nullptr;                  // per-line 3D output (replaces Parent.Output3D)
     const u8* CurOAM = nullptr;                // per-line OAM base (replaces GPU.OAM)

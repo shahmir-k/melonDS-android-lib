@@ -90,7 +90,23 @@ private:
     bool S2DDeferActive = false;   // set per-frame: no capture/edge → safe to defer
     void SnapshotCompositeLine(u32 line);
     void RenderDeferredFrame();    // called at VBlank
-    void RenderEngine2D(int eng);  // render all 192 lines of one engine into BandOut2D
+
+    // N-way banded raster (DraStic model): each band renders a disjoint line range
+    // for BOTH engines using PRIVATE GPU2D units (seeded from the main frame state
+    // via CopyRenderState, then per-line snapshot overrides) + private scanline temp
+    // buffers, so all bands run concurrently on idle cores with no shared mutable
+    // render state. They read the shared read-only snapshots + shared VRAM (emu is
+    // blocked during the batch).
+    static constexpr int S2D_NBANDS = 4;
+    struct S2DBand
+    {
+        std::unique_ptr<GPU2D> unit[2];
+        std::unique_ptr<Renderer2D> rend[2];   // SoftRenderer2D bound to unit[]
+    };
+    S2DBand S2DBands[S2D_NBANDS];
+    bool S2DBandsInit = false;
+    void InitBands();
+    void RenderBand(int bi, u32 y0, u32 y1);
 #endif
 
     void DrawScanlineA(u32 line, u32* dst);

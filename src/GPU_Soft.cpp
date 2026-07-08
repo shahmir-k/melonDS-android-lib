@@ -220,37 +220,79 @@ void SoftRenderer::SnapshotCompositeLine(u32 line)
 // per-scanline critical path. Milestone 1: single-thread, reusing the inline
 // draw functions after restoring each line's snapshot. Bit-exact-gated vs the
 // per-scanline inline path before band-threading.
-// Render all 192 lines of one 2D engine into its full-frame buffer, from the
-// per-scanline snapshots. Engine A and B are fully independent (separate GPU2D
-// unit, SoftRenderer2D instance, and scanline temp buffers), so the two calls run
-// concurrently with no shared mutable state.
-void SoftRenderer::RenderEngine2D(int eng)
+// Lazily create the per-band private render contexts (once).
+void SoftRenderer::InitBands()
 {
-    auto* r2 = static_cast<SoftRenderer2D*>((eng == 0 ? Rend2D_A : Rend2D_B).get());
-    for (u32 line = 0; line < 192; line++)
+    for (int b = 0; b < S2D_NBANDS; b++)
+    {
+        for (int e = 0; e < 2; e++)
+        {
+            S2DBands[b].unit[e] = std::make_unique<GPU2D>((u32)e, GPU);
+            S2DBands[b].rend[e] = std::make_unique<SoftRenderer2D>(*S2DBands[b].unit[e], *this);
+            static_cast<SoftRenderer2D*>(S2DBands[b].rend[e].get())->Reset();
+        }
+    }
+    S2DBandsInit = true;
+}
+
+// Render a disjoint line range [y0,y1) for BOTH engines into BandOut2D, using this
+// band's PRIVATE units/renderers, reading the shared main snapshots. Runs on a
+// helper thread; no shared mutable render state with the other bands.
+void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
+{
+    auto* mainA = static_cast<SoftRenderer2D*>(Rend2D_A.get());
+    auto* mainB = static_cast<SoftRenderer2D*>(Rend2D_B.get());
+    auto* rA = static_cast<SoftRenderer2D*>(S2DBands[bi].rend[0].get());
+    auto* rB = static_cast<SoftRenderer2D*>(S2DBands[bi].rend[1].get());
+
+    for (u32 line = y0; line < y1; line++)
     {
         if (!FrameSnap[line].Valid) continue;
-        r2->Cur3DLine = Snap3D[line];   // consumed in lockstep during the visible period
-        r2->CurOAM = GPU.OAM;
-        r2->DrawSpritesDeferred(line);
-        r2->DrawScanlineDeferred(line, BandOut2D[eng][line]);
+
+        rA->Cur3DLine = Snap3D[line];
+        rA->CurOAM = GPU.OAM;
+        rA->DrawSpritesDeferred(mainA->SprSnap[line], line);
+        rA->DrawScanlineDeferred(mainA->LineSnap[line], line, BandOut2D[0][line]);
+
+        rB->Cur3DLine = Snap3D[line];
+        rB->CurOAM = GPU.OAM;
+        rB->DrawSpritesDeferred(mainB->SprSnap[line], line);
+        rB->DrawScanlineDeferred(mainB->LineSnap[line], line, BandOut2D[1][line]);
     }
 }
 
 void SoftRenderer::RenderDeferredFrame()
 {
+    if (!S2DBandsInit) InitBands();
+
     auto* r2a = static_cast<SoftRenderer2D*>(Rend2D_A.get());
     auto* r2b = static_cast<SoftRenderer2D*>(Rend2D_B.get());
 
-    // Once-per-frame VRAM coherence (sequential; disjoint A/B regions but keep it
-    // off the parallel section to be safe).
+    // Once-per-frame VRAM coherence (sequential, before the parallel section).
     r2a->SyncVRAM_BG(); r2a->SyncVRAM_OBJ();
     r2b->SyncVRAM_BG(); r2b->SyncVRAM_OBJ();
 
-    // M2 step 1: render the two engines in parallel into BandOut2D.
-    std::thread tB([this]{ RenderEngine2D(1); });
-    RenderEngine2D(0);
-    tB.join();
+    // Seed each band's private units with the frame-level register state (per-line
+    // varying fields are overridden by LoadLineState inside the deferred draws).
+    for (int b = 0; b < S2D_NBANDS; b++)
+    {
+        S2DBands[b].unit[0]->CopyRenderState(GPU.GPU2D_A);
+        S2DBands[b].unit[1]->CopyRenderState(GPU.GPU2D_B);
+    }
+
+    // N-way banded raster across idle cores. Emu thread renders band 0; helpers do
+    // the rest. (Emu is blocked here, so its core + the idle 3D thread's core are
+    // available.)
+    const u32 rows = 192 / S2D_NBANDS;
+    std::thread helpers[S2D_NBANDS - 1];
+    for (int b = 1; b < S2D_NBANDS; b++)
+    {
+        u32 y0 = (u32)b * rows;
+        u32 y1 = (b == S2D_NBANDS - 1) ? 192 : y0 + rows;
+        helpers[b-1] = std::thread([this, b, y0, y1]{ RenderBand(b, y0, y1); });
+    }
+    RenderBand(0, 0, rows);
+    for (int b = 0; b < S2D_NBANDS - 1; b++) helpers[b].join();
 
     // Sequential final composite (reads both engines' output + snapshotted regs).
     for (u32 line = 0; line < 192; line++)
