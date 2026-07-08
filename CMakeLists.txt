@@ -494,6 +494,23 @@ if (LITEV_COARSE_RTC)
     add_compile_definitions(LITEV_COARSE_RTC=1)
 endif()
 
+# DraStic-style DMA streamlining for the GXFIFO geometry-DMA path (the dominant
+# in-race DMA: MainRAM display-list -> 0x04000400, fixed dst, incrementing src).
+# The stock loop routes every word through NDS::ARM9Read32 (region decode) and
+# NDS::ARM9Write32 -> ARM9IOWrite32 -> GPU3D::Write32 (I/O address dispatch) before
+# reaching GPU3D::WriteToGXFIFO. Since IsGXFIFODMA already proves src==MainRAM /
+# dst==0x04000400 / DstAddrInc==0, this fast path reads the source word directly
+# from MainRAM (exactly what ARM9Read32's 0x02 case does) and calls WriteToGXFIFO
+# directly (exactly what the 0x400 dispatch resolves to, incl. the GeometryEnabled
+# guard). Per-word DMA timing (UnitTimings9_32) and stall handling are unchanged,
+# so this is BIT-EXACT dispatch elision, not an accuracy tradeoff. Profiled on the
+# Shrek race: DMA::Run9 is ~10.5% of the emu thread and ~60% of that is this
+# GXFIFO chain. Default OFF.
+option(LITEV_DMA_GXFIFO_FAST "DraStic: direct MainRAM->WriteToGXFIFO fast path for geometry DMA (dispatch elision)" OFF)
+if (LITEV_DMA_GXFIFO_FAST)
+    add_compile_definitions(LITEV_DMA_GXFIFO_FAST=1)
+endif()
+
 # R4 (Appendix D.7; docs/r4-render-thread-design.md): render-thread offload seam.
 # Compiles in the capture/submit phase split so the Android app glue can later
 # move GL renderer submission off the emulation thread (RunFrame produces a

@@ -589,6 +589,35 @@ void DMA::Run9()
             if (NDS.ARM9Timestamp >= NDS.ARM9Target) break;
         }
     }
+#ifdef LITEV_DMA_GXFIFO_FAST
+    else if (IsGXFIFODMA)
+    {
+        // DraStic-style geometry-DMA fast path. IsGXFIFODMA already guarantees
+        // src is MainRAM (0x02), dst is the fixed GXFIFO register 0x04000400, and
+        // DstAddrInc==0. Reading directly from MainRAM is exactly what
+        // NDS::ARM9Read32's 0x02000000 case does; calling WriteToGXFIFO (under the
+        // GeometryEnabled guard) is exactly what ARM9Write32->ARM9IOWrite32->
+        // GPU3D::Write32(0x400) resolves to. Timing + stall handling are untouched,
+        // so this is bit-exact — it only elides the per-word address decode.
+        GPU3D& gpu3d = NDS.GPU.GPU3D;
+        while (IterCount > 0 && !Stall)
+        {
+            NDS.ARM9Timestamp += (UnitTimings9_32(burststart) << NDS.ARM9ClockShift);
+            burststart = false;
+
+            u32 val = *(u32*)&NDS.MainRAM[CurSrcAddr & NDS.MainRAMMask];
+            if (gpu3d.GeometryEnabled)
+                gpu3d.WriteToGXFIFO(val);
+
+            CurSrcAddr += SrcAddrInc<<2;
+            CurDstAddr += DstAddrInc<<2;   // DstAddrInc==0 (fixed dst)
+            IterCount--;
+            RemCount--;
+
+            if (NDS.ARM9Timestamp >= NDS.ARM9Target) break;
+        }
+    }
+#endif
     else
     {
 #if defined(__ANDROID__)

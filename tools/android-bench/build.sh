@@ -89,7 +89,11 @@ config_flags() {
       # recognizable, audio still plays (coarser). A/B off: LITEV_SPU_BATCH=OFF
       # LITEV_COARSE_RTC=OFF ./build.sh full. (fs>0 harness hang is PRE-EXISTING:
       # reproduces on baseline with flags OFF; real gameplay/app runs fs0.)
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_JIT_LDMSTM=${LITEV_LDMSTM:-ON} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON}" ;;
+      # LITEV_DMA_GXFIFO_FAST (bit-exact DMA dispatch elision, default ON): direct
+      # MainRAM->WriteToGXFIFO fast path for the geometry-DMA stream. DMA::Run9 is
+      # ~10.5% of the emu thread on the Shrek race; ~60% of that is the GXFIFO
+      # dispatch chain this elides. A/B off: LITEV_DMA_GXFIFO_FAST=OFF ./build.sh full
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_JIT_LDMSTM=${LITEV_LDMSTM:-ON} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON}" ;;
     soft2d)
       # Banded deferred software-2D raster (LITEV_SOFT2D_THREADED) + banded
       # multi-core software-3D raster (LITEV_SOFT3D_BANDED) on top of the `full`
@@ -108,7 +112,9 @@ config_flags() {
       # config the emu-core saving is in the fps noise (neutral) but the floods are
       # gone (SPU 547->68, RTC 548->~0.5, verified) + spu_mix -20%; render OK, audio
       # OK. A/B off: LITEV_SPU_BATCH=OFF LITEV_COARSE_RTC=OFF ./build.sh soft3dfast.
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON}" ;;
+      # LITEV_DMA_GXFIFO_FAST (bit-exact DMA dispatch elision, default ON): see `full`.
+      # A/B off: LITEV_DMA_GXFIFO_FAST=OFF ./build.sh soft3dfast
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON}" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`
