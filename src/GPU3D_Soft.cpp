@@ -21,6 +21,10 @@
 #include <algorithm>
 #include <stdio.h>
 #include <string.h>
+#if defined(LITEV_SOFT3D_FAST) && (defined(__ARM_NEON) || defined(__aarch64__))
+#include <arm_neon.h>
+#define LITEV_SOFT3D_NEON 1
+#endif
 #include "NDS.h"
 #include "GPU.h"
 
@@ -1338,6 +1342,56 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
     if (f_texEnable)
         f_texcache = ResolveTexCache(f_texparam, f_texpal, &f_texW, &f_texH);
 
+    // Common wrap mode: repeat on both axes, no flip. Then the texel address is a
+    // pure masked (si = (s>>4)&(W-1)) — no branches — so it vectorizes cleanly.
+    // W,H are always powers of two, so the mask is exact for negative coords too.
+    const bool f_wrap_simple =
+        (f_texparam & (1<<16)) && (f_texparam & (1<<17)) &&
+        !(f_texparam & (1<<18)) && !(f_texparam & (1<<19));
+
+    // Wrap/flip/clamp (s,t) fixed-point tex coords to a decoded-arena texel index.
+    // Shared by the current-pixel fetch and the look-ahead prefetch. Branchy but
+    // cheap integer ALU that overlaps the outstanding texel cache miss.
+    auto texAddr = [&](s16 s, s16 t) -> u32
+    {
+        s32 si = s >> 4;
+        s32 ti = t >> 4;
+
+        if (f_texparam & (1<<16))
+        {
+            if (f_texparam & (1<<18))
+            {
+                if (si & f_texW) si = (f_texW-1) - (si & (f_texW-1));
+                else             si = (si & (f_texW-1));
+            }
+            else
+                si &= f_texW-1;
+        }
+        else
+        {
+            if (si < 0) si = 0;
+            else if (si >= f_texW) si = f_texW-1;
+        }
+
+        if (f_texparam & (1<<17))
+        {
+            if (f_texparam & (1<<19))
+            {
+                if (ti & f_texH) ti = (f_texH-1) - (ti & (f_texH-1));
+                else             ti = (ti & (f_texH-1));
+            }
+            else
+                ti &= f_texH-1;
+        }
+        else
+        {
+            if (ti < 0) ti = 0;
+            else if (ti >= f_texH) ti = f_texH-1;
+        }
+
+        return (u32)ti * (u32)f_texW + (u32)si;
+    };
+
     auto shadeFast = [&](u32 vr, u32 vg, u32 vb, s16 s, s16 t) -> u32
     {
         u8 r, g, b, a;
@@ -1359,43 +1413,7 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
             u16 tcolor; u8 talpha;
             if (f_texcache)
             {
-                // Wrap/flip/clamp (cheap integer math) then read the decoded texel.
-                s32 si = s >> 4;
-                s32 ti = t >> 4;
-
-                if (f_texparam & (1<<16))
-                {
-                    if (f_texparam & (1<<18))
-                    {
-                        if (si & f_texW) si = (f_texW-1) - (si & (f_texW-1));
-                        else             si = (si & (f_texW-1));
-                    }
-                    else
-                        si &= f_texW-1;
-                }
-                else
-                {
-                    if (si < 0) si = 0;
-                    else if (si >= f_texW) si = f_texW-1;
-                }
-
-                if (f_texparam & (1<<17))
-                {
-                    if (f_texparam & (1<<19))
-                    {
-                        if (ti & f_texH) ti = (f_texH-1) - (ti & (f_texH-1));
-                        else             ti = (ti & (f_texH-1));
-                    }
-                    else
-                        ti &= f_texH-1;
-                }
-                else
-                {
-                    if (ti < 0) ti = 0;
-                    else if (ti >= f_texH) ti = f_texH-1;
-                }
-
-                u16 packed = f_texcache[(u32)ti * (u32)f_texW + (u32)si];
+                u16 packed = f_texcache[texAddr(s, t)];
                 tcolor = (u16)(packed & 0x7FFF);
                 talpha = (packed & 0x8000) ? 31 : 0;
             }
@@ -1449,6 +1467,112 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 
         return r | (g << 8) | (b << 16) | ((u32)a << 24);
     };
+
+#ifdef LITEV_SOFT3D_NEON
+    // Batched 4-wide shade for the pure-modulate decode-once-texcache path
+    // (!decal !toon !highlight !wireframe, textured). Gathers the 4 scattered
+    // texels with 4 back-to-back scalar loads (decoupling load-use latency: the
+    // loads pipeline instead of each blocking its own modulate) then NEON-
+    // modulates all four RGBA channels of all four pixels at once. Bit-identical
+    // to shadeFast for this case (same integer ops, just SIMD-packed). out[] gets
+    // the ABGR words in pixel order.
+    auto shade4 = [&](const s16* bs, const s16* bt,
+                      const u16* bvr, const u16* bvg, const u16* bvb,
+                      u32* out)
+    {
+        u32 addr[4];
+        if (f_wrap_simple)
+        {
+            // branchless masked wrap for all 4 lanes at once
+            int32x4_t vs = vshrq_n_s32(vmovl_s16(vld1_s16(bs)), 4);
+            int32x4_t vt = vshrq_n_s32(vmovl_s16(vld1_s16(bt)), 4);
+            int32x4_t si = vandq_s32(vs, vdupq_n_s32(f_texW - 1));
+            int32x4_t ti = vandq_s32(vt, vdupq_n_s32(f_texH - 1));
+            int32x4_t a  = vmlaq_s32(si, ti, vdupq_n_s32(f_texW)); // si + ti*W
+            vst1q_u32(addr, vreinterpretq_u32_s32(a));
+        }
+        else
+        {
+            addr[0] = texAddr(bs[0], bt[0]);
+            addr[1] = texAddr(bs[1], bt[1]);
+            addr[2] = texAddr(bs[2], bt[2]);
+            addr[3] = texAddr(bs[3], bt[3]);
+        }
+
+        u16 packed[4];
+        packed[0] = f_texcache[addr[0]];
+        packed[1] = f_texcache[addr[1]];
+        packed[2] = f_texcache[addr[2]];
+        packed[3] = f_texcache[addr[3]];
+
+        uint16x4_t vpacked = vld1_u16(packed);
+        uint16x4_t one     = vdup_n_u16(1);
+        uint16x4_t c3e     = vdup_n_u16(0x3E);
+
+        uint16x4_t vtcolor = vand_u16(vpacked, vdup_n_u16(0x7FFF));
+        // talpha = (bit15 ? 31 : 0)
+        uint16x4_t vtalpha = vmul_u16(vshr_n_u16(vpacked, 15), vdup_n_u16(31));
+
+        // 5-bit channel -> 6-bit (x<<1, then +1 iff nonzero)
+        uint16x4_t tr = vand_u16(vshl_n_u16(vtcolor, 1), c3e);
+        uint16x4_t tg = vand_u16(vshr_n_u16(vtcolor, 4), c3e);
+        uint16x4_t tb = vand_u16(vshr_n_u16(vtcolor, 9), c3e);
+        tr = vadd_u16(tr, vmin_u16(tr, one));
+        tg = vadd_u16(tg, vmin_u16(tg, one));
+        tb = vadd_u16(tb, vmin_u16(tb, one));
+
+        uint16x4_t vr = vld1_u16(bvr);
+        uint16x4_t vg = vld1_u16(bvg);
+        uint16x4_t vb = vld1_u16(bvb);
+
+        // r = ((tr+1)*(vr+1) - 1) >> 6  (all lanes fit in u16: max 64*64-1 = 4095)
+        uint16x4_t rr = vshr_n_u16(vsub_u16(vmul_u16(vadd_u16(tr, one), vadd_u16(vr, one)), one), 6);
+        uint16x4_t gg = vshr_n_u16(vsub_u16(vmul_u16(vadd_u16(tg, one), vadd_u16(vg, one)), one), 6);
+        uint16x4_t bb = vshr_n_u16(vsub_u16(vmul_u16(vadd_u16(tb, one), vadd_u16(vb, one)), one), 6);
+        // a = ((talpha+1)*(polyalpha+1) - 1) >> 5
+        uint16x4_t pa1 = vdup_n_u16((u16)(f_polyalpha + 1));
+        uint16x4_t aa  = vshr_n_u16(vsub_u16(vmul_u16(vadd_u16(vtalpha, one), pa1), one), 5);
+
+        // pack ABGR: r | g<<8 | b<<16 | a<<24
+        uint32x4_t col = vorrq_u32(
+            vorrq_u32(vmovl_u16(rr), vshlq_n_u32(vmovl_u16(gg), 8)),
+            vorrq_u32(vshlq_n_u32(vmovl_u16(bb), 16), vshlq_n_u32(vmovl_u16(aa), 24)));
+        vst1q_u32(out, col);
+    };
+
+    // Plot tail for part-2 interior pixels (edge == yedge). Mirrors the scalar
+    // interior plot exactly; used by the batched path after shade4.
+    auto plot2 = [&](u32 pixeladdr, s32 z, u32 dstattr, u32 color)
+    {
+        u8 alpha = color >> 24;
+        if (alpha <= GPU3D.RenderAlphaRef) return;
+
+        if (alpha == 31)
+        {
+            u32 attr = polyattr | edge;
+            if ((GPU3D.RenderDispCnt & (1<<4)) && (attr & 0xF))
+            {
+                attr |= (0x1F << 8);
+                if (pixeladdr < BufferSize)
+                {
+                    ColorBuffer[pixeladdr+BufferSize] = ColorBuffer[pixeladdr];
+                    DepthBuffer[pixeladdr+BufferSize] = DepthBuffer[pixeladdr];
+                    AttrBuffer[pixeladdr+BufferSize] = AttrBuffer[pixeladdr];
+                }
+            }
+            DepthBuffer[pixeladdr] = z;
+            ColorBuffer[pixeladdr] = color;
+            AttrBuffer[pixeladdr] = attr;
+        }
+        else
+        {
+            if (!(polygon->Attr & (1<<11))) z = -1;
+            PlotTranslucentPixel(pixeladdr, color, z, polyattr, polygon->IsShadow);
+            if ((dstattr & 0xF) && (pixeladdr < BufferSize))
+                PlotTranslucentPixel(pixeladdr+BufferSize, color, z, polyattr, polygon->IsShadow);
+        }
+    };
+#endif
 #endif
 
     // part 1: left edge
@@ -1578,6 +1702,59 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
     else {
 #ifdef LITEV_SOFT3D_FAST
     sa_rem = 0;
+#endif
+#ifdef LITEV_SOFT3D_NEON
+    // Batched interior fast path: pure-modulate textured, non-shadow polys (the
+    // dominant textured-fill case). Per-pixel depth test + pixeladdr stay scalar;
+    // survivors are buffered and flushed 4 at a time through shade4 (batched
+    // gather + NEON modulate) then plotted scalar. Bit-identical to the scalar
+    // path below. Everything else (shadow / decal / toon / highlight / untextured
+    // / no-cache) falls through to the scalar loop.
+    if (f_texcache && !f_decal && !f_toon && !f_highlight && !f_wireframe && !polygon->IsShadow)
+    {
+        s16 bs[4], bt[4];
+        u16 bvr[4], bvg[4], bvb[4];
+        u32 bpaddr[4], bdstattr[4];
+        s32 bz[4];
+        u32 bcolor[4];
+        int nb = 0;
+
+        for (; x < xlimit; x++)
+        {
+            u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
+            u32 dstattr = AttrBuffer[pixeladdr];
+
+            SA_STEP_Z();
+
+            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+            {
+                if (!(dstattr & 0xF) || pixeladdr >= BufferSize) continue;
+                pixeladdr += BufferSize;
+                dstattr = AttrBuffer[pixeladdr];
+                if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+                    continue;
+            }
+
+            SA_LOAD_RGBST();
+
+            bs[nb] = s; bt[nb] = t;
+            bvr[nb] = (u16)(vr>>3); bvg[nb] = (u16)(vg>>3); bvb[nb] = (u16)(vb>>3);
+            bpaddr[nb] = pixeladdr; bdstattr[nb] = dstattr; bz[nb] = z;
+            if (++nb == 4)
+            {
+                shade4(bs, bt, bvr, bvg, bvb, bcolor);
+                plot2(bpaddr[0], bz[0], bdstattr[0], bcolor[0]);
+                plot2(bpaddr[1], bz[1], bdstattr[1], bcolor[1]);
+                plot2(bpaddr[2], bz[2], bdstattr[2], bcolor[2]);
+                plot2(bpaddr[3], bz[3], bdstattr[3], bcolor[3]);
+                nb = 0;
+            }
+        }
+        // flush remainder (<4) via the scalar shade
+        for (int i = 0; i < nb; i++)
+            plot2(bpaddr[i], bz[i], bdstattr[i], shadeFast(bvr[i], bvg[i], bvb[i], bs[i], bt[i]));
+    }
+    else
 #endif
     for (; x < xlimit; x++)
     {
