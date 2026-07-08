@@ -471,6 +471,29 @@ if (LITEV_INSTANT_DIVSQRT)
     add_compile_definitions(LITEV_INSTANT_DIVSQRT=1)
 endif()
 
+# DraStic batched audio ring (teardown doc 11): SPU::Mix generates N samples per
+# scheduled Event_SPU instead of one, cutting the SPU scheduler-event flood
+# (547/frame) by ~N x. Sample generation is bit-identical per iteration; only
+# scheduler granularity + SPU-IRQ/capture latency coarsen (FPS-first). N is the
+# batch factor (default 8 -> 547/frame -> ~68/frame). Default OFF.
+option(LITEV_SPU_BATCH "DraStic #11: batch N audio samples per Event_SPU (coarsen SPU event flood)" OFF)
+set(LITEV_SPU_BATCH_N "8" CACHE STRING "SPU batch factor (samples generated per scheduled Event_SPU)")
+if (LITEV_SPU_BATCH)
+    add_compile_definitions(LITEV_SPU_BATCH=1 LITEV_SPU_BATCH_N=${LITEV_SPU_BATCH_N})
+endif()
+
+# DraStic-style inert-tick RTC coarsening: the 32768Hz RTC oscillator schedules
+# ~548 events/frame just to bump a counter. When no periodic INT1 frequency /
+# INT2 alarm is armed (the common gameplay case), the periodic ProcessIRQ(1) is a
+# no-op, so ClockTimer hops straight to the next 1024-tick boundary in one event
+# instead of ~1024 per-tick events -- removing essentially the whole RTC flood.
+# Reverts to the exact per-tick path the moment a game arms an RTC IRQ. FPS-first,
+# default OFF. (Known: HANGS at --frameskip 99; real gameplay runs frameskip 0.)
+option(LITEV_COARSE_RTC "DraStic: skip inert 32768Hz RTC ticks when no periodic RTC IRQ is armed" OFF)
+if (LITEV_COARSE_RTC)
+    add_compile_definitions(LITEV_COARSE_RTC=1)
+endif()
+
 # R4 (Appendix D.7; docs/r4-render-thread-design.md): render-thread offload seam.
 # Compiles in the capture/submit phase split so the Android app glue can later
 # move GL renderer submission off the emulation thread (RunFrame produces a

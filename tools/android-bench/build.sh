@@ -78,7 +78,18 @@ config_flags() {
     full)
       # LITEV_LDMSTM (default ON): DraStic-style ldp/stp-paired inline LDM/STM
       # block transfers + MainRAM inline block-LOAD tier. A/B: LITEV_LDMSTM=OFF ./build.sh full
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_JIT_LDMSTM=${LITEV_LDMSTM:-ON}" ;;
+      # LITEV_INSTANT_DIVSQRT (validated +5% cooled emu-core): compute the ARM9
+      # hardware DIV/SQRT result at register-write time and skip the scheduled
+      # completion event (~1016 Event_Div + ~79 Event_Sqrt scheduler slices/frame
+      # removed). DraStic's approach; ARM9-only so MP-safe. Correct at frameskip 0.
+      # LITEV_SPU_BATCH / LITEV_COARSE_RTC (DraStic event-flood coarsening, default ON):
+      # removes ~1026 scheduler events/frame (SPU 547->68 via 8-sample batches;
+      # RTC 548->~0.5 by skipping inert 32768Hz ticks). Cooled interleaved A/B on
+      # `full` @1416MHz fs0: 9.73 -> 10.09 fps median (+3.7%, both flags). Render
+      # recognizable, audio still plays (coarser). A/B off: LITEV_SPU_BATCH=OFF
+      # LITEV_COARSE_RTC=OFF ./build.sh full. (fs>0 harness hang is PRE-EXISTING:
+      # reproduces on baseline with flags OFF; real gameplay/app runs fs0.)
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_JIT_LDMSTM=${LITEV_LDMSTM:-ON} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON}" ;;
     soft2d)
       # Banded deferred software-2D raster (LITEV_SOFT2D_THREADED) + banded
       # multi-core software-3D raster (LITEV_SOFT3D_BANDED) on top of the `full`
@@ -92,7 +103,12 @@ config_flags() {
       # per-pixel perspective-correct divide in RenderPolygonScanline. Deliberately
       # NOT bit-exact vs soft2d/full — A/B against `full` for the fps delta and
       # eyeball the framebuffer for recognizability.
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON" ;;
+      # LITEV_SPU_BATCH / LITEV_COARSE_RTC (DraStic event-flood coarsening, default ON):
+      # removes ~1026 scheduler events/frame (see `full`). On this render-bound
+      # config the emu-core saving is in the fps noise (neutral) but the floods are
+      # gone (SPU 547->68, RTC 548->~0.5, verified) + spu_mix -20%; render OK, audio
+      # OK. A/B off: LITEV_SPU_BATCH=OFF LITEV_COARSE_RTC=OFF ./build.sh soft3dfast.
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON}" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`
@@ -127,6 +143,14 @@ config_flags() {
       # The cumulative ceiling for the emu-core grind (2026-07-07); A/B each delta
       # against full to attribute the gains.
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_NEON_GEOMETRY=ON -DLITEV_RELAXED_ARM9_TIMING=ON -DLITEV_INSTANT_DIVSQRT=ON" ;;
+    full-gxthreaded)
+      # DraStic backlog #3: batched GXFIFO threaded-code interpreter. Exactly the
+      # `swtable-pin` stack + LITEV_GXFIFO_THREADED. A/B against `swtable-pin`
+      # isolates the geometry-dispatch delta (removes the per-command bl/ret +
+      # prologue/epilogue by hoisting Run()'s drain loop into ExecuteCommand() as
+      # threaded code, plus the computed-goto jump table). Geometry output +
+      # audio are bit-exact vs swtable-pin.
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_MEM_SWTABLE=ON -DLITEV_JIT_FIXEDREG=ON -DLITEV_JIT_GLOBALREG=ON -DLITEV_GXFIFO_THREADED=ON" ;;
     *)
       echo "error: unknown config '$1'" >&2; return 1 ;;
   esac
