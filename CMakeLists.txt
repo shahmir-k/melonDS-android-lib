@@ -511,6 +511,39 @@ if (LITEV_DMA_GXFIFO_FAST)
     add_compile_definitions(LITEV_DMA_GXFIFO_FAST=1)
 endif()
 
+# DraStic-style aggressive idle-loop recognition (teardown doc 01 item 6). Stock
+# melonDS's IsIdleLoop (ARMJIT.cpp) rejects any loop with a cross-iteration
+# register recurrence (a register read before it is rewritten in the iteration --
+# e.g. a spin/timeout counter or a poll that also bumps a tick). DraStic
+# fast-forwards such loops anyway: the recurrent register is a dead
+# timeout/accumulator and the observable wait outcome is driven by the memory/IO
+# the loop polls, not by that register's exact value. With this flag IsIdleLoop
+# accepts the loop as long as it does NO store and NO coprocessor access (both
+# still hard-rejected), so it only reads mem/IO, computes in regs, and branches
+# back. Fast-forwards the CPU to the next scheduled event on each such taken
+# back-branch (same mechanism as stock idle loops). Accuracy tradeoff (FPS-first)
+# -- a genuine register-recurrent compute loop that also polls would advance one
+# iteration per event; verify no desync. Default OFF.
+option(LITEV_IDLE_AGGRESSIVE "DraStic: recognize register-recurrent poll loops as idle (fast-forward)" OFF)
+if (LITEV_IDLE_AGGRESSIVE)
+    add_compile_definitions(LITEV_IDLE_AGGRESSIVE=1)
+endif()
+
+# DraStic-style "baked" timer deadline (attacks the run_system bucket). Under
+# LITEV_EVENT_SLICES, NextTarget() recomputes NextTimerDeadline() on every one of
+# the ~1957 scheduler iterations/frame -- an 8-timer scan whose result is provably
+# INVARIANT between timer overflows/reloads and control writes (RunTimer advances
+# Counter by cycles<<shift while TimerTimestamp advances by cycles, leaving the
+# absolute soonest-overflow SysTimestamp unchanged). This caches the deadline and
+# recomputes only when a timer actually overflows/reloads (HandleTimerOverflow) or
+# its control/prescaler/start state is written (TimerStart); savestate-load and
+# reset invalidate it. EXACT (no accuracy tradeoff) -- pure recompute elision.
+# Default OFF.
+option(LITEV_TIMER_FAST "DraStic: cache NextTimerDeadline, recompute only on timer overflow/control write" OFF)
+if (LITEV_TIMER_FAST)
+    add_compile_definitions(LITEV_TIMER_FAST=1)
+endif()
+
 # R4 (Appendix D.7; docs/r4-render-thread-design.md): render-thread offload seam.
 # Compiles in the capture/submit phase split so the Android app glue can later
 # move GL renderer submission off the emulation thread (RunFrame produces a

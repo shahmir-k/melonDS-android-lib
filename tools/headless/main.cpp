@@ -486,6 +486,8 @@ int main(int argc, char** argv)
                        arm9ExecNs=0, arm7ExecNs=0, gpu3dNs=0, runSystemNs=0, spuMixNs=0,
                        runFrameNs=0, dma9Ns=0, dma7Ns=0, gxCommands=0, lightingCalls=0,
                        arm9IdleHits=0, arm7IdleHits=0, arm7IdleSkips=0,
+                       idleCandidates=0, idleAccepted=0, idleRejWriteMem=0,
+                       idleRejCoproc=0, idleRejBranch=0, idleRejRegDep=0,
                        memBlock9HelperCalls=0, memRead9U32HelperCalls=0; } profTotals;
     uint64_t schedByType[32] = {0};
     // Frames actually folded into profTotals. When --bench-window is set we
@@ -546,6 +548,12 @@ int main(int argc, char** argv)
             profTotals.arm9IdleHits += g_Frame.ARM9IdleHits.load(std::memory_order_relaxed);
             profTotals.arm7IdleHits += g_Frame.ARM7IdleHits.load(std::memory_order_relaxed);
             profTotals.arm7IdleSkips+= g_Frame.ARM7IdleSkips.load(std::memory_order_relaxed);
+            profTotals.idleCandidates  += g_Frame.IdleCandidates.load(std::memory_order_relaxed);
+            profTotals.idleAccepted    += g_Frame.IdleAccepted.load(std::memory_order_relaxed);
+            profTotals.idleRejWriteMem += g_Frame.IdleRejWriteMem.load(std::memory_order_relaxed);
+            profTotals.idleRejCoproc   += g_Frame.IdleRejCoproc.load(std::memory_order_relaxed);
+            profTotals.idleRejBranch   += g_Frame.IdleRejBranch.load(std::memory_order_relaxed);
+            profTotals.idleRejRegDep   += g_Frame.IdleRejRegDep.load(std::memory_order_relaxed);
             profTotals.memBlock9HelperCalls   += g_Frame.MemBlock9HelperCalls.load(std::memory_order_relaxed);
             profTotals.memRead9U32HelperCalls += g_Frame.MemRead9U32HelperCalls.load(std::memory_order_relaxed);
             uint64_t pk = g_Frame.PendingPeak.load(std::memory_order_relaxed);
@@ -731,6 +739,14 @@ int main(int argc, char** argv)
         printf("arm7_idle_skips: %llu\n", (unsigned long long)profTotals.arm7IdleSkips);
         printf("arm9_idle_hits_per_frame: %.2f\n", (double)profTotals.arm9IdleHits / pf);
         printf("arm7_idle_hits_per_frame: %.2f\n", (double)profTotals.arm7IdleHits / pf);
+        // IsIdleLoop reason histogram (target A). Static compile-time totals over
+        // the run (loops are compiled once), NOT per-frame. accepted+rej* == cand.
+        printf("idle_candidates:   %llu\n", (unsigned long long)profTotals.idleCandidates);
+        printf("idle_accepted:     %llu\n", (unsigned long long)profTotals.idleAccepted);
+        printf("idle_rej_writemem: %llu\n", (unsigned long long)profTotals.idleRejWriteMem);
+        printf("idle_rej_coproc:   %llu\n", (unsigned long long)profTotals.idleRejCoproc);
+        printf("idle_rej_branch:   %llu\n", (unsigned long long)profTotals.idleRejBranch);
+        printf("idle_rej_regdep:   %llu\n", (unsigned long long)profTotals.idleRejRegDep);
     }
 #endif
     fflush(stdout);

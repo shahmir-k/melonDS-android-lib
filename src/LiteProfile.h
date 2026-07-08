@@ -98,6 +98,20 @@ struct FrameCounters
     std::atomic<uint64_t> ARM7IdleHits{0};
     std::atomic<uint64_t> ARM7IdleSkips{0};
 
+    // IsIdleLoop compile-time reason histogram (target A investigation): counts
+    // WHY backward-conditional loops are/aren't recognized as idle. Compile-time
+    // (per block-compile), so these are static totals over the run, not per-frame
+    // hotness. IdleCandidates = backward cond loops fed to IsIdleLoop; Accepted =
+    // flagged idle; the Rej* buckets split the rejections by first-hit reason.
+    // IdleRejRegDep is the cross-iteration register-recurrence reject that
+    // LITEV_IDLE_AGGRESSIVE relaxes.
+    std::atomic<uint64_t> IdleCandidates{0};
+    std::atomic<uint64_t> IdleAccepted{0};
+    std::atomic<uint64_t> IdleRejWriteMem{0};
+    std::atomic<uint64_t> IdleRejCoproc{0};
+    std::atomic<uint64_t> IdleRejBranch{0};
+    std::atomic<uint64_t> IdleRejRegDep{0};
+
     // Block-transition taxonomy (populated once M1 dispatcher/linking lands)
     std::atomic<uint64_t> LinkedTransitions{0};
     std::atomic<uint64_t> DispatcherHits{0};
@@ -159,6 +173,12 @@ struct FrameCounters
         ARM9IdleHits.store(0, std::memory_order_relaxed);
         ARM7IdleHits.store(0, std::memory_order_relaxed);
         ARM7IdleSkips.store(0, std::memory_order_relaxed);
+        IdleCandidates.store(0, std::memory_order_relaxed);
+        IdleAccepted.store(0, std::memory_order_relaxed);
+        IdleRejWriteMem.store(0, std::memory_order_relaxed);
+        IdleRejCoproc.store(0, std::memory_order_relaxed);
+        IdleRejBranch.store(0, std::memory_order_relaxed);
+        IdleRejRegDep.store(0, std::memory_order_relaxed);
         LinkedTransitions.store(0, std::memory_order_relaxed);
         DispatcherHits.store(0, std::memory_order_relaxed);
         DispatcherMisses.store(0, std::memory_order_relaxed);
