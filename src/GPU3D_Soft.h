@@ -455,11 +455,47 @@ private:
     // non-banded (threaded==false / main-thread) path is unchanged.
     static thread_local s32 BandY0;
     static thread_local s32 BandY1;
-    void RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1);
+    void RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, int bandidx);
 #else
     RendererPolygon PolygonList[2048];
 #endif
     void TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha) const;
+    // Integer texel fetch + palette lookup for one already-in-range (s,t) (no wrap).
+    // Shared by TextureLookup (per-pixel exact path) and the decode-once cache.
+    void DecodeTexel(u32 texparam, u32 texpal, s32 s, s32 t, u16* color, u8* alpha) const;
+#ifdef LITEV_SOFT3D_FAST
+    // Decode-once texture cache (FPS-first, DraStic-style). Each unique
+    // (TexParam,TexPalette) texture is decoded ONCE into a flat arena of packed
+    // texels packed as RGBA5551 (u16: RGB555 color in bits 0-14 | opaque flag in
+    // bit 15), then sampled per pixel with a plain array read instead of re-deriving
+    // format/palette/VRAM base for every texel. u16 (not u32) keeps the decoded
+    // footprint small so the per-pixel read stays cache-friendly. Alpha is stored as
+    // 1 bit: EXACT for all binary-alpha formats (2/4/16/256-color, compressed,
+    // direct); the two graded-alpha formats (A3I5/A5I3) are approximated to 0/31
+    // (FPS-first, approximation OK). One cache PER BAND INDEX (bands run concurrently
+    // on disjoint indices, so no race); the arena persists across frames (band
+    // threads are respawned each frame, so a thread_local arena would leak+realloc
+    // per frame). CurTexCache is a thread_local pointer the active band/thread aims
+    // at its own TexCaches[] slot. Reset only when texture/palette VRAM changed.
+    // ResolveTexCache returns the decoded base pointer (decoding on a miss), or
+    // nullptr if the texture is too big to cache (caller falls back to TextureLookup).
+    static constexpr u32 TexCacheArenaTexels = 1u << 21; // 2M texels (4MB u16) per band
+    static constexpr u32 TexCacheSlots = 512;
+    static constexpr int TexCacheMaxBands = 8;
+    struct TexCacheEntry { u32 Param, Pal, Offset; s32 W, H; };
+    struct TexCacheState
+    {
+        u16* Arena = nullptr;
+        u32  Used = 0;
+        u32  Count = 0;
+        TexCacheEntry Entries[TexCacheSlots];
+    };
+    TexCacheState TexCaches[TexCacheMaxBands];
+    static thread_local TexCacheState* CurTexCache;
+    // Set in RenderFrame: texture/palette VRAM changed this frame => drop caches.
+    bool TexCacheDirty = true;
+    const u16* ResolveTexCache(u32 texparam, u32 texpal, s32* outW, s32* outH);
+#endif
     u32 RenderPixel(const Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t) const;
     void PlotTranslucentPixel(u32 pixeladdr, u32 color, u32 z, u32 polyattr, u32 shadow);
     void SetupPolygonLeftEdge(RendererPolygon* rp, s32 y) const;

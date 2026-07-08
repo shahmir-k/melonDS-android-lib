@@ -40,6 +40,12 @@ thread_local s32 SoftRenderer3D::BandY0 = 0;
 thread_local s32 SoftRenderer3D::BandY1 = 192;
 #endif
 
+#ifdef LITEV_SOFT3D_FAST
+// The active band/thread points this at its own TexCaches[] slot (set in RenderBand
+// and the non-banded RenderPolygons path). See GPU3D_Soft.h.
+thread_local SoftRenderer3D::TexCacheState* SoftRenderer3D::CurTexCache = nullptr;
+#endif
+
 
 void SoftRenderer3D::StopRenderThread()
 {
@@ -125,6 +131,14 @@ SoftRenderer3D::~SoftRenderer3D()
     Platform::Semaphore_Free(Sema_RenderStart);
     Platform::Semaphore_Free(Sema_RenderDone);
     Platform::Semaphore_Free(Sema_ScanlineCount);
+
+#ifdef LITEV_SOFT3D_FAST
+    for (int b = 0; b < TexCacheMaxBands; b++)
+    {
+        delete[] TexCaches[b].Arena;
+        TexCaches[b].Arena = nullptr;
+    }
+#endif
 }
 
 void SoftRenderer3D::Reset()
@@ -151,52 +165,60 @@ void SoftRenderer3D::SetThreaded(bool threaded) noexcept
 
 void SoftRenderer3D::TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* color, u8* alpha) const
 {
-    // TODO: consider using texture cache
-    // however, I like the idea of having a "hardware accurate" path
-
-    u32 vramaddr = (texparam & 0xFFFF) << 3;
+    // Exact per-pixel path: apply the DS texture wrapping/flip/clamp, then fetch.
+    // The texel fetch + palette lookup lives in DecodeTexel (shared with the
+    // decode-once texture cache under LITEV_SOFT3D_FAST).
 
     s32 width = 8 << ((texparam >> 20) & 0x7);
     s32 height = 8 << ((texparam >> 23) & 0x7);
 
-    s >>= 4;
-    t >>= 4;
+    s32 si = s >> 4;
+    s32 ti = t >> 4;
 
     // texture wrapping
-    // TODO: optimize this somehow
-    // testing shows that it's hardly worth optimizing, actually
-
     if (texparam & (1<<16))
     {
         if (texparam & (1<<18))
         {
-            if (s & width) s = (width-1) - (s & (width-1));
-            else           s = (s & (width-1));
+            if (si & width) si = (width-1) - (si & (width-1));
+            else            si = (si & (width-1));
         }
         else
-            s &= width-1;
+            si &= width-1;
     }
     else
     {
-        if (s < 0) s = 0;
-        else if (s >= width) s = width-1;
+        if (si < 0) si = 0;
+        else if (si >= width) si = width-1;
     }
 
     if (texparam & (1<<17))
     {
         if (texparam & (1<<19))
         {
-            if (t & height) t = (height-1) - (t & (height-1));
-            else            t = (t & (height-1));
+            if (ti & height) ti = (height-1) - (ti & (height-1));
+            else             ti = (ti & (height-1));
         }
         else
-            t &= height-1;
+            ti &= height-1;
     }
     else
     {
-        if (t < 0) t = 0;
-        else if (t >= height) t = height-1;
+        if (ti < 0) ti = 0;
+        else if (ti >= height) ti = height-1;
     }
+
+    DecodeTexel(texparam, texpal, si, ti, color, alpha);
+}
+
+void SoftRenderer3D::DecodeTexel(u32 texparam, u32 texpal, s32 s, s32 t, u16* color, u8* alpha) const
+{
+    // Fetch one already-in-range (s,t) texel: format decode + palette lookup.
+    // No wrapping (caller has done it).
+
+    u32 vramaddr = (texparam & 0xFFFF) << 3;
+
+    s32 width = 8 << ((texparam >> 20) & 0x7);
 
     u8 alpha0;
     if (texparam & (1<<29)) alpha0 = 0;
@@ -384,6 +406,68 @@ void SoftRenderer3D::TextureLookup(u32 texparam, u32 texpal, s16 s, s16 t, u16* 
         break;
     }
 }
+
+#ifdef LITEV_SOFT3D_FAST
+const u16* SoftRenderer3D::ResolveTexCache(u32 texparam, u32 texpal, s32* outW, s32* outH)
+{
+    s32 W = 8 << ((texparam >> 20) & 0x7);
+    s32 H = 8 << ((texparam >> 23) & 0x7);
+    *outW = W;
+    *outH = H;
+
+    TexCacheState* tc = CurTexCache;
+    if (!tc) return nullptr; // no cache bound on this thread: fall back to per-pixel
+
+    // Look for an already-decoded entry for this exact texture.
+    for (u32 i = 0; i < tc->Count; i++)
+    {
+        TexCacheEntry& e = tc->Entries[i];
+        if (e.Param == texparam && e.Pal == texpal)
+            return tc->Arena + e.Offset;
+    }
+
+    // Miss: decode WxH texels once into the arena.
+    u32 need = (u32)W * (u32)H;
+    if (need > TexCacheArenaTexels)
+        return nullptr; // pathologically large; fall back to per-pixel path
+
+    if (!tc->Arena)
+        tc->Arena = new u16[TexCacheArenaTexels];
+
+    if (tc->Used + need > TexCacheArenaTexels || tc->Count >= TexCacheSlots)
+    {
+        // Arena / slot table exhausted this frame: reset and re-fill (rare; the
+        // working set of one frame normally fits). Safe because we immediately use
+        // the pointer we return before resolving the next texture.
+        tc->Used = 0;
+        tc->Count = 0;
+    }
+
+    u32 off = tc->Used;
+    u16* dst = tc->Arena + off;
+    for (s32 tt = 0; tt < H; tt++)
+    {
+        u16* row = dst + (u32)tt * (u32)W;
+        for (s32 ss = 0; ss < W; ss++)
+        {
+            u16 c; u8 a;
+            DecodeTexel(texparam, texpal, ss, tt, &c, &a);
+            // RGBA5551: RGB555 in bits 0-14, opaque flag in bit 15. Exact for
+            // binary-alpha formats; graded alpha (A3I5/A5I3) rounds to 0/31.
+            row[ss] = (u16)((c & 0x7FFF) | (a >= 16 ? 0x8000 : 0));
+        }
+    }
+
+    tc->Used += need;
+    TexCacheEntry& e = tc->Entries[tc->Count++];
+    e.Param = texparam;
+    e.Pal = texpal;
+    e.Offset = off;
+    e.W = W;
+    e.H = H;
+    return dst;
+}
+#endif
 
 // depth test is 'less or equal' instead of 'less than' under the following conditions:
 // * when drawing a front-facing pixel over an opaque back-facing pixel
@@ -1244,6 +1328,16 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
     const u32  f_polyalpha = polyalpha;
     const bool f_wireframe = wireframe;
 
+    // Decode-once texture cache: decode this polygon's texture (WxH) ONCE for the
+    // whole band here (a hit costs a short slot scan; a miss decodes once and is
+    // reused across every scanline this band renders of every poly sharing the
+    // texture). shadeFast then samples with a plain array read (no per-texel format
+    // branch / palette / VRAM read). Nullptr => too large to cache; fall back.
+    const u16* f_texcache = nullptr;
+    s32 f_texW = 0, f_texH = 0;
+    if (f_texEnable)
+        f_texcache = ResolveTexCache(f_texparam, f_texpal, &f_texW, &f_texH);
+
     auto shadeFast = [&](u32 vr, u32 vg, u32 vb, s16 s, s16 t) -> u32
     {
         u8 r, g, b, a;
@@ -1263,7 +1357,52 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
         if (f_texEnable)
         {
             u16 tcolor; u8 talpha;
-            TextureLookup(f_texparam, f_texpal, s, t, &tcolor, &talpha);
+            if (f_texcache)
+            {
+                // Wrap/flip/clamp (cheap integer math) then read the decoded texel.
+                s32 si = s >> 4;
+                s32 ti = t >> 4;
+
+                if (f_texparam & (1<<16))
+                {
+                    if (f_texparam & (1<<18))
+                    {
+                        if (si & f_texW) si = (f_texW-1) - (si & (f_texW-1));
+                        else             si = (si & (f_texW-1));
+                    }
+                    else
+                        si &= f_texW-1;
+                }
+                else
+                {
+                    if (si < 0) si = 0;
+                    else if (si >= f_texW) si = f_texW-1;
+                }
+
+                if (f_texparam & (1<<17))
+                {
+                    if (f_texparam & (1<<19))
+                    {
+                        if (ti & f_texH) ti = (f_texH-1) - (ti & (f_texH-1));
+                        else             ti = (ti & (f_texH-1));
+                    }
+                    else
+                        ti &= f_texH-1;
+                }
+                else
+                {
+                    if (ti < 0) ti = 0;
+                    else if (ti >= f_texH) ti = f_texH-1;
+                }
+
+                u16 packed = f_texcache[(u32)ti * (u32)f_texW + (u32)si];
+                tcolor = (u16)(packed & 0x7FFF);
+                talpha = (packed & 0x8000) ? 31 : 0;
+            }
+            else
+            {
+                TextureLookup(f_texparam, f_texpal, s, t, &tcolor, &talpha);
+            }
 
             u8 tr = (tcolor << 1) & 0x3E; if (tr) tr++;
             u8 tg = (tcolor >> 4) & 0x3E; if (tg) tg++;
@@ -1981,10 +2120,22 @@ void SoftRenderer3D::ClearBuffers()
 // but only writes ColorBuffer/DepthBuffer/AttrBuffer for its own [y0,y1) rows
 // (the y-range gate lives in RenderPolygonScanline / RenderShadowMaskScanline).
 // Scanline writes across bands are disjoint, so no shared-write race.
-void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1)
+void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, int bandidx)
 {
     BandY0 = y0;
     BandY1 = y1;
+
+#ifdef LITEV_SOFT3D_FAST
+    // Aim this band thread at its own (persistent) texture cache. Drop last frame's
+    // decoded textures only if the texture/palette VRAM changed (else reuse them
+    // across frames). Arena memory is always retained.
+    CurTexCache = &TexCaches[bandidx];
+    if (TexCacheDirty)
+    {
+        CurTexCache->Used = 0;
+        CurTexCache->Count = 0;
+    }
+#endif
 
     int j = 0;
     for (int i = 0; i < npolys; i++)
@@ -2059,7 +2210,7 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         std::thread workers[8];
         for (int b = 0; b < NB; b++)
             workers[b] = std::thread(&SoftRenderer3D::RenderBand, this,
-                                     polygons, npolys, bnd[b], bnd[b + 1]);
+                                     polygons, npolys, bnd[b], bnd[b + 1], b);
         for (int b = 0; b < NB; b++)
             workers[b].join();
 
@@ -2077,6 +2228,16 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
             Platform::Semaphore_Post(Sema_ScanlineCount);
         }
         return;
+    }
+#endif
+
+#ifdef LITEV_SOFT3D_FAST
+    // New frame (non-banded path): use band slot 0; drop textures only if VRAM changed.
+    CurTexCache = &TexCaches[0];
+    if (TexCacheDirty)
+    {
+        CurTexCache->Used = 0;
+        CurTexCache->Count = 0;
     }
 #endif
 
@@ -2119,6 +2280,14 @@ void SoftRenderer3D::RenderFrame()
 
     bool textureChanged = GPU.MakeVRAMFlat_TextureCoherent(textureDirty);
     bool texPalChanged = GPU.MakeVRAMFlat_TexPalCoherent(texPalDirty);
+
+#ifdef LITEV_SOFT3D_FAST
+    // Decode-once cache is valid across frames while the texture/palette VRAM is
+    // unchanged (decoded texels are a pure function of that VRAM). Only invalidate
+    // when it actually changed, so a static scene decodes each texture just once and
+    // amortizes it over many frames (per-frame full re-decode was a net loss).
+    TexCacheDirty = textureChanged || texPalChanged;
+#endif
 
     FrameIdentical = !(textureChanged || texPalChanged) && GPU3D.RenderFrameIdentical;
 
