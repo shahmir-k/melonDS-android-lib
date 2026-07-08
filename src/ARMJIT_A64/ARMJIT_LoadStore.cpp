@@ -972,7 +972,35 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
         // Copy between the stack marshalling buffer (8 bytes/word, low 4 = data,
         // matching u64* data[]) and DTCM (contiguous 4 bytes/word).
-        for (int w = 0; w < regsCount; w++)
+        //
+        // LITEV_JIT_LDMSTM: pair the contiguous DTCM side with LDP/STP, mirroring
+        // DraStic's arm64_load/store_blockN stubs which move two guest words per
+        // instruction (ldp/stp) instead of a per-word ldr/str loop. Only the DTCM
+        // side is contiguous 4-byte and pairs cleanly; the stack buffer has an
+        // 8-byte stride (u64 slots) so its side stays scalar. Byte-identical to the
+        // per-word copy: same words, same values, same relative order (the two
+        // words STP writes are contiguous, exactly the two STRs they replace).
+        // X4 (== W4) is the live base pointer, so the second scratch is W5 (free
+        // after the region guards), never W4.
+        int w = 0;
+#ifdef LITEV_JIT_LDMSTM
+        for (; w + 1 < regsCount; w += 2)
+        {
+            if (store)
+            {
+                LDR(INDEX_UNSIGNED, W3, SP, w * 8);
+                LDR(INDEX_UNSIGNED, W5, SP, (w + 1) * 8);
+                STP(INDEX_SIGNED, W3, W5, X4, w * 4);
+            }
+            else
+            {
+                LDP(INDEX_SIGNED, W3, W5, X4, w * 4);
+                STR(INDEX_UNSIGNED, W3, SP, w * 8);
+                STR(INDEX_UNSIGNED, W5, SP, (w + 1) * 8);
+            }
+        }
+#endif
+        for (; w < regsCount; w++)
         {
             if (store)
             {
@@ -1012,14 +1040,14 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     // running an 8-branch dtcm+mainram guard prologue on every non-MainRAM block
     // -- net-negative overhead. The runtime guards still fully protect exactness;
     // the gate is a pure emission-cost optimisation.
-#ifdef LITEV_MEM_MAINRAM_BLOCK
+#if defined(LITEV_MEM_MAINRAM_BLOCK) || defined(LITEV_JIT_LDMSTM)
     const bool mainramBlockFast = (Num == 0) && (NDS.ConsoleType == 0)
         && !compileFastPath && !store && (regsCount >= 1)
         && (expectedTarget == ARMJIT_Memory::memregion_MainRAM);
 #else
     const bool mainramBlockFast = false;
 #endif
-#ifdef LITEV_MEM_MAINRAM_BLOCK
+#if defined(LITEV_MEM_MAINRAM_BLOCK) || defined(LITEV_JIT_LDMSTM)
     FixupBranch mainramBlockDone;
     if (mainramBlockFast)
     {
@@ -1076,7 +1104,22 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
 
         // Drain MainRAM -> stack marshalling buffer (8 bytes/word, low 4 = data,
         // matching u64* data[]); the shared load code below writes it to guest regs.
-        for (int w = 0; w < regsCount; w++)
+        //
+        // LITEV_JIT_LDMSTM: pair the contiguous MainRAM side with LDP (DraStic's
+        // arm64_load_blockN moves two guest words per instruction). The stack
+        // buffer stride is 8 bytes (u64 slots) so its side stays scalar. X4 (== W4)
+        // is the live base; second scratch is W5 (free after the region guards).
+        // Byte-identical to the per-word drain.
+        int w = 0;
+#ifdef LITEV_JIT_LDMSTM
+        for (; w + 1 < regsCount; w += 2)
+        {
+            LDP(INDEX_SIGNED, W3, W5, X4, w * 4);
+            STR(INDEX_UNSIGNED, W3, SP, w * 8);
+            STR(INDEX_UNSIGNED, W5, SP, (w + 1) * 8);
+        }
+#endif
+        for (; w < regsCount; w++)
         {
             LDR(INDEX_UNSIGNED, W3, X4, w * 4);
             STR(INDEX_UNSIGNED, W3, SP, w * 8);
@@ -1122,7 +1165,7 @@ s32 Compiler::Comp_MemAccessBlock(int rn, BitSet16 regs, bool store, bool preinc
     if (dtcmFast)
         SetJumpTarget(dtcmDone);
 #endif
-#ifdef LITEV_MEM_MAINRAM_BLOCK
+#if defined(LITEV_MEM_MAINRAM_BLOCK) || defined(LITEV_JIT_LDMSTM)
     if (mainramBlockFast)
         SetJumpTarget(mainramBlockDone);
 #endif

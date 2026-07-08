@@ -344,6 +344,32 @@ if (LITEV_MEM_MAINRAM_BLOCK)
     endif()
 endif()
 
+# DraStic LDM/STM block-transfer match (docs/drastic-teardown/01-cpu-recompiler.md
+# §7.1): DraStic translates every LDM/STM to a single BL into a hand-written
+# straight-line stub, one per register count (arm64_load_block1..16 /
+# arm64_store_block1..16), that moves the guest words with ldp/stp PAIRS (two
+# words per instruction) instead of an emitted per-word loop. melonDS on this
+# build already pairs the stack marshalling, but (a) its inline DTCM/MainRAM
+# block tiers copy the contiguous memory side with SCALAR ldr/str per word, and
+# (b) the MainRAM-hit inline block LOAD tier (the dominant ~86%-of-slow-reads
+# case) is left disabled, so those LDMs fall through to the per-word
+# SlowBlockTransfer9 helper. This flag ports the DraStic win: it enables the
+# MainRAM inline block-LOAD tier AND pairs the contiguous memory side of the
+# DTCM+MainRAM inline copies with ldp/stp. Same exactness class as
+# LITEV_MEM_MAINRAM_BLOCK/DTCM_BLOCK: cycles baked at compile time by
+# Comp_AddCycles_*, the paired copy moves the SAME bytes in the same order, and
+# any runtime guard miss falls back to the exact helper. Default OFF ->
+# emission-identical to the pre-LDMSTM tree.
+option(LITEV_JIT_LDMSTM "DraStic-style ldp/stp-paired inline LDM/STM block transfers + MainRAM block-load tier (AArch64)" OFF)
+if (LITEV_JIT_LDMSTM)
+    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_LDMSTM=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_LDMSTM requires an AArch64 target "
+                            "(the x64 JIT keeps the upstream helper paths).")
+    endif()
+endif()
+
 # DraStic memory model (docs/drastic-teardown/02-memory.md §2): a BRANCHLESS
 # software page table replacing melonDS's fault-based (SIGSEGV) fastmem on the
 # single-access load hot path. Each JIT guest load indexes a flat per-CPU table
