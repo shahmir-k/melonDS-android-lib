@@ -504,6 +504,21 @@ private:
     void RenderShadowMaskScanline(RendererPolygon* rp, s32 y);
     void RenderPolygonScanline(RendererPolygon* rp, s32 y);
     void RenderScanline(s32 y, int npolys);
+#ifdef LITEV_SOFT3D_FAST
+    // Active-Edge-Table (classic scanline rasterization). Replaces RenderScanline's
+    // O(npolys) per-scanline Y-range re-scan: bin polygons by YTop once per frame,
+    // then keep an ACTIVE list (polys covering the current scanline) that is updated
+    // incrementally as y advances (add polys entering at YTop, drop polys whose
+    // YBottom<=y). The active list stays sorted by polygon index so draw order (and
+    // thus depth/priority) is preserved. Scratch is thread_local so each concurrent
+    // RenderBand thread owns its own copy (FAST always compiles with BANDED).
+    static thread_local int AET_Bucket[2048];      // poly indices, counting-sorted by YTop
+    static thread_local int AET_Active[2048];       // current active list, sorted by index
+    static thread_local s32 AET_BucketStart[193];   // start offset of each scanline's bucket
+    void AETBuild(int npolys);
+    int  AETAdvance(int nActive, s32 y);
+    void RenderActiveList(s32 y, int nActive);
+#endif
     u32 CalculateFogDensity(u32 pixeladdr) const;
     void ScanlineFinalPass(s32 y);
     void ClearBuffers();

@@ -48,6 +48,10 @@ thread_local s32 SoftRenderer3D::BandY1 = 192;
 // The active band/thread points this at its own TexCaches[] slot (set in RenderBand
 // and the non-banded RenderPolygons path). See GPU3D_Soft.h.
 thread_local SoftRenderer3D::TexCacheState* SoftRenderer3D::CurTexCache = nullptr;
+// Active-Edge-Table scratch (see GPU3D_Soft.h). One copy per band thread.
+thread_local int SoftRenderer3D::AET_Bucket[2048];
+thread_local int SoftRenderer3D::AET_Active[2048];
+thread_local s32 SoftRenderer3D::AET_BucketStart[193];
 #endif
 
 
@@ -1993,6 +1997,85 @@ void SoftRenderer3D::RenderScanline(s32 y, int npolys)
     }
 }
 
+#ifdef LITEV_SOFT3D_FAST
+// Bin PolygonList[0..npolys) indices by YTop (counting sort). Because we fill in
+// ascending index order, each per-scanline bucket stays sorted by polygon index
+// (== draw order). Polys with YTop>=192 land in the never-walked bucket 192 (they
+// cover no on-screen scanline); YTop<0 is clamped to 0 (renders from the top row).
+void SoftRenderer3D::AETBuild(int npolys)
+{
+    s32 cnt[193];
+    for (int k = 0; k <= 192; k++) cnt[k] = 0;
+    for (int i = 0; i < npolys; i++)
+    {
+        s32 yt = PolygonList[i].PolyData->YTop;
+        if (yt < 0) yt = 0; else if (yt > 192) yt = 192;
+        cnt[yt]++;
+    }
+    s32 acc = 0;
+    for (int k = 0; k <= 192; k++) { AET_BucketStart[k] = acc; acc += cnt[k]; }
+    s32 fill[193];
+    for (int k = 0; k <= 192; k++) fill[k] = AET_BucketStart[k];
+    for (int i = 0; i < npolys; i++)
+    {
+        s32 yt = PolygonList[i].PolyData->YTop;
+        if (yt < 0) yt = 0; else if (yt > 192) yt = 192;
+        AET_Bucket[fill[yt]++] = i;
+    }
+}
+
+// Advance the active list from the previous scanline to scanline y:
+//   1. drop polys whose YBottom<=y (in place, order preserved),
+//   2. merge in polys entering at this row (YTop==y, already index-sorted).
+// The active list stays sorted by polygon index so RenderActiveList renders in
+// draw order. A polygon covers exactly [YTop, YBottom) (flat polys YTop==YBottom
+// enter and render only at y==YTop, then drop the next row) — identical coverage
+// to RenderScanline's old per-poly Y-range test.
+int SoftRenderer3D::AETAdvance(int nActive, s32 y)
+{
+    int w = 0;
+    for (int r = 0; r < nActive; r++)
+    {
+        int idx = AET_Active[r];
+        if (PolygonList[idx].PolyData->YBottom > y) AET_Active[w++] = idx;
+    }
+    nActive = w;
+
+    s32 bs = AET_BucketStart[y];
+    s32 be = AET_BucketStart[y + 1];
+    int b = be - bs;
+    if (b > 0)
+    {
+        // In-place back-merge: existing active + entering bucket (both ascending,
+        // disjoint since a poly enters exactly once at its YTop).
+        int i = nActive - 1;
+        int k = be - 1;
+        int wpos = nActive + b - 1;
+        while (k >= bs)
+        {
+            if (i >= 0 && AET_Active[i] > AET_Bucket[k])
+                AET_Active[wpos--] = AET_Active[i--];
+            else
+                AET_Active[wpos--] = AET_Bucket[k--];
+        }
+        nActive += b;
+    }
+    return nActive;
+}
+
+void SoftRenderer3D::RenderActiveList(s32 y, int nActive)
+{
+    for (int k = 0; k < nActive; k++)
+    {
+        RendererPolygon* rp = &PolygonList[AET_Active[k]];
+        if (rp->PolyData->IsShadowMask)
+            RenderShadowMaskScanline(rp, y);
+        else
+            RenderPolygonScanline(rp, y);
+    }
+}
+#endif
+
 u32 SoftRenderer3D::CalculateFogDensity(u32 pixeladdr) const
 {
     u32 z = DepthBuffer[pixeladdr];
@@ -2341,8 +2424,18 @@ void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, 
     // walked to keep the incremental edge state exact (Step-only, see the early
     // gate in RenderPolygonScanline), but rows at/after BandY1 are never used by
     // this band, so stop there instead of re-walking [BandY1, 192).
+    // AET (Lever 2): instead of re-scanning all j polygons every scanline for the
+    // Y-range test, maintain an active list. A poly enters at its YTop (fresh edge
+    // state) and is walked every row of [YTop, YBottom) — so polys starting above
+    // this band still get their Step-only fast-forward to BandY0, and in-band polys
+    // start fresh at their YTop, exactly as before.
+    AETBuild(j);
+    int nActive = 0;
     for (s32 y = 0; y < y1; y++)
-        RenderScanline(y, j);
+    {
+        nActive = AETAdvance(nActive, y);
+        RenderActiveList(y, nActive);
+    }
 #else
     for (s32 y = 0; y < 192; y++)
         RenderScanline(y, j);
@@ -2425,6 +2518,25 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         SetupPolygon(&PolygonList[j++], polygons[i]);
     }
 
+#ifdef LITEV_SOFT3D_FAST
+    // AET (Lever 2): drive the scanline loop from an active list instead of the
+    // O(npolys) per-scanline Y-range re-scan. See AETBuild/AETAdvance.
+    AETBuild(j);
+    int nActive = 0;
+    nActive = AETAdvance(nActive, 0);
+    RenderActiveList(0, nActive);
+
+    for (s32 y = 1; y < 192; y++)
+    {
+        nActive = AETAdvance(nActive, y);
+        RenderActiveList(y, nActive);
+        ScanlineFinalPass(y-1);
+
+        if (threaded)
+            // Notify the main thread that we're done with a scanline.
+            Platform::Semaphore_Post(Sema_ScanlineCount);
+    }
+#else
     RenderScanline(0, j);
 
     for (s32 y = 1; y < 192; y++)
@@ -2436,6 +2548,7 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
             // Notify the main thread that we're done with a scanline.
             Platform::Semaphore_Post(Sema_ScanlineCount);
     }
+#endif
 
     ScanlineFinalPass(191);
 
