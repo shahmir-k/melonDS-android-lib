@@ -28,6 +28,20 @@
 #include "NDS.h"
 #include "GPU.h"
 
+#if defined(__ANDROID__) && defined(LITEV_PIN_RENDER)
+#include <sched.h>
+// Pin the software 3D render + band-worker threads to cores {1,2}, off the emu's core
+// (3) and the UI/Mali core (0), so they stop preempting the critical emu thread.
+static void litevPinRenderThread()
+{
+    cpu_set_t set; CPU_ZERO(&set);
+    CPU_SET(1, &set); CPU_SET(2, &set);
+    sched_setaffinity(0, sizeof(set), &set);
+}
+#else
+static void litevPinRenderThread() {}
+#endif
+
 namespace melonDS
 {
 
@@ -2456,6 +2470,7 @@ void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, 
 // my done-sema. Exits when BandPoolRunning is cleared and it's woken by a start.
 void SoftRenderer3D::BandWorkerFunc(int idx)
 {
+    litevPinRenderThread();
     for (;;)
     {
         Platform::Semaphore_Wait(BandStartSema[idx]);
@@ -2698,6 +2713,7 @@ void SoftRenderer3D::RestartFrame()
 
 void SoftRenderer3D::RenderThreadFunc()
 {
+    litevPinRenderThread();
     for (;;)
     {
         // Wait for a notice from the main thread to start rendering (or to stop entirely).

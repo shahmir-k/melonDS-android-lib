@@ -346,8 +346,25 @@ void SoftRenderer::AsyncRenderFrame()
     for (int b = 0; b < S2D_NBANDS - 1; b++) helpers[b].join();
 }
 
+#if defined(__ANDROID__) && defined(LITEV_PIN_RENDER)
+#include <sched.h>
+// Pin the software render threads to cores {1,2}, OFF the emu's core (3, pinned by the
+// app glue) and off the UI/Mali core (0). Without this the lib-created render threads
+// land on core 3 and preempt the critical emu thread (~13ms/frame descheduling measured:
+// app runFrame 33.5ms vs 20.4ms headless). DraStic pins its render/raster threads (07).
+static void litevPinRenderThread()
+{
+    cpu_set_t set; CPU_ZERO(&set);
+    CPU_SET(1, &set); CPU_SET(2, &set);
+    sched_setaffinity(0, sizeof(set), &set);
+}
+#else
+static void litevPinRenderThread() {}
+#endif
+
 void SoftRenderer::AsyncRenderThreadFunc()
 {
+    litevPinRenderThread();
     for (;;)
     {
         Platform::Semaphore_Wait(AsyncStart);
