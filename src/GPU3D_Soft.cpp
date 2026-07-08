@@ -68,6 +68,11 @@ void SoftRenderer3D::StopRenderThread()
         Platform::Thread_Free(RenderThread);
         RenderThread = nullptr;
     }
+
+#ifdef LITEV_SOFT3D_BANDED
+    // Tear down the persistent band-worker pool too (self-guards if never created).
+    ShutdownBandPool();
+#endif
 }
 
 void SoftRenderer3D::SetupRenderThread()
@@ -2443,6 +2448,89 @@ void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, 
 }
 #endif
 
+#ifdef LITEV_SOFT3D_BANDED
+// One persistent band worker: a fixed thread, so its thread_local band state
+// (PolygonList / StencilBuffer / TexCaches slot via CurTexCache / AET scratch /
+// BandY0 / BandY1) is created once and reused across frames (no per-frame realloc).
+// Loops: wait my start-sema -> run this frame's job (raster OR final pass) -> post
+// my done-sema. Exits when BandPoolRunning is cleared and it's woken by a start.
+void SoftRenderer3D::BandWorkerFunc(int idx)
+{
+    for (;;)
+    {
+        Platform::Semaphore_Wait(BandStartSema[idx]);
+        if (!BandPoolRunning.load(std::memory_order_relaxed))
+            return;
+
+        if (BandPhase == 0)
+        {
+            // Phase 0: rasterize this band's rows (bandidx = idx maps to TexCaches[idx]).
+            RenderBand(BandPolygons, BandNumPolys,
+                       BandRasterBnd[idx], BandRasterBnd[idx + 1], idx);
+        }
+        else
+        {
+            // Phase 1: final pass over this band's rows. Runs only after the raster
+            // barrier, so neighbour-row reads (y-1 / y+1) see finished rows.
+            for (s32 y = BandFinalBnd[idx]; y < BandFinalBnd[idx + 1]; y++)
+                ScanlineFinalPass(y);
+        }
+
+        Platform::Semaphore_Post(BandDoneSema[idx]);
+    }
+}
+
+// Spawn the pool once. NB from LITEV_BANDS (default 2, clamped 1..8) — same knob
+// the old per-frame path used, so the band count / sweet-spot behaviour is unchanged.
+void SoftRenderer3D::EnsureBandPool()
+{
+    if (BandPoolRunning.load(std::memory_order_relaxed)) return;
+
+    const char* e = getenv("LITEV_BANDS");
+    int n = e ? atoi(e) : 2;
+    if (n < 1) n = 1;
+    if (n > 8) n = 8;
+    BandPoolNB = n;
+
+    const char* bf = getenv("LITEV_BAND_FINAL");
+    BandFinalBanded = !(bf && bf[0] == '0');
+
+    for (int b = 0; b < n; b++)
+    {
+        BandStartSema[b] = Platform::Semaphore_Create();
+        BandDoneSema[b]  = Platform::Semaphore_Create();
+    }
+    BandPoolRunning = true;
+    for (int b = 0; b < n; b++)
+        BandThreads[b] = Platform::Thread_Create([this, b]() { BandWorkerFunc(b); });
+}
+
+// Clean shutdown: clear the running flag, wake every worker so it observes it and
+// returns, join, then free the semaphores.
+void SoftRenderer3D::ShutdownBandPool()
+{
+    if (!BandPoolRunning.load(std::memory_order_relaxed)) return;
+
+    BandPoolRunning = false;
+    for (int b = 0; b < BandPoolNB; b++)
+        Platform::Semaphore_Post(BandStartSema[b]);
+    for (int b = 0; b < BandPoolNB; b++)
+    {
+        Platform::Thread_Wait(BandThreads[b]);
+        Platform::Thread_Free(BandThreads[b]);
+        BandThreads[b] = nullptr;
+    }
+    for (int b = 0; b < BandPoolNB; b++)
+    {
+        Platform::Semaphore_Free(BandStartSema[b]);
+        Platform::Semaphore_Free(BandDoneSema[b]);
+        BandStartSema[b] = nullptr;
+        BandDoneSema[b]  = nullptr;
+    }
+    BandPoolNB = 0;
+}
+#endif
+
 void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npolys)
 {
     // DIAGNOSTIC (throwaway): LITEV_SKIP3D skips the raster but still posts the 192
@@ -2462,40 +2550,49 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         // Parallel banded 3D raster. ClearBuffers() has already run on the render
         // thread. Split the 192 scanlines into N contiguous bands; each band walks
         // all scanlines (edge state) but only rasterizes its own rows.
-        // Band count is tunable at runtime (LITEV_BANDS, default 2) so the sweet
-        // spot vs the emu thread's core contention can be found without rebuilding.
+        // PERSISTENT band-worker pool (DraStic-style): NB workers are spawned ONCE
+        // (below), not per frame. Band count is tunable (LITEV_BANDS, default 2).
         // On the 4-core (all-A55) target NB=2 is the sweet spot: the emu JIT thread
         // plus the threaded 2D renderer already occupy the other cores, so NB>=3
-        // oversubscribes and regresses (measured). See the render-thread analysis.
-        static const int NB = []{
-            const char* e = getenv("LITEV_BANDS");
-            int n = e ? atoi(e) : 2;
-            if (n < 1) n = 1;
-            if (n > 8) n = 8;
-            return n;
-        }();
-        s32 bnd[8 + 1];
-        for (int b = 0; b <= NB; b++) bnd[b] = (192 * b) / NB;
+        // oversubscribes and regresses. The old code spawned/joined std::threads
+        // every frame here, which added spawn cost + scheduler contention while the
+        // emu thread waited at the GetLine barrier.
+        EnsureBandPool();
+        const int NB = BandPoolNB;
 
-        std::thread workers[8];
-        for (int b = 0; b < NB; b++)
-            workers[b] = std::thread(&SoftRenderer3D::RenderBand, this,
-                                     polygons, npolys, bnd[b], bnd[b + 1], b);
-        for (int b = 0; b < NB; b++)
-            workers[b].join();
+        // Publish this frame's raster args, then wake all workers and wait them out.
+        for (int b = 0; b <= NB; b++) BandRasterBnd[b] = (192 * b) / NB;
+        BandPolygons = polygons;
+        BandNumPolys = npolys;
+        BandPhase = 0;
+        for (int b = 0; b < NB; b++) Platform::Semaphore_Post(BandStartSema[b]);
+        for (int b = 0; b < NB; b++) Platform::Semaphore_Wait(BandDoneSema[b]);
+        // --- raster barrier: every band's rows are now fully written ---
 
         // Phase 2: the per-scanline final pass (edge marking / fog / anti-aliasing)
         // reads neighbouring scanlines, so it must run only after ALL bands have
-        // finished rasterizing. It is only ~4% of the 3D cost (measured: ~3.5ms vs
-        // ~90ms raster), so it is NOT the cause of the flat NB scaling and is not
-        // worth parallelizing -- banding it was measured to REGRESS fps because the
-        // per-frame thread spawn/join cost exceeds the tiny savings. Run it serially
-        // top-to-bottom and post each scanline as it completes, so the emu thread's
-        // GetLine compositing can overlap the remaining final-pass rows.
-        for (s32 y = 0; y < 192; y++)
+        // finished rasterizing. Historically this was serial because banding it via
+        // per-frame thread spawn REGRESSED (spawn cost > the ~3.5ms savings). With
+        // the persistent pool that spawn cost is gone, so band the final pass across
+        // the SAME workers (each does its own disjoint [y0,y1) rows; neighbour reads
+        // are safe post-barrier), then release all 192 scanlines to the emu thread.
+        if (BandFinalBanded)
         {
-            ScanlineFinalPass(y);
-            Platform::Semaphore_Post(Sema_ScanlineCount);
+            for (int b = 0; b <= NB; b++) BandFinalBnd[b] = (192 * b) / NB;
+            BandPhase = 1;
+            for (int b = 0; b < NB; b++) Platform::Semaphore_Post(BandStartSema[b]);
+            for (int b = 0; b < NB; b++) Platform::Semaphore_Wait(BandDoneSema[b]);
+            for (int k = 0; k < 192; k++) Platform::Semaphore_Post(Sema_ScanlineCount);
+        }
+        else
+        {
+            // Fallback (LITEV_BAND_FINAL=0): serial final pass, posting each scanline
+            // as it completes so the emu thread's GetLine can overlap the tail.
+            for (s32 y = 0; y < 192; y++)
+            {
+                ScanlineFinalPass(y);
+                Platform::Semaphore_Post(Sema_ScanlineCount);
+            }
         }
         return;
     }

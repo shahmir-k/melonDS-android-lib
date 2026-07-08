@@ -456,6 +456,31 @@ private:
     static thread_local s32 BandY0;
     static thread_local s32 BandY1;
     void RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, int bandidx);
+
+    // Persistent band-worker pool (DraStic-style, teardown doc 07 T4/T5/T6).
+    // NB worker threads are spawned ONCE (first threaded RenderPolygons) and each
+    // loops {wait its start-sema; do its job; post its done-sema}. Replaces the
+    // per-frame std::thread spawn/join, which churned + oversubscribed the 4-core
+    // target. Two job phases per frame, separated by a full done-barrier: phase 0
+    // rasters the band's [BandRasterBnd[b],BandRasterBnd[b+1]) rows, phase 1 runs
+    // ScanlineFinalPass over its [BandFinalBnd[b],BandFinalBnd[b+1]) rows (safe once
+    // all raster bands have joined, since the final pass reads neighbour rows).
+    void EnsureBandPool();
+    void ShutdownBandPool();
+    void BandWorkerFunc(int idx);
+    int  BandPoolNB = 0;                       // 0 => pool not yet created
+    std::atomic_bool BandPoolRunning { false };
+    bool BandFinalBanded = true;              // LITEV_BAND_FINAL=0 => serial final pass
+    Platform::Thread* BandThreads[8] = {};
+    Platform::Semaphore* BandStartSema[8] = {};
+    Platform::Semaphore* BandDoneSema[8] = {};
+    // Per-frame args the workers read (published before posting the start semas;
+    // the semaphore post/wait pair provides the release/acquire ordering).
+    Polygon** BandPolygons = nullptr;
+    int BandNumPolys = 0;
+    int BandPhase = 0;                         // 0 = raster, 1 = final pass
+    s32 BandRasterBnd[9] = {};
+    s32 BandFinalBnd[9] = {};
 #else
     RendererPolygon PolygonList[2048];
 #endif
