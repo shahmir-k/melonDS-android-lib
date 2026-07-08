@@ -77,6 +77,12 @@ config_flags() {
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON" ;;
     full)
       echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON" ;;
+    soft2d)
+      # Banded deferred software-2D raster (LITEV_SOFT2D_THREADED) on top of the
+      # `full` stack. A/B against `full` (inline per-scanline 2D) isolates the
+      # 2D-off-critical-path delta on the A55. MUST be bit-exact vs `full`
+      # (final_top/final_bot/audio_hash identical).
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`

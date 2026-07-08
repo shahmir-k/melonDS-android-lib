@@ -43,7 +43,11 @@ public:
     void DrawScanline(u32 line) override;
     void DrawSprites(u32 line) override;
 
+#ifdef LITEV_SOFT2D_THREADED
+    void VBlank() override { if (S2DDeferActive) RenderDeferredFrame(); }
+#else
     void VBlank() override {};
+#endif
     void VBlankEnd() override {};
 
     void AllocCapture(u32 bank, u32 start, u32 len) override {};
@@ -59,6 +63,30 @@ private:
 
     u32* Output3D;
     alignas(8) u32 Output2D[2][256];
+
+#ifdef LITEV_SOFT2D_THREADED
+    // Deferred (DraStic-model) software 2D: snapshot the final-composite per-scanline
+    // state on the emu thread; the whole frame's raster+composite runs at VBlank, off
+    // the per-scanline critical path (later banded across helper threads).
+    struct FrameLineSnap
+    {
+        u32 DispCntA, DispCntB;
+        u16 MasterBrightnessA, MasterBrightnessB;
+        u8  ScreenSwap;
+        u8  ScreensEnabled;
+        u8  CaptureEnable;
+        u8  Valid;
+    };
+    FrameLineSnap FrameSnap[192];
+    // 3D output copied per line DURING the visible period, keeping the threaded-3D
+    // GetLine semaphore consumption in lockstep with the render thread (the deferred
+    // 2D batch at VBlank then reads these copies instead of re-calling GetLine, which
+    // would race the 3D render thread's frame schedule).
+    alignas(8) u32 Snap3D[192][256];
+    bool S2DDeferActive = false;   // set per-frame: no capture/edge → safe to defer
+    void SnapshotCompositeLine(u32 line);
+    void RenderDeferredFrame();    // called at VBlank
+#endif
 
     void DrawScanlineA(u32 line, u32* dst);
     void DrawScanlineB(u32 line, u32* dst);

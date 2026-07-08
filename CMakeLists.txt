@@ -113,6 +113,16 @@ if (LITEV_PROFILE)
     # (e.g. the Unit 3 dispatcher re-entry counters in ARM.cpp) are compiled in.
     add_compile_definitions(LITEV_PROFILE=1)
 endif()
+# liteV soft-2D threading: banded deferred software-2D raster. Snapshots the
+# per-scanline 2D register state on the emu thread, then rasterizes all 192
+# scanlines off the LCD critical path at VBlank, split into N contiguous bands
+# across a small helper-thread pool (mirrors GPU3D_Soft's threading). Default OFF
+# => flag-OFF build is byte-identical; flag-ON must be bit-exact (top/bottom/audio
+# framebuffer hashes identical to flag-OFF).
+option(LITEV_SOFT2D_THREADED "liteV: banded deferred software 2D raster off the LCD critical path" OFF)
+if (LITEV_SOFT2D_THREADED)
+    add_compile_definitions(LITEV_SOFT2D_THREADED=1)
+endif()
 # Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
 # implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
 option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)

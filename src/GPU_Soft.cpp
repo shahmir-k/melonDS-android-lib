@@ -98,6 +98,30 @@ void SoftRenderer::SetRenderSettings(RendererSettings& settings)
 
 void SoftRenderer::DrawScanline(u32 line)
 {
+#ifdef LITEV_SOFT2D_THREADED
+    // Deferred (DraStic-model): snapshot this line's per-scanline state and defer the
+    // whole raster+composite to RenderDeferredFrame() at VBlank. Index by the dst line
+    // (fb position); the snapshot captures the current (VCount) register state, which
+    // matches the inline path when VCount==line (the normal case).
+    if (line < 192)
+    {
+        u32 vline = GPU.VCount;
+        if (vline < 192)
+        {
+            // Consume this line's 3D output NOW (in lockstep with the threaded-3D
+            // render thread's per-scanline semaphore) and copy it; the deferred 2D
+            // batch reads the copy at VBlank.
+            u32* l3d = Rend3D->GetLine(vline);
+            memcpy(Snap3D[line], l3d, 256 * sizeof(u32));
+        }
+        static_cast<SoftRenderer2D*>(Rend2D_A.get())->SnapshotLineState(line);
+        static_cast<SoftRenderer2D*>(Rend2D_B.get())->SnapshotLineState(line);
+        SnapshotCompositeLine(line);
+        S2DDeferActive = true;
+        return;
+    }
+    // line >= 192 falls through to the original inline out-of-range path.
+#endif
     u32 *dstA, *dstB;
     u32 dstoffset = 256 * line;
     if (GPU.ScreenSwap)
@@ -163,9 +187,104 @@ void SoftRenderer::DrawScanline(u32 line)
 
 void SoftRenderer::DrawSprites(u32 line)
 {
+#ifdef LITEV_SOFT2D_THREADED
+    // Deferred: snapshot the OBJ state at this (one-line-ahead) moment; the actual
+    // sprite raster runs in RenderDeferredFrame at VBlank.
+    if (line < 192)
+    {
+        static_cast<SoftRenderer2D*>(Rend2D_A.get())->SnapshotSprState(line);
+        static_cast<SoftRenderer2D*>(Rend2D_B.get())->SnapshotSprState(line);
+        return;
+    }
+#endif
     Rend2D_A->DrawSprites(line);
     Rend2D_B->DrawSprites(line);
 }
+
+#ifdef LITEV_SOFT2D_THREADED
+void SoftRenderer::SnapshotCompositeLine(u32 line)
+{
+    FrameLineSnap& f = FrameSnap[line];
+    f.DispCntA = GPU.GPU2D_A.DispCnt;
+    f.DispCntB = GPU.GPU2D_B.DispCnt;
+    f.MasterBrightnessA = GPU.MasterBrightnessA;
+    f.MasterBrightnessB = GPU.MasterBrightnessB;
+    f.ScreenSwap = GPU.ScreenSwap;
+    f.ScreensEnabled = GPU.ScreensEnabled;
+    f.CaptureEnable = GPU.CaptureEnable;
+    f.Valid = 1;
+}
+
+// The whole frame's 2D raster + final composite, run once at VBlank off the
+// per-scanline critical path. Milestone 1: single-thread, reusing the inline
+// draw functions after restoring each line's snapshot. Bit-exact-gated vs the
+// per-scanline inline path before band-threading.
+void SoftRenderer::RenderDeferredFrame()
+{
+    auto* r2a = static_cast<SoftRenderer2D*>(Rend2D_A.get());
+    auto* r2b = static_cast<SoftRenderer2D*>(Rend2D_B.get());
+
+    // Once-per-frame VRAM coherence (was per-scanline inline).
+    r2a->SyncVRAM_BG(); r2a->SyncVRAM_OBJ();
+    r2b->SyncVRAM_BG(); r2b->SyncVRAM_OBJ();
+
+    for (u32 line = 0; line < 192; line++)
+    {
+        FrameLineSnap& f = FrameSnap[line];
+        if (!f.Valid) continue;
+
+        u32 dstoffset = 256 * line;
+        u32 *dstA, *dstB;
+        if (f.ScreenSwap)
+        {
+            dstA = &Framebuffer[BackBuffer][0][dstoffset];
+            dstB = &Framebuffer[BackBuffer][1][dstoffset];
+        }
+        else
+        {
+            dstA = &Framebuffer[BackBuffer][1][dstoffset];
+            dstB = &Framebuffer[BackBuffer][0][dstoffset];
+        }
+
+        // this line's 3D output was copied in lockstep during the visible period
+        Output3D = Snap3D[line];
+        r2a->Cur3DLine = Output3D; r2b->Cur3DLine = Output3D;
+        r2a->CurOAM = GPU.OAM;     r2b->CurOAM = GPU.OAM;
+
+        // BG/OBJ into the per-engine scanline buffers, from the snapshot
+        r2a->DrawSpritesDeferred(line);
+        r2a->DrawScanlineDeferred(line, Output2D[0]);
+        r2b->DrawSpritesDeferred(line);
+        r2b->DrawScanlineDeferred(line, Output2D[1]);
+
+        // final composite reads GPU.GPU2D_*.DispCnt / MasterBrightness* live, so
+        // restore this line's snapshot into them first (single-thread safe).
+        GPU.GPU2D_A.DispCnt = f.DispCntA;
+        GPU.GPU2D_B.DispCnt = f.DispCntB;
+        GPU.MasterBrightnessA = f.MasterBrightnessA;
+        GPU.MasterBrightnessB = f.MasterBrightnessB;
+
+        DrawScanlineA(line, dstA);
+        DrawScanlineB(line, dstB);
+
+        if (f.CaptureEnable)
+            DoCapture(line);
+
+        if (f.ScreensEnabled)
+        {
+            ExpandColor(dstA);
+            ExpandColor(dstB);
+        }
+        else
+        {
+            for (int i = 0; i < 256; i++) { dstA[i] = 0xFF000000; dstB[i] = 0xFF000000; }
+        }
+
+        f.Valid = 0;
+    }
+    S2DDeferActive = false;
+}
+#endif
 
 void SoftRenderer::DrawScanlineA(u32 line, u32* dst)
 {
