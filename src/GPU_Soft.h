@@ -104,7 +104,11 @@ private:
     // buffers, so all bands run concurrently on idle cores with no shared mutable
     // render state. They read the shared read-only snapshots + shared VRAM (emu is
     // blocked during the batch).
-    static constexpr int S2D_NBANDS = 4;
+    // The 2D raster is small and was never the bottleneck; banding it 4-wide spawns
+    // 3 extra threads/frame that just CONTEND with the 3D bands + emu + ART/audio/GL
+    // on the 4-core A55 (the app is core-contention-limited). Render the whole 2D on
+    // the single async render thread (NBANDS=1) to free cores for the 3D raster.
+    static constexpr int S2D_NBANDS = 1;
     struct S2DBand
     {
         std::unique_ptr<GPU2D> unit[2];
