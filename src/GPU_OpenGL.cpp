@@ -27,7 +27,7 @@
 // over the state-changing entry points (see LiteGLStateCache.h). Inert unless
 // LITEV_GL_STATE_CACHE && __ANDROID__.
 #include "LiteGLStateCache.h"
-#if LITEV_PROFILE && defined(__ANDROID__)
+#if defined(__ANDROID__)
 #include <android/log.h>
 #endif
 #ifdef __ANDROID__
@@ -1217,10 +1217,21 @@ void GLRenderer::StartFrameLog()
     // thread on games (e.g. Shrek's minimap) that only DISPLAY the capture. The one
     // remaining hazard is a CPU readback of captured VRAM mid-frame (SyncVRAMCapture);
     // guarded separately. Read once (per-frame prop reads are too costly).
-    static int _deferCapture = litevGpuProp("debug.litev.defercapture");
+    // Robust read: refresh every 64 frames instead of a once-static (which could
+    // latch a stale value if the first StartFrameLog ran before the prop settled).
+    static int _deferCapture = -1;
+    static int _dcCtr = 0;
+    if (_deferCapture < 0 || --_dcCtr <= 0) { _dcCtr = 64; _deferCapture = litevGpuProp("debug.litev.defercapture"); }
     DeferReplay = !RIRMode && (_deferCapture || !GPU.CaptureActiveThisFrame);
     ShadowCopyNs = 0;
     ShadowCopyBytes = 0;
+#if defined(__ANDROID__)
+    { static int _dn = 0; if (++_dn >= 60) { _dn = 0;
+        __android_log_print(4, "LITEV_DEFER",
+            "DeferReplay=%d deferCap=%d capActive=%d RIR=%d DeferSubmit=%d",
+            (int)DeferReplay, _deferCapture, (int)GPU.CaptureActiveThisFrame,
+            (int)RIRMode, (int)DeferSubmit); } }
+#endif
 }
 
 void GLRenderer::Submit_Snapshot3D()
