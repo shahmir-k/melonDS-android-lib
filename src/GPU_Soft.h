@@ -109,10 +109,10 @@ private:
     void RenderBand(int bi, u32 y0, u32 y1);
 #endif
 
-    void DrawScanlineA(u32 line, u32* dst);
-    void DrawScanlineB(u32 line, u32* dst);
+    void DrawScanlineA(u32 line, u32* dst, const u32* src2d, u32 dispcnt, u16 mbright);
+    void DrawScanlineB(u32 line, u32* dst, const u32* src2d, u32 dispcnt, u16 mbright);
 
-    void DoCapture(u32 line);
+    void DoCapture(u32 line, const u32* srcA2d, const u32* src3d);
 
     void ApplyMasterBrightness(u16 regval, u32* dst);
     void ExpandColor(u32* dst);

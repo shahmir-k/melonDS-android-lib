@@ -148,12 +148,12 @@ void SoftRenderer::DrawScanline(u32 line)
         Rend2D_B->DrawScanline(line);
 
         // draw the final screen output
-        DrawScanlineA(line, dstA);
-        DrawScanlineB(line, dstB);
+        DrawScanlineA(line, dstA, Output2D[0], GPU.GPU2D_A.DispCnt, GPU.MasterBrightnessA);
+        DrawScanlineB(line, dstB, Output2D[1], GPU.GPU2D_B.DispCnt, GPU.MasterBrightnessB);
 
         // perform display capture if enabled
         if (GPU.CaptureEnable)
-            DoCapture(line);
+            DoCapture(line, Output2D[0], Output3D);
     }
     else
     {
@@ -247,8 +247,10 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
 
     for (u32 line = y0; line < y1; line++)
     {
-        if (!FrameSnap[line].Valid) continue;
+        FrameLineSnap& f = FrameSnap[line];
+        if (!f.Valid) continue;
 
+        // --- BG/OBJ raster into this band's per-engine line buffers ---
         rA->Cur3DLine = Snap3D[line];
         rA->CurOAM = GPU.OAM;
         rA->DrawSpritesDeferred(mainA->SprSnap[line], line);
@@ -258,6 +260,38 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
         rB->CurOAM = GPU.OAM;
         rB->DrawSpritesDeferred(mainB->SprSnap[line], line);
         rB->DrawScanlineDeferred(mainB->LineSnap[line], line, BandOut2D[1][line]);
+
+        // --- final composite + capture + expand into the framebuffer (banded too) ---
+        u32 dstoffset = 256 * line;
+        u32 *dstA, *dstB;
+        if (f.ScreenSwap)
+        {
+            dstA = &Framebuffer[BackBuffer][0][dstoffset];
+            dstB = &Framebuffer[BackBuffer][1][dstoffset];
+        }
+        else
+        {
+            dstA = &Framebuffer[BackBuffer][1][dstoffset];
+            dstB = &Framebuffer[BackBuffer][0][dstoffset];
+        }
+
+        DrawScanlineA(line, dstA, BandOut2D[0][line], f.DispCntA, f.MasterBrightnessA);
+        DrawScanlineB(line, dstB, BandOut2D[1][line], f.DispCntB, f.MasterBrightnessB);
+
+        if (f.CaptureEnable)
+            DoCapture(line, BandOut2D[0][line], Snap3D[line]);
+
+        if (f.ScreensEnabled)
+        {
+            ExpandColor(dstA);
+            ExpandColor(dstB);
+        }
+        else
+        {
+            for (int i = 0; i < 256; i++) { dstA[i] = 0xFF000000; dstB[i] = 0xFF000000; }
+        }
+
+        f.Valid = 0;
     }
 }
 
@@ -294,58 +328,14 @@ void SoftRenderer::RenderDeferredFrame()
     RenderBand(0, 0, rows);
     for (int b = 0; b < S2D_NBANDS - 1; b++) helpers[b].join();
 
-    // Sequential final composite (reads both engines' output + snapshotted regs).
-    for (u32 line = 0; line < 192; line++)
-    {
-        FrameLineSnap& f = FrameSnap[line];
-        if (!f.Valid) continue;
-
-        u32 dstoffset = 256 * line;
-        u32 *dstA, *dstB;
-        if (f.ScreenSwap)
-        {
-            dstA = &Framebuffer[BackBuffer][0][dstoffset];
-            dstB = &Framebuffer[BackBuffer][1][dstoffset];
-        }
-        else
-        {
-            dstA = &Framebuffer[BackBuffer][1][dstoffset];
-            dstB = &Framebuffer[BackBuffer][0][dstoffset];
-        }
-
-        memcpy(Output2D[0], BandOut2D[0][line], 256 * sizeof(u32));
-        memcpy(Output2D[1], BandOut2D[1][line], 256 * sizeof(u32));
-
-        GPU.GPU2D_A.DispCnt = f.DispCntA;
-        GPU.GPU2D_B.DispCnt = f.DispCntB;
-        GPU.MasterBrightnessA = f.MasterBrightnessA;
-        GPU.MasterBrightnessB = f.MasterBrightnessB;
-
-        DrawScanlineA(line, dstA);
-        DrawScanlineB(line, dstB);
-
-        if (f.CaptureEnable)
-            DoCapture(line);
-
-        if (f.ScreensEnabled)
-        {
-            ExpandColor(dstA);
-            ExpandColor(dstB);
-        }
-        else
-        {
-            for (int i = 0; i < 256; i++) { dstA[i] = 0xFF000000; dstB[i] = 0xFF000000; }
-        }
-
-        f.Valid = 0;
-    }
+    // Composite + capture + expand now happen INSIDE each band (per line), so the
+    // whole 2D pipeline is off the sequential emu-thread path.
     S2DDeferActive = false;
 }
 #endif
 
-void SoftRenderer::DrawScanlineA(u32 line, u32* dst)
+void SoftRenderer::DrawScanlineA(u32 line, u32* dst, const u32* src2d, u32 dispcnt, u16 mbright)
 {
-    u32 dispcnt = GPU.GPU2D_A.DispCnt;
     switch ((dispcnt >> 16) & 0x3)
     {
     case 0: // screen off
@@ -358,7 +348,7 @@ void SoftRenderer::DrawScanlineA(u32 line, u32* dst)
     case 1: // regular display
         {
             for (int i = 0; i < 256; i+=2)
-                *(u64*)&dst[i] = *(u64*)&Output2D[0][i];
+                *(u64*)&dst[i] = *(u64*)&src2d[i];
         }
         break;
 
@@ -403,12 +393,11 @@ void SoftRenderer::DrawScanlineA(u32 line, u32* dst)
         break;
     }
 
-    ApplyMasterBrightness(GPU.MasterBrightnessA, dst);
+    ApplyMasterBrightness(mbright, dst);
 }
 
-void SoftRenderer::DrawScanlineB(u32 line, u32* dst)
+void SoftRenderer::DrawScanlineB(u32 line, u32* dst, const u32* src2d, u32 dispcnt, u16 mbright)
 {
-    u32 dispcnt = GPU.GPU2D_B.DispCnt;
     switch ((dispcnt >> 16) & 0x1)
     {
     case 0: // screen off
@@ -421,15 +410,15 @@ void SoftRenderer::DrawScanlineB(u32 line, u32* dst)
     case 1: // regular display
         {
             for (int i = 0; i < 256; i+=2)
-                *(u64*)&dst[i] = *(u64*)&Output2D[1][i];
+                *(u64*)&dst[i] = *(u64*)&src2d[i];
         }
         break;
     }
 
-    ApplyMasterBrightness(GPU.MasterBrightnessB, dst);
+    ApplyMasterBrightness(mbright, dst);
 }
 
-void SoftRenderer::DoCapture(u32 line)
+void SoftRenderer::DoCapture(u32 line, const u32* srcA2d, const u32* src3d)
 {
     u32 captureCnt = GPU.CaptureCnt;
 
@@ -457,11 +446,11 @@ void SoftRenderer::DoCapture(u32 line)
     u32 dstaddr = (((captureCnt >> 18) & 0x3) << 14) + (line * width);
     dst += (dstaddr & 0xFFFF);
 
-    u32* srcA;
+    const u32* srcA;
     if (captureCnt & (1<<24))
-        srcA = Output3D;
+        srcA = src3d;
     else
-        srcA = Output2D[0];
+        srcA = srcA2d;
 
     u16* srcB = nullptr;
     if (captureCnt & (1<<25))

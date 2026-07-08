@@ -112,6 +112,10 @@ STATE_BASE="Shrek - Smash n' Crash Racing (USA)"
 ROM_ROW_XY="250 168"
 LOAD_STATE_XY="320 239"
 SLOT1_XY="320 130"
+# The in-race savestate lives in slot 2 (node text "2." centered at ~213,266 in the
+# 640x480 slot dialog). Override with RACE_SLOT / SLOT_XY env vars if it moves.
+RACE_SLOT="${RACE_SLOT:-2}"
+SLOT_XY="${SLOT_XY:-213 266}"
 
 BOOT_WAIT=10                           # seconds to wait after tapping ROM row
 DIALOG_WAIT=1                          # settle time after opening a dialog
@@ -266,13 +270,10 @@ cmd_load_race() {
   preflight
   proc_alive || die "game not running — run 'launch' first"
 
-  # Fail fast if no savestate exists next to the ROM.
-  local haveml
-  haveml="$(adbsh ls "$ROM_DIR/$STATE_BASE.ml1" "$ROM_DIR/$STATE_BASE.ml0" | grep -E '\.ml[01]$')"
-  if [ -z "$haveml" ]; then
-    die "no savestate found: expected '$ROM_DIR/$STATE_BASE.ml1' (or .ml0). Create an in-race savestate first."
-  fi
-  log "savestate present: $haveml"
+  # NOTE: savestates live in app-private storage (not next to the ROM on /sdcard),
+  # so we can't stat them here. The slot dialog is authoritative; we verify the
+  # load succeeded via the post-load screen diff below.
+  log "using save slot $RACE_SLOT (savestate is in app-private storage; slot dialog is authoritative)"
 
   # Baseline top-screen shot (pre-load) for the diff heuristic.
   local pre="$ART_DIR/preload-top-$(ts).png"
@@ -292,9 +293,10 @@ cmd_load_race() {
   local sdlg="$ART_DIR/slotdialog-$(ts).png"
   screencap 0 "$sdlg" && log "slot-dialog screenshot: $sdlg"
 
-  # Tap slot 1. Prefer a node whose text starts with "1." (melonDS slot labels),
-  # else fall back to the slot-1 coordinate.
-  tap_text_or_xy "1." "$SLOT1_XY" "slot 1"
+  # Tap the race slot by coordinate (the "<slot>." text match is ambiguous — it hits
+  # the wrong node — so use the fixed slot-2 coordinate directly).
+  log "tapping slot ${RACE_SLOT} at ($SLOT_XY)"
+  adb shell input tap $SLOT_XY
   sleep 2   # allow the state to load and render
 
   # Post-load top-screen shot for the diff heuristic.
