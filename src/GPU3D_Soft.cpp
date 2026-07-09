@@ -35,7 +35,7 @@
 static void litevPinRenderThread()
 {
     cpu_set_t set; CPU_ZERO(&set);
-    CPU_SET(1, &set); CPU_SET(2, &set);
+    CPU_SET(0, &set); CPU_SET(1, &set); CPU_SET(2, &set);
     sched_setaffinity(0, sizeof(set), &set);
 }
 #else
