@@ -108,7 +108,7 @@ private:
     // 3 extra threads/frame that just CONTEND with the 3D bands + emu + ART/audio/GL
     // on the 4-core A55 (the app is core-contention-limited). Render the whole 2D on
     // the single async render thread (NBANDS=1) to free cores for the 3D raster.
-    static constexpr int S2D_NBANDS = 1;
+    static constexpr int S2D_NBANDS = 2;
     struct S2DBand
     {
         std::unique_ptr<GPU2D> unit[2];
