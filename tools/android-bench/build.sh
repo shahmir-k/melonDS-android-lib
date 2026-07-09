@@ -100,7 +100,17 @@ config_flags() {
       # CpuFastSet/Sqrt SWIs natively (bit-exact vs FreeBIOS) instead of running the
       # LLE BIOS handler through the JIT; attacks the arm9_exec bucket. A/B on:
       # LITEV_HLE_BIOS_SWI=ON ./build.sh full
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_JIT_LDMSTM=${LITEV_LDMSTM:-ON} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON}" ;;
+      # LITEV_GEOM_CLIP_FAST (DraStic trivial-accept fast clip, default OFF): skip
+      # Sutherland-Hodgman for fully-inside polygons (bit-exact early-out). A/B on:
+      # LITEV_GEOM_CLIP_FAST=ON ./build.sh full
+      # LITEV_SCHED_FAST (DraStic leaner scheduler, default OFF, bit-exact): cached
+      # next-event deadline + RunSystem early-out. run_system's ~2058 RunSystem
+      # calls/frame fire an event only ~596 times; the early-out skips the mask
+      # scan+dispatch for the other ~1461. Same events/order => ON==OFF byte-identical
+      # (final_top/final_bot/audio). NOTE: run_system on `full` is ~92% inline 2D/3D
+      # raster (lcd_draw), so SCHED_FAST attacks only the ~1ms scheduler-machinery
+      # slice, not the raster. A/B on: LITEV_SCHED_FAST=ON ./build.sh full
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_JIT_LDMSTM=${LITEV_LDMSTM:-ON} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_SCHED_FAST=${LITEV_SCHED_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON} -DLITEV_GEOM_CLIP_FAST=${LITEV_GEOM_CLIP_FAST:-OFF}" ;;
     soft2d)
       # Banded deferred software-2D raster (LITEV_SOFT2D_THREADED) + banded
       # multi-core software-3D raster (LITEV_SOFT3D_BANDED) on top of the `full`
@@ -126,7 +136,21 @@ config_flags() {
       # LITEV_HLE_BIOS_SWI (DraStic HLE BIOS, default OFF): see `full`. Attacks the
       # arm9_exec bucket by intercepting Div/CpuSet/CpuFastSet/Sqrt natively (bit-exact
       # vs FreeBIOS). A/B on: LITEV_HLE_BIOS_SWI=ON ./build.sh soft3dfast
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON}" ;;
+      # LITEV_GEOM_CLIP_FAST (DraStic trivial-accept fast clip, default OFF): skip
+      # Sutherland-Hodgman for fully-inside polygons (bit-exact early-out vs the full
+      # clip). A/B on: LITEV_GEOM_CLIP_FAST=ON ./build.sh soft3dfast
+      # LITEV_SCHED_FAST (DraStic leaner scheduler, default OFF, bit-exact vs this
+      # config): cached next-event deadline + RunSystem early-out. NOTE: run_system
+      # on soft3dfast is ~78% the emu thread BLOCKING to join the async render
+      # thread at VBlank (lcd_vblank_wait), NOT scheduler dispatch -- SCHED_FAST
+      # attacks only the ~1ms genuine scheduler-machinery slice. A/B on:
+      # LITEV_SCHED_FAST=ON ./build.sh soft3dfast
+      # LITEV_SOFT3D_HANDNEON (DraStic-disassembled inlined per-pixel depth test,
+      # default OFF => byte-identical to plain soft3dfast): replaces the per-pixel
+      # indirect fnDepthTest function-pointer call in the raster with an inlined
+      # branchless compare (ported from FUN_0015fb8c / the 0x8dxxx plot kernels).
+      # A/B on: LITEV_HANDNEON=ON ./build.sh soft3dfast
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_SOFT3D_HANDNEON=${LITEV_HANDNEON:-OFF} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_SCHED_FAST=${LITEV_SCHED_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON} -DLITEV_GEOM_CLIP_FAST=${LITEV_GEOM_CLIP_FAST:-OFF}" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`

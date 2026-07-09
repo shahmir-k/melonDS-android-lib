@@ -142,6 +142,18 @@ option(LITEV_SOFT3D_FAST "liteV: subaffine (approximate) software 3D span interp
 if (LITEV_SOFT3D_FAST)
     add_compile_definitions(LITEV_SOFT3D_FAST=1)
 endif()
+# Hand-NEON raster energy lever (builds on LITEV_SOFT3D_FAST): ports DraStic's
+# INLINED branchless per-pixel depth compare (disassembled from FUN_0015fb8c and
+# the 0x8dxxx plot kernels) into RenderPolygonScanline / RenderShadowMaskScanline,
+# replacing melonDS's per-pixel indirect FUNCTION-POINTER depth test. Removes one
+# indirect call (+ its register save/restore) per rasterized pixel — a pure
+# dynamic-instruction/ENERGY reduction (the lever for the RG DS thermal throttle),
+# bit-identical to the four DepthTest_* functions. All changes behind
+# #ifdef LITEV_SOFT3D_HANDNEON; flag-OFF is byte-identical.
+option(LITEV_SOFT3D_HANDNEON "liteV: DraStic-disassembled inlined per-pixel depth test" OFF)
+if (LITEV_SOFT3D_HANDNEON)
+    add_compile_definitions(LITEV_SOFT3D_HANDNEON=1)
+endif()
 # Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
 # implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
 option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)

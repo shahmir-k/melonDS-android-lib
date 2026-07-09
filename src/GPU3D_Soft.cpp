@@ -546,6 +546,39 @@ bool DepthTest_LessThan_FrontFacing(s32 dstz, s32 z, u32 dstattr)
     return false;
 }
 
+#ifdef LITEV_SOFT3D_HANDNEON
+// DraStic-faithful energy lever: DraStic's raster (FUN_0015fb8c / the 0x8dxxx
+// plot kernels) inlines the depth compare as a branchless masked op (& 0x7fff
+// depth, direct compare) INSIDE the fill; melonDS routes every pixel through a
+// per-polygon FUNCTION POINTER (fnDepthTest) — an indirect call + register
+// save/restore on EVERY pixel, thousands per frame. That call is pure dynamic-
+// instruction energy (the heat that drives the RG DS throttle). This inlines
+// all four compare modes; the mode is a per-polygon invariant so the switch is
+// a perfectly-predicted branch that stays in registers with no call/return.
+// Bit-identical to the four DepthTest_* functions above.
+//   mode 0 = LessThan   1 = LessThan_FrontFacing   2 = Equal_Z   3 = Equal_W
+static inline __attribute__((always_inline))
+bool DepthTestInline(int mode, s32 dstz, s32 z, u32 dstattr)
+{
+    switch (mode)
+    {
+    case 0:
+        return z < dstz;
+    case 1:
+        if ((dstattr & 0x00400010) == 0x00000010)
+            return z <= dstz;
+        return z < dstz;
+    case 2:
+        return (u32)((dstz - z) + 0x200) <= 0x400;
+    default: // 3
+        return (u32)((dstz - z) + 0xFF) <= 0x1FE;
+    }
+}
+#define DTEST(dz, zz, da) DepthTestInline(f_dtmode, (dz), (zz), (da))
+#else
+#define DTEST(dz, zz, da) fnDepthTest((dz), (zz), (da))
+#endif
+
 u32 SoftRenderer3D::AlphaBlend(u32 srccolor, u32 dstcolor, u32 alpha) const noexcept
 {
     u32 dstalpha = dstcolor >> 24;
@@ -848,6 +881,14 @@ void SoftRenderer3D::RenderShadowMaskScanline(RendererPolygon* rp, s32 y)
     else
         fnDepthTest = DepthTest_LessThan;
 
+#ifdef LITEV_SOFT3D_HANDNEON
+    int f_dtmode;
+    if (polygon->Attr & (1<<14))      f_dtmode = polygon->WBuffer ? 3 : 2;
+    else if (polygon->FacingView)     f_dtmode = 1;
+    else                              f_dtmode = 0;
+    (void)fnDepthTest;
+#endif
+
     if (!PrevIsShadowMask)
         memset(&StencilBuffer[256 * (y&0x1)], 0, 256);
 
@@ -1005,13 +1046,13 @@ void SoftRenderer3D::RenderShadowMaskScanline(RendererPolygon* rp, s32 y)
         s32 z = interpX.InterpolateZ(zl, zr);
         u32 dstattr = AttrBuffer[pixeladdr];
 
-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
             StencilBuffer[256*(y&0x1) + x] = 1;
 
         if (dstattr & 0xF)
         {
             pixeladdr += BufferSize;
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, AttrBuffer[pixeladdr]))
+            if (!DTEST(DepthBuffer[pixeladdr], z, AttrBuffer[pixeladdr]))
                 StencilBuffer[256*(y&0x1) + x] |= 0x2;
         }
     }
@@ -1031,13 +1072,13 @@ void SoftRenderer3D::RenderShadowMaskScanline(RendererPolygon* rp, s32 y)
         s32 z = interpX.InterpolateZ(zl, zr);
         u32 dstattr = AttrBuffer[pixeladdr];
 
-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
             StencilBuffer[256*(y&0x1) + x] = 1;
 
         if (dstattr & 0xF)
         {
             pixeladdr += BufferSize;
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, AttrBuffer[pixeladdr]))
+            if (!DTEST(DepthBuffer[pixeladdr], z, AttrBuffer[pixeladdr]))
                 StencilBuffer[256*(y&0x1) + x] |= 0x2;
         }
     }
@@ -1057,13 +1098,13 @@ void SoftRenderer3D::RenderShadowMaskScanline(RendererPolygon* rp, s32 y)
         s32 z = interpX.InterpolateZ(zl, zr);
         u32 dstattr = AttrBuffer[pixeladdr];
 
-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
             StencilBuffer[256*(y&0x1) + x] = 1;
 
         if (dstattr & 0xF)
         {
             pixeladdr += BufferSize;
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, AttrBuffer[pixeladdr]))
+            if (!DTEST(DepthBuffer[pixeladdr], z, AttrBuffer[pixeladdr]))
                 StencilBuffer[256*(y&0x1) + x] |= 0x2;
         }
     }
@@ -1194,6 +1235,15 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
         fnDepthTest = DepthTest_LessThan_FrontFacing;
     else
         fnDepthTest = DepthTest_LessThan;
+#endif
+
+#ifdef LITEV_SOFT3D_HANDNEON
+    // Per-polygon depth-test mode for the inlined DTEST (see DepthTestInline).
+    int f_dtmode;
+    if (polygon->Attr & (1<<14))      f_dtmode = polygon->WBuffer ? 3 : 2;
+    else if (polygon->FacingView)     f_dtmode = 1;
+    else                              f_dtmode = 0;
+    (void)fnDepthTest;
 #endif
 
     Vertex *vlcur, *vlnext, *vrcur, *vrnext;
@@ -1641,13 +1691,13 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 
         // if depth test against the topmost pixel fails, test
         // against the pixel underneath
-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
         {
             if (!(dstattr & 0xF) || pixeladdr >= BufferSize) continue;
 
             pixeladdr += BufferSize;
             dstattr = AttrBuffer[pixeladdr];
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+            if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
                 continue;
         }
 
@@ -1749,12 +1799,12 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 
             SA_STEP_Z();
 
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+            if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
             {
                 if (!(dstattr & 0xF) || pixeladdr >= BufferSize) continue;
                 pixeladdr += BufferSize;
                 dstattr = AttrBuffer[pixeladdr];
-                if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+                if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
                     continue;
             }
 
@@ -1806,13 +1856,13 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 
         // if depth test against the topmost pixel fails, test
         // against the pixel underneath
-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
         {
             if (!(dstattr & 0xF) || pixeladdr >= BufferSize) continue;
 
             pixeladdr += BufferSize;
             dstattr = AttrBuffer[pixeladdr];
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+            if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
                 continue;
         }
 
@@ -1914,13 +1964,13 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
 
         // if depth test against the topmost pixel fails, test
         // against the pixel underneath
-        if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
         {
             if (!(dstattr & 0xF) || pixeladdr >= BufferSize) continue;
 
             pixeladdr += BufferSize;
             dstattr = AttrBuffer[pixeladdr];
-            if (!fnDepthTest(DepthBuffer[pixeladdr], z, dstattr))
+            if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
                 continue;
         }
 
@@ -2495,8 +2545,13 @@ void SoftRenderer3D::BandWorkerFunc(int idx)
     }
 }
 
-// Spawn the pool once. NB from LITEV_BANDS (default 2, clamped 1..8) — same knob
-// the old per-frame path used, so the band count / sweet-spot behaviour is unchanged.
+// Spawn the pool once. NB from LITEV_BANDS (default 3, clamped 1..8).
+// Sweet-spot RETUNED for the 3-raster-core layout (render pinned {0,1,2}, emu core 3):
+// during the dominant 3D-raster phase the coordinator + async-2D threads are BLOCKED on
+// semaphores (0 cores), so NB=3 band workers fill all 3 raster cores exactly. Cooled
+// interleaved headless soft3dfast (Shrek race, fs0, PIN_RENDER=ON 3-core): NB=2 49fps ->
+// NB=3 58fps (+18%); NB=4 slightly regresses (57-58, 4 workers oversubscribe 3 cores).
+// (Was 2, sweet-spot for the OLD 2-core render layout.)
 void SoftRenderer3D::EnsureBandPool()
 {
     if (BandPoolRunning.load(std::memory_order_relaxed)) return;
@@ -2566,12 +2621,13 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         // thread. Split the 192 scanlines into N contiguous bands; each band walks
         // all scanlines (edge state) but only rasterizes its own rows.
         // PERSISTENT band-worker pool (DraStic-style): NB workers are spawned ONCE
-        // (below), not per frame. Band count is tunable (LITEV_BANDS, default 2).
-        // On the 4-core (all-A55) target NB=2 is the sweet spot: the emu JIT thread
-        // plus the threaded 2D renderer already occupy the other cores, so NB>=3
-        // oversubscribes and regresses. The old code spawned/joined std::threads
-        // every frame here, which added spawn cost + scheduler contention while the
-        // emu thread waited at the GetLine barrier.
+        // (below), not per frame. Band count is tunable (LITEV_BANDS, default 3).
+        // With the render threads pinned to 3 cores {0,1,2} (emu on core 3), NB=3 is
+        // the sweet spot: during the raster phase the coordinator + async-2D threads
+        // are blocked on semaphores, so 3 band workers fill all 3 raster cores. NB=4
+        // oversubscribes (4 workers, 3 cores) and slightly regresses. The old code
+        // spawned/joined std::threads every frame here, which added spawn cost +
+        // scheduler contention while the emu thread waited at the GetLine barrier.
         EnsureBandPool();
         const int NB = BandPoolNB;
 
