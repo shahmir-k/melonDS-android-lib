@@ -154,6 +154,20 @@ option(LITEV_SOFT3D_HANDNEON "liteV: DraStic-disassembled inlined per-pixel dept
 if (LITEV_SOFT3D_HANDNEON)
     add_compile_definitions(LITEV_SOFT3D_HANDNEON=1)
 endif()
+# 4-wide NEON of the per-pixel SUBAFFINE INTERPOLATION RAMP (builds on
+# LITEV_SOFT3D_FAST): in the interior batched fast path, the diffuse per-pixel
+# s64 accumulator ramp (z + r/g/b/s/t linear step between perspective anchors,
+# the SA_STEP_Z / SA_LOAD_RGBST macros) is computed 4 pixels at a time with
+# NEON — z via int64x2 pairs (vaddq_s64), r/g/b/s/t via int32x4 (the linear
+# ramp values fit 32-bit between anchors). The perspective-correct anchor divide
+# every SA_SUB px stays scalar. A prior NOSASTEP measurement showed the ramp ALU
+# is a real ~+11% wall-time ceiling (not memory-hidden). Approximate (soft3dfast
+# already is); all changes behind #ifdef LITEV_SOFT3D_INTERPNEON; flag-OFF is
+# byte-identical.
+option(LITEV_SOFT3D_INTERPNEON "liteV: 4-wide NEON subaffine span interpolation ramp" OFF)
+if (LITEV_SOFT3D_INTERPNEON)
+    add_compile_definitions(LITEV_SOFT3D_INTERPNEON=1)
+endif()
 # Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
 # implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
 option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)

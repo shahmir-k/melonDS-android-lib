@@ -1645,6 +1645,48 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 PlotTranslucentPixel(pixeladdr+BufferSize, color, z, polyattr, polygon->IsShadow);
         }
     };
+
+#ifdef LITEV_SOFT3D_INTERPNEON
+    // 4-wide NEON of the diffuse SUBAFFINE INTERPOLATION RAMP (the per-pixel s64
+    // accumulator step that SA_STEP_Z / SA_LOAD_RGBST do scalar). The perspective-
+    // correct anchor divide every SA_SUB px stays scalar; ONLY the LINEAR step
+    // between anchors is vectorized. Fills w<=4 consecutive pixels' z + vr/vg/vb
+    // + s/t from the current segment accumulators, then advances them by w steps.
+    //   z    -> int64x2 pairs (vaddq via compound-literal, reaches ~2^40)
+    //   rgbst-> int32x4      (the linear ramp value fits 32-bit between anchors)
+    // Multiplier {1,2,3,4}: the scalar path steps BEFORE reading, so the value at
+    // pixel x is base + 1*step (base = accumulator for pixel x-1). Bit-close to the
+    // scalar ramp (identical for z; for rgb/st the s32 truncation matches whenever
+    // the value fits 32-bit, which the between-anchor linear ramp does). Caller
+    // guarantees sa_rem >= w, so all w pixels are step (non-anchor) pixels.
+    s32 sa_z4[4]; u32 sa_r4[4], sa_g4[4], sa_b4[4]; s16 sa_s4[4], sa_t4[4];
+    auto sa_ramp = [&](int w)
+    {
+        // z: (sa_z + {1,2,3,4}*sa_dz) >> 16, s64 then narrowed to s32
+        int64x2_t z01 = { sa_z + sa_dz,     sa_z + 2*sa_dz };
+        int64x2_t z23 = { sa_z + 3*sa_dz,   sa_z + 4*sa_dz };
+        int32x4_t zv  = vcombine_s32(vmovn_s64(vshrq_n_s64(z01, SA_FRAC)),
+                                     vmovn_s64(vshrq_n_s64(z23, SA_FRAC)));
+        vst1q_s32(sa_z4, zv);
+
+        const int32x4_t kmul = { 1, 2, 3, 4 };
+        // r/g/b/s/t: (base + kmul*step) >> 16, all s32 (linear ramp fits 32-bit).
+        int32x4_t rv = vshrq_n_s32(vmlaq_s32(vdupq_n_s32((s32)sa_r), kmul, vdupq_n_s32((s32)sa_dr)), SA_FRAC);
+        int32x4_t gv = vshrq_n_s32(vmlaq_s32(vdupq_n_s32((s32)sa_g), kmul, vdupq_n_s32((s32)sa_dg)), SA_FRAC);
+        int32x4_t bv = vshrq_n_s32(vmlaq_s32(vdupq_n_s32((s32)sa_b), kmul, vdupq_n_s32((s32)sa_db)), SA_FRAC);
+        int32x4_t sv = vshrq_n_s32(vmlaq_s32(vdupq_n_s32((s32)sa_s), kmul, vdupq_n_s32((s32)sa_ds)), SA_FRAC);
+        int32x4_t tv = vshrq_n_s32(vmlaq_s32(vdupq_n_s32((s32)sa_t), kmul, vdupq_n_s32((s32)sa_dt)), SA_FRAC);
+        vst1q_u32(sa_r4, vreinterpretq_u32_s32(rv));
+        vst1q_u32(sa_g4, vreinterpretq_u32_s32(gv));
+        vst1q_u32(sa_b4, vreinterpretq_u32_s32(bv));
+        vst1_s16(sa_s4, vmovn_s32(sv));
+        vst1_s16(sa_t4, vmovn_s32(tv));
+
+        sa_z += (s64)w * sa_dz; sa_r += (s64)w * sa_dr; sa_g += (s64)w * sa_dg;
+        sa_b += (s64)w * sa_db; sa_s += (s64)w * sa_ds; sa_t += (s64)w * sa_dt;
+        sa_rem -= w;
+    };
+#endif
 #endif
 #endif
 
@@ -1792,6 +1834,83 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
         u32 bcolor[4];
         int nb = 0;
 
+#ifdef LITEV_SOFT3D_INTERPNEON
+        // NEON-ramp interior: compute up to 4 consecutive pixels' z + attributes in
+        // one pass (sa_ramp) whenever we are inside a linear segment (sa_rem>=2),
+        // then run the scalar per-pixel depth test + survivor buffering off the
+        // precomputed arrays. Anchor pixels (sa_rem==0) and 1-px tails fall to the
+        // scalar SA_STEP_Z / SA_LOAD_RGBST path (which also refreshes the anchors).
+        while (x < xlimit)
+        {
+            int avail = (int)(xlimit - x);
+            int w = (sa_rem < avail) ? sa_rem : avail;
+            if (w > 4) w = 4;
+
+            if (w >= 2)
+            {
+                sa_ramp(w);
+                for (int k = 0; k < w; k++, x++)
+                {
+                    u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
+                    u32 dstattr = AttrBuffer[pixeladdr];
+                    s32 z = sa_z4[k];
+
+                    if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
+                    {
+                        if (!(dstattr & 0xF) || pixeladdr >= BufferSize) continue;
+                        pixeladdr += BufferSize;
+                        dstattr = AttrBuffer[pixeladdr];
+                        if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
+                            continue;
+                    }
+
+                    bs[nb] = sa_s4[k]; bt[nb] = sa_t4[k];
+                    bvr[nb] = (u16)(sa_r4[k]>>3); bvg[nb] = (u16)(sa_g4[k]>>3); bvb[nb] = (u16)(sa_b4[k]>>3);
+                    bpaddr[nb] = pixeladdr; bdstattr[nb] = dstattr; bz[nb] = z;
+                    if (++nb == 4)
+                    {
+                        shade4(bs, bt, bvr, bvg, bvb, bcolor);
+                        plot2(bpaddr[0], bz[0], bdstattr[0], bcolor[0]);
+                        plot2(bpaddr[1], bz[1], bdstattr[1], bcolor[1]);
+                        plot2(bpaddr[2], bz[2], bdstattr[2], bcolor[2]);
+                        plot2(bpaddr[3], bz[3], bdstattr[3], bcolor[3]);
+                        nb = 0;
+                    }
+                }
+            }
+            else
+            {
+                u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
+                u32 dstattr = AttrBuffer[pixeladdr];
+
+                SA_STEP_Z();
+
+                if (!DTEST(DepthBuffer[pixeladdr], z, dstattr))
+                {
+                    if (!(dstattr & 0xF) || pixeladdr >= BufferSize) { x++; continue; }
+                    pixeladdr += BufferSize;
+                    dstattr = AttrBuffer[pixeladdr];
+                    if (!DTEST(DepthBuffer[pixeladdr], z, dstattr)) { x++; continue; }
+                }
+
+                SA_LOAD_RGBST();
+
+                bs[nb] = s; bt[nb] = t;
+                bvr[nb] = (u16)(vr>>3); bvg[nb] = (u16)(vg>>3); bvb[nb] = (u16)(vb>>3);
+                bpaddr[nb] = pixeladdr; bdstattr[nb] = dstattr; bz[nb] = z;
+                if (++nb == 4)
+                {
+                    shade4(bs, bt, bvr, bvg, bvb, bcolor);
+                    plot2(bpaddr[0], bz[0], bdstattr[0], bcolor[0]);
+                    plot2(bpaddr[1], bz[1], bdstattr[1], bcolor[1]);
+                    plot2(bpaddr[2], bz[2], bdstattr[2], bcolor[2]);
+                    plot2(bpaddr[3], bz[3], bdstattr[3], bcolor[3]);
+                    nb = 0;
+                }
+                x++;
+            }
+        }
+#else
         for (; x < xlimit; x++)
         {
             u32 pixeladdr = FirstPixelOffset + (y*ScanlineWidth) + x;
@@ -1823,6 +1942,7 @@ void SoftRenderer3D::RenderPolygonScanline(RendererPolygon* rp, s32 y)
                 nb = 0;
             }
         }
+#endif
         // flush remainder (<4) via the scalar shade
         for (int i = 0; i < nb; i++)
             plot2(bpaddr[i], bz[i], bdstattr[i], shadeFast(bvr[i], bvg[i], bvb[i], bs[i], bt[i]));
