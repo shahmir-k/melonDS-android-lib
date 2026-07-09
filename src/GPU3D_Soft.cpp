@@ -2502,7 +2502,7 @@ void SoftRenderer3D::EnsureBandPool()
     if (BandPoolRunning.load(std::memory_order_relaxed)) return;
 
     const char* e = getenv("LITEV_BANDS");
-    int n = e ? atoi(e) : 2;
+    int n = e ? atoi(e) : 3;
     if (n < 1) n = 1;
     if (n > 8) n = 8;
     BandPoolNB = n;
