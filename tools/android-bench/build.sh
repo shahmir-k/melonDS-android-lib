@@ -175,7 +175,22 @@ config_flags() {
       # +59% steady-state fps on M3 (native, single-thread shows noise; A55 differs
       # in magnitude). Verified bit-exact (top/bottom/audio hashes ON==OFF, 2000
       # frames). Default OFF => byte-identical. A/B on: LITEV_SOFT2D_NEON=ON ./build.sh soft3dfast
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_SOFT3D_HANDNEON=${LITEV_HANDNEON:-OFF} -DLITEV_SOFT3D_INTERPNEON=${LITEV_INTERPNEON:-OFF} -DLITEV_SOFT3D_ASM=${LITEV_ASM:-OFF} -DLITEV_SOFT2D_NEON=${LITEV_SOFT2D_NEON:-OFF} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_SCHED_FAST=${LITEV_SCHED_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON} -DLITEV_GEOM_CLIP_FAST=${LITEV_GEOM_CLIP_FAST:-OFF}" ;;
+      # LITEV_SOFT2D_OBJNEON (NEON branchless reject-scan for the 2D sprite
+      # interleaver SoftRenderer2D::InterleaveSprites, default OFF => byte-identical
+      # to plain soft3dfast): InterleaveSprites runs once per BG priority level (up
+      # to 4×/scanline); at a given priority most of the 256 pixels carry no
+      # matching opaque sprite, so the scalar loop is dominated by the
+      # (OBJLine[i]&OpaPrioMask)!=attrmask reject path. This lever tests the prio
+      # match 16 lanes at a time (uint32x4 vceq + reduce) and skips whole 16-pixel
+      # chunks with zero matches; matching chunks fall through to the identical
+      # scalar body (palette gather has no AArch64 NEON equivalent). ~3.5× fewer
+      # instrs on the dominant reject path => lower dynamic-instruction energy/frame
+      # => higher SUSTAINED fps under the RG DS thermal throttle. Bit-exact
+      # (final_top/bot/audio hashes ON==OFF, 2000 frames). On M3: +3.8% single-thread
+      # (where the interleaver is on the critical path); neutral in the threaded
+      # config (the 2D worker has slack at ~595fps native — it waits on the emu
+      # thread). A/B on: LITEV_SOFT2D_OBJNEON=ON ./build.sh soft3dfast
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_SOFT3D_HANDNEON=${LITEV_HANDNEON:-OFF} -DLITEV_SOFT3D_INTERPNEON=${LITEV_INTERPNEON:-OFF} -DLITEV_SOFT3D_ASM=${LITEV_ASM:-OFF} -DLITEV_SOFT2D_NEON=${LITEV_SOFT2D_NEON:-OFF} -DLITEV_SOFT2D_OBJNEON=${LITEV_SOFT2D_OBJNEON:-OFF} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_SCHED_FAST=${LITEV_SCHED_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON} -DLITEV_GEOM_CLIP_FAST=${LITEV_GEOM_CLIP_FAST:-OFF}" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`
