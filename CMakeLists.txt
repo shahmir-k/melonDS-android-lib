@@ -168,6 +168,32 @@ option(LITEV_SOFT3D_INTERPNEON "liteV: 4-wide NEON subaffine span interpolation 
 if (LITEV_SOFT3D_INTERPNEON)
     add_compile_definitions(LITEV_SOFT3D_INTERPNEON=1)
 endif()
+# Hand-written AArch64 assembly transcription of DraStic's span-fill inner
+# texture-modulate loop (builds on LITEV_SOFT3D_NEON): replaces the compiler's
+# intrinsic modulate in shade4 with src/GPU3D_Soft_asm.S, transcribed
+# instruction-for-instruction from libdrastic_arm64.so's 0x5ff60-0x5ffbc 4px/iter
+# body (exact register roles + NEON scheduling; only the vertex factors are loaded
+# per-pixel instead of dup'd, since melonDS is Gouraud). Fewer host instructions
+# per pixel-batch => less dynamic-instruction energy/frame => higher SUSTAINED fps
+# under the RG DS thermal throttle. Bit-identical to the intrinsic modulate; all
+# changes behind #ifdef LITEV_SOFT3D_ASM; flag-OFF is byte-identical. AArch64 only.
+option(LITEV_SOFT3D_ASM "liteV: hand-written AArch64 asm DraStic span-fill modulate" OFF)
+if (LITEV_SOFT3D_ASM)
+    add_compile_definitions(LITEV_SOFT3D_ASM=1)
+endif()
+# 4-wide NEON port of the per-pixel 2D BG/OBJ colour-special-effects compositor
+# (SoftRenderer2D::ColorComposite, called 256×/scanline from DrawScanline_BGOBJ).
+# The scalar version is a ~134-instruction out-of-line CALL PER PIXEL (branchy
+# blend/window/priority logic that clang does NOT auto-vectorize). This lever
+# replaces it with a branchless NEON kernel (arm masks/selects) doing 4 px/iter,
+# mirroring DraStic's NEON-vectorized 2D composite (teardown FUN_001494a4, 927
+# NEON ops). Bit-exact with the scalar path (top/bottom/audio hashes identical);
+# all changes behind #ifdef LITEV_SOFT2D_NEON; flag-OFF is byte-identical.
+# AArch64 only (scalar fallback elsewhere).
+option(LITEV_SOFT2D_NEON "liteV: 4-wide NEON 2D BG/OBJ colour-effect compositor" OFF)
+if (LITEV_SOFT2D_NEON)
+    add_compile_definitions(LITEV_SOFT2D_NEON=1)
+endif()
 # Unit 2: shadow-mode equivalence assert for the CyclesBudget slot. Debug-only gate;
 # implies nothing else. Aborts if the budget and timestamp/target mechanisms disagree.
 option(LITEV_SHADOW_ASSERT "Assert CyclesBudget == timestamp/target equivalence" OFF)
@@ -481,22 +507,6 @@ if (LITEV_RELAXED_ARM9_TIMING)
     add_compile_definitions(LITEV_RELAXED_ARM9_TIMING=1)
 endif()
 
-# R3 (Appendix D.7 §R3, "GL redundant-state diet"): CPU-side shadow of bound GL
-# state in the OpenGL renderer so a bind/param whose shadow already holds the
-# requested value is skipped (a driver-level no-op). Attacks the measured in-race
-# per-frame call medians binds=529 / texparam=251 (~411 binds are redundant even
-# at a static menu). The Mali userspace driver's ~5ms/frame command-buffer build
-# sits on the serial critical path, so fewer calls shorten the frame directly.
-# The shadow lives in LiteGLStateCache.h, which is only active on __ANDROID__
-# (the Mali target) and only included by the four OpenGL renderer .cpp files, so
-# this flag has NO effect on headless (no GL compiled) or desktop GL builds.
-# Default OFF -> byte-identical behaviour; goldens bit-exact. Set via
-# add_compile_definitions so the LITEV_* re-export loop below carries it PUBLIC.
-option(LITEV_GL_STATE_CACHE "M6.3/R3: GL redundant bind/param shadow cache (Android GL renderer)" OFF)
-if (LITEV_GL_STATE_CACHE)
-    add_compile_definitions(LITEV_GL_STATE_CACHE=1)
-endif()
-
 # Instant ARM9 hardware divider/sqrt: compute the DIV/SQRT result at register-
 # write time and skip the scheduled completion event. In-race profiling showed
 # Event_Div is the single largest scheduler load (~1233 dispatches/frame, 42% of
@@ -591,6 +601,16 @@ if (LITEV_TIMER_FAST)
     add_compile_definitions(LITEV_TIMER_FAST=1)
 endif()
 
+# DraStic-style leaner scheduler dispatch (bit-exact). Caches the soonest armed
+# event deadline so NextTarget skips the per-iteration SchedListMask min-scan and
+# RunSystem early-outs (skips scan+dispatch) when nothing is due -- ~1461 of the
+# ~2058 RunSystem calls/frame on the Shrek race fire no event. Same events, same
+# order, cheaper dispatch => flag ON must be byte-identical to OFF.
+option(LITEV_SCHED_FAST "DraStic: cached next-event deadline + RunSystem early-out (bit-exact)" OFF)
+if (LITEV_SCHED_FAST)
+    add_compile_definitions(LITEV_SCHED_FAST=1)
+endif()
+
 # R4 (Appendix D.7; docs/r4-render-thread-design.md): render-thread offload seam.
 # Compiles in the capture/submit phase split so the Android app glue can later
 # move GL renderer submission off the emulation thread (RunFrame produces a
@@ -609,20 +629,28 @@ if (LITEV_RENDER_THREAD)
     add_compile_definitions(LITEV_RENDER_THREAD=1)
 endif()
 
-# G) geometry-transform offload (ported from core liteDS-v2). Default OFF ->
-# byte-identical to the base geometry pipeline. When ON, the emu thread records
-# resolved SubmitVertex/SubmitPolygon inputs + runs an approximate cycle model,
-# and GPU3D::VBlank replays the exact transform into the real bank (G2, same
-# thread). Adds a GeomEvent member to GPU3D (embedded in GPU/NDS), so it changes
-# sizeof(NDS): MUST flow through the LITEV_* re-export loop below for a single ABI
-# across the out-of-tree JNI frontend. FPS-first: the approx timing breaks GXSTAT/
-# MP exactness (accepted). A later step moves the replay onto the R4 render thread.
-# (Merge note: kept this branch's more-advanced G2 offload over liteDS-v2's earlier
-# G1b passive-verify stage; swtable/emu-core opts merged in via the non-conflicting files.)
-option(LITEV_GEOM_OFFLOAD "G: geometry-transform offload (record on emu thread, replay transform/clip/cull off the inline path)" OFF)
+# G) Geometry-transform off-core offload (docs/liteDS-v2-renderprep-offload-scope.md).
+# Moves the GPU3D vertex transform (SubmitVertex) off the emu-thread critical path: the emu
+# thread keeps the exact cycle/timing model + GXSTAT + test commands (MP-safe by construction)
+# and RECORDS the GX command stream; a helper (render) thread replays it and does the transform.
+# STEP G1 (current): flag + passive command-stream recording only, no behaviour change.
+# Default OFF; flag-OFF is byte-identical (all changes behind #ifdef LITEV_GEOM_OFFLOAD).
+option(LITEV_GEOM_OFFLOAD "G: offload GPU3D geometry transform off the emu thread (record/replay; WIP)" OFF)
 if (LITEV_GEOM_OFFLOAD)
     add_compile_definitions(LITEV_GEOM_OFFLOAD=1)
 endif()
+
+# LITEV_GEOM_CLIP_FAST: DraStic-style trivial-accept fast clip in GPU3D::ClipPolygon.
+# Profiling shows most on-screen polygons are fully inside all 6 frustum planes, yet
+# melonDS runs the full Sutherland-Hodgman clip (3 planes x 2 passes, temp copies,
+# per-plane attribute interpolation) on every one. This flag adds a cheap min/max
+# bounding test on the clip-space coords: if every vertex is inside all 6 planes the
+# clip is a pure copy, so we skip Sutherland-Hodgman entirely and just apply the
+# idempotent vertex-colour rounding the full clip would have left behind. BIT-EXACT
+# for accepted polys (pure early-out); partially/fully-outside polys still run the
+# exact full clip. IN-PLACE (no threading/offload). Applied to `core` in
+# src/CMakeLists.txt. Default OFF; flag-OFF is byte-identical.
+option(LITEV_GEOM_CLIP_FAST "DraStic trivial-accept fast clip: skip Sutherland-Hodgman for fully-inside polygons (bit-exact early-out)" OFF)
 
 # --- DraStic backlog #3: batched GXFIFO threaded-code interpreter ------------------------
 # Hoists GPU3D::Run()'s per-command drain loop INTO GPU3D::ExecuteCommand() as a threaded
@@ -633,6 +661,21 @@ endif()
 # in the identical order, so geometry OUTPUT and audio are byte-identical to flag-OFF.
 # Applied on `core` in src/CMakeLists.txt (mirrors LITEV_GXFIFO_BATCH). Default OFF.
 option(LITEV_GXFIFO_THREADED "DraStic #3: batched GXFIFO threaded-code interpreter (no call/ret per GX command)" OFF)
+
+# DraStic-style HLE BIOS SWIs (attacks the arm9_exec bucket). melonDS runs the LLE
+# BIOS, so every guest SWI dispatches into real BIOS code through the JIT via the SVC
+# exception vector. This flag intercepts the hottest, side-effect-free SWIs at the
+# A_SVC/T_SVC dispatch site and executes them natively in C++ (compute result, set
+# r0..r3, NOP-return so the pipeline/dispatcher resumes at the instruction after the
+# SWI) instead of running BIOS code: Div (0x09), CpuSet (0x0B), CpuFastSet (0x0C),
+# Sqrt (0x0D). Results are bit-exact vs FreeBIOS (verified on host over millions of
+# inputs; the abs-remainder Div quirk and no-round CpuFastSet are matched). Everything
+# else (SoftReset/IntrWait/VBlankIntrWait/Halt/decompress/IPC/...) falls through to the
+# real BIOS. FPS-first (fewer cycles than the BIOS handler); ARM9+ARM7. Default OFF.
+option(LITEV_HLE_BIOS_SWI "DraStic: HLE the hottest side-effect-free BIOS SWIs natively (Div/Sqrt/CpuSet/CpuFastSet)" OFF)
+if (LITEV_HLE_BIOS_SWI)
+    add_compile_definitions(LITEV_HLE_BIOS_SWI=1)
+endif()
 
 add_subdirectory(src)
 

@@ -157,7 +157,25 @@ config_flags() {
       # the diffuse ramp ALU a prior NOSASTEP test flagged as a ~+11% wall-time
       # ceiling (helps energy/sustained-fps under the RG DS throttle). Approximate.
       # A/B on: LITEV_INTERPNEON=ON ./build.sh soft3dfast
-      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_SOFT3D_HANDNEON=${LITEV_HANDNEON:-OFF} -DLITEV_SOFT3D_INTERPNEON=${LITEV_INTERPNEON:-OFF} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_SCHED_FAST=${LITEV_SCHED_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON} -DLITEV_GEOM_CLIP_FAST=${LITEV_GEOM_CLIP_FAST:-OFF}" ;;
+      # LITEV_SOFT3D_ASM (hand-written AArch64 assembly transcription of DraStic's
+      # span-fill inner texture-modulate loop, default OFF => byte-identical to plain
+      # soft3dfast): replaces shade4's compiler-intrinsic modulate with
+      # src/GPU3D_Soft_asm.S, transcribed instruction-for-instruction from
+      # libdrastic_arm64.so's 0x5ff60-0x5ffbc 4px/iter body (exact register roles +
+      # NEON scheduling; only the vertex factors are loaded per-pixel instead of dup'd
+      # since melonDS is Gouraud). Fewer host instructions/pixel-batch => lower
+      # dynamic-instruction energy/frame => higher SUSTAINED fps under the RG DS
+      # thermal throttle. Verified bit-exact vs the intrinsic on arm64 hardware
+      # (400k px). A/B on: LITEV_ASM=ON ./build.sh soft3dfast
+      # LITEV_SOFT2D_NEON (4-wide NEON port of the per-pixel 2D BG/OBJ colour-effect
+      # compositor SoftRenderer2D::ColorComposite — DraStic-style; teardown
+      # FUN_001494a4, 927 NEON ops — replacing a ~133-instr out-of-line CALL PER
+      # PIXEL with a branchless 4px/iter NEON kernel, ~3x fewer instrs/px). In the
+      # threaded 2D config the 2D worker is frame-limiting, so this unblocks it:
+      # +59% steady-state fps on M3 (native, single-thread shows noise; A55 differs
+      # in magnitude). Verified bit-exact (top/bottom/audio hashes ON==OFF, 2000
+      # frames). Default OFF => byte-identical. A/B on: LITEV_SOFT2D_NEON=ON ./build.sh soft3dfast
+      echo "-DLITEV_JIT_DISPATCH=ON -DLITEV_LINK_UNCOND=ON -DLITEV_LINK_COND=ON -DLITEV_LINK_FALLTHROUGH=ON -DLITEV_EVENT_SLICES=ON -DLITEV_MEM_DTCM_BLOCK=ON -DLITEV_MEM_MAINRAM_LOAD=ON -DLITEV_SOFT2D_THREADED=ON -DLITEV_SOFT3D_BANDED=ON -DLITEV_SOFT3D_FAST=ON -DLITEV_SOFT3D_HANDNEON=${LITEV_HANDNEON:-OFF} -DLITEV_SOFT3D_INTERPNEON=${LITEV_INTERPNEON:-OFF} -DLITEV_SOFT3D_ASM=${LITEV_ASM:-OFF} -DLITEV_SOFT2D_NEON=${LITEV_SOFT2D_NEON:-OFF} -DLITEV_INSTANT_DIVSQRT=ON -DLITEV_SPU_BATCH=${LITEV_SPU_BATCH:-ON} -DLITEV_COARSE_RTC=${LITEV_COARSE_RTC:-ON} -DLITEV_DMA_GXFIFO_FAST=${LITEV_DMA_GXFIFO_FAST:-ON} -DLITEV_IDLE_AGGRESSIVE=${LITEV_IDLE_AGGRESSIVE:-OFF} -DLITEV_TIMER_FAST=${LITEV_TIMER_FAST:-OFF} -DLITEV_SCHED_FAST=${LITEV_SCHED_FAST:-OFF} -DLITEV_HLE_BIOS_SWI=${LITEV_HLE_BIOS_SWI:-OFF} -DLITEV_ARM7_IDLE=${LITEV_ARM7_IDLE:-OFF} -DLITEV_JIT_FLAGMERGE=${LITEV_FLAGMERGE:-ON} -DLITEV_GEOM_CLIP_FAST=${LITEV_GEOM_CLIP_FAST:-OFF}" ;;
     swtable)
       # DraStic branchless software page-table fastmem on the load hot path
       # (LITEV_MEM_SWTABLE), on top of the `full` stack. A/B against `full`
