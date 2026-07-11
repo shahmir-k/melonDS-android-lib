@@ -40,6 +40,35 @@ static bool litevGxProp(const char* name) {
 #include <arm_neon.h>
 #endif
 
+#if defined(LITEV_GEOM_RECIP)
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+namespace melonDS { namespace {
+// LITEV_GEOM_RECIP — DraStic-style float reciprocal for the per-vertex geometry
+// divides in SubmitPolygon (viewport transform + Z depth). APPROXIMATE, not
+// bit-exact: FPS-first. On ARM this is one frecpe estimate + a single
+// Newton-Raphson refinement (~16 effective mantissa bits) — the quotient feeds
+// screen coordinates / depth where ~12-16 bit precision is visually fine. On a
+// non-NEON host it degrades to an exact 1.0/d so the same code path is testable.
+// The costly integer sdiv (not pipelined on Cortex-A55, ~8-20cy each) is
+// replaced by a reciprocal that is COMPUTED ONCE per vertex and reused for both
+// the X and Y viewport divides (they share the denominator), which is the
+// structural win DraStic gets in its geometry engine.
+static inline float LiteGeomRecip(float d)
+{
+#if defined(__ARM_NEON)
+    float32x2_t vd = vdup_n_f32(d);
+    float32x2_t r  = vrecpe_f32(vd);          // ~8-bit estimate
+    r = vmul_f32(r, vrecps_f32(vd, r));       // one Newton step -> ~16-bit
+    return vget_lane_f32(r, 0);
+#else
+    return 1.0f / d;
+#endif
+}
+}} // namespace melonDS::(anon)
+#endif
+
 namespace melonDS
 {
 using Platform::Log;
@@ -1326,8 +1355,19 @@ void GPU3D::SubmitPolygon() noexcept
             }
 
             den <<= 1;
+#if defined(LITEV_GEOM_RECIP)
+            // one reciprocal reused for both X and Y (shared denominator).
+            // (u32) truncates toward zero, matching the integer divide's floor;
+            // the ~16-bit reciprocal error (~0.004px on a ~256 quotient) almost
+            // never crosses a pixel boundary, so the screen coord matches the
+            // reference integer result on the vast majority of vertices.
+            float rden = LiteGeomRecip((float)den);
+            posX = (u32)((float)(posX * Viewport[4]) * rden) + Viewport[0];
+            posY = (u32)((float)(posY * Viewport[5]) * rden) + Viewport[3];
+#else
             posX = ((posX * Viewport[4]) / den) + Viewport[0];
             posY = ((posY * Viewport[5]) / den) + Viewport[3];
+#endif
         }
 
         vtx->FinalPosition[0] = posX & 0x1FF;
@@ -1337,8 +1377,14 @@ void GPU3D::SubmitPolygon() noexcept
         // to consider: only do this when using the GL renderer? apply the aforementioned quirk to this?
         if (w != 0)
         {
+#if defined(LITEV_GEOM_RECIP)
+            float rw = LiteGeomRecip((float)(((s64)w) << 1));
+            posX = (u32)((float)(((s64)(vtx->Position[0] + w) * Viewport[4]) << 4) * rw) + (Viewport[0] << 4);
+            posY = (u32)((float)(((s64)(-vtx->Position[1] + w) * Viewport[5]) << 4) * rw) + (Viewport[3] << 4);
+#else
             posX = ((((s64)(vtx->Position[0] + w) * Viewport[4]) << 4) / (((s64)w) << 1)) + (Viewport[0] << 4);
             posY = ((((s64)(-vtx->Position[1] + w) * Viewport[5]) << 4) / (((s64)w) << 1)) + (Viewport[3] << 4);
+#endif
 
             vtx->HiresPosition[0] = posX & 0x1FFF;
             vtx->HiresPosition[1] = posY & 0xFFF;
@@ -1529,7 +1575,14 @@ void GPU3D::SubmitPolygon() noexcept
         if (FlushAttributes & 0x2)
             z = wshifted;
         else if (vtx->Position[3])
+#if defined(LITEV_GEOM_RECIP)
+            // Compute Position[2]/w first (magnitude <= 1, so the reciprocal's
+            // ~16 bits are preserved), then scale by 0x4000. Truncates toward
+            // zero via (s32) cast, matching the integer divide's rounding.
+            z = ((s32)(((float)vtx->Position[2] * LiteGeomRecip((float)vtx->Position[3])) * 16384.0f) + 0x3FFF) * 0x200;
+#else
             z = ((((s64)vtx->Position[2] * 0x4000) / vtx->Position[3]) + 0x3FFF) * 0x200;
+#endif
         else
             z = 0x7FFE00;
 

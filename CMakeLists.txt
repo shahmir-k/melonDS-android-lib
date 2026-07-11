@@ -498,6 +498,20 @@ if (LITEV_MEM_SWTABLE_STORE)
     add_compile_definitions(LITEV_MEM_SWTABLE_STORE=1)
 endif()
 
+# DraStic-recompiler density match: emit the sw-table load probe as a SHARED BL stub
+# (one per size/sign) instead of inlining the ~7-instruction probe at every guest load
+# site. Smaller JIT blocks -> less i-cache pressure on the in-order Cortex-A55. Stores
+# route through the existing shared PatchedStoreFuncs thunk. Bit-exact vs the inline
+# probe (same probe body + same SlowRead*SW / SlowWrite resolvers). Requires
+# LITEV_MEM_SWTABLE. Default OFF. See plan D.7 (final density divergence).
+option(LITEV_SWTABLE_STUB "Shared BL load-probe stub instead of inline sw-table probe (AArch64)" OFF)
+if (LITEV_SWTABLE_STUB)
+    if (NOT LITEV_MEM_SWTABLE)
+        message(FATAL_ERROR "LITEV_SWTABLE_STUB requires LITEV_MEM_SWTABLE.")
+    endif()
+    add_compile_definitions(LITEV_SWTABLE_STUB=1)
+endif()
+
 # Milestone 4 (renderer track, software-renderer scope). All default OFF.
 option(LITEV_NEON_RENDERER "Enable NEON SIMD 2D output paths (AArch64 only)" OFF)
 option(LITEV_SPU_FAST_INTERP "Replace SPU channel interpolation with cheap linear interp" OFF)
@@ -687,6 +701,16 @@ option(LITEV_GEOM_CLIP_FAST "DraStic trivial-accept fast clip: skip Sutherland-H
 # in the identical order, so geometry OUTPUT and audio are byte-identical to flag-OFF.
 # Applied on `core` in src/CMakeLists.txt (mirrors LITEV_GXFIFO_BATCH). Default OFF.
 option(LITEV_GXFIFO_THREADED "DraStic #3: batched GXFIFO threaded-code interpreter (no call/ret per GX command)" OFF)
+
+# LITEV_GEOM_RECIP — DraStic-style float reciprocal for the per-vertex geometry divides in
+# SubmitPolygon (viewport X/Y transform + Z depth). Replaces the integer sdiv (non-pipelined
+# on Cortex-A55) with one frecpe + Newton-Raphson reciprocal reused across the shared-denominator
+# X/Y divides. APPROXIMATE (~16 mantissa bits), FPS-first: the quotient feeds screen coords / depth
+# where that precision is visually fine. GPU3D.cpp only. Default OFF.
+option(LITEV_GEOM_RECIP "liteV: DraStic-style float reciprocal for SubmitPolygon per-vertex divides (approximate)" OFF)
+if (LITEV_GEOM_RECIP)
+    add_compile_definitions(LITEV_GEOM_RECIP=1)
+endif()
 
 # DraStic-style HLE BIOS SWIs (attacks the arm9_exec bucket). melonDS runs the LLE
 # BIOS, so every guest SWI dispatches into real BIOS code through the JIT via the SVC
