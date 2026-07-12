@@ -19,6 +19,7 @@
 #include "GPU3D_Soft.h"
 
 #include <algorithm>
+#include <chrono>
 #include <stdio.h>
 #include <string.h>
 #if defined(LITEV_SOFT3D_FAST) && (defined(__ARM_NEON) || defined(__aarch64__))
@@ -27,6 +28,7 @@
 #endif
 #include "NDS.h"
 #include "GPU.h"
+#include "LitevSoftProf.h"
 
 #if defined(__ANDROID__) && defined(LITEV_PIN_RENDER)
 #include <sched.h>
@@ -44,6 +46,14 @@ static void litevPinRenderThread() {}
 
 namespace melonDS
 {
+
+// Always-available monotonic ms (the band load balancer needs timing whether or not
+// the LITEV_SOFTPROF diagnostic build is on).
+static inline double LitevSP_Now()
+{
+    using namespace std::chrono;
+    return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
+}
 
 void RenderThreadFunc();
 
@@ -2641,17 +2651,24 @@ void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, 
 void SoftRenderer3D::BandWorkerFunc(int idx)
 {
     litevPinRenderThread();
+#ifdef LITEV_SOFTPROF
+    { char nm[16]; snprintf(nm, sizeof(nm), "s3d-band%d", idx); LSP_NAME(nm); }
+#endif
     for (;;)
     {
         Platform::Semaphore_Wait(BandStartSema[idx]);
         if (!BandPoolRunning.load(std::memory_order_relaxed))
             return;
 
+        const double _t0 = LitevSP_Now();
         if (BandPhase == 0)
         {
             // Phase 0: rasterize this band's rows (bandidx = idx maps to TexCaches[idx]).
             RenderBand(BandPolygons, BandNumPolys,
                        BandRasterBnd[idx], BandRasterBnd[idx + 1], idx);
+            // record this band's cost for the next frame's rebalance (own slot: no race)
+            BandLastMs[idx] = LitevSP_Now() - _t0;
+            LSP_ADD(S3DBand[idx], BandLastMs[idx]);
         }
         else
         {
@@ -2659,6 +2676,7 @@ void SoftRenderer3D::BandWorkerFunc(int idx)
             // barrier, so neighbour-row reads (y-1 / y+1) see finished rows.
             for (s32 y = BandFinalBnd[idx]; y < BandFinalBnd[idx + 1]; y++)
                 ScanlineFinalPass(y);
+            LSP_ADD(S3DFinal[idx], LitevSP_Now() - _t0);
         }
 
         Platform::Semaphore_Post(BandDoneSema[idx]);
@@ -2684,6 +2702,13 @@ void SoftRenderer3D::EnsureBandPool()
 
     const char* bf = getenv("LITEV_BAND_FINAL");
     BandFinalBanded = !(bf && bf[0] == '0');
+
+    // Adaptive band load balancing (default ON; LITEV_BAND_BALANCE=0 restores the
+    // equal-line partition for A/B). Output-neutral either way.
+    const char* bb = getenv("LITEV_BAND_BALANCE");
+    BandBalance = !(bb && bb[0] == '0');
+    BandBndInit = false;
+    for (int b = 0; b < 8; b++) { BandLastMs[b] = 0.0; BandEwmaMs[b] = 0.0; }
 
     for (int b = 0; b < n; b++)
     {
@@ -2721,6 +2746,87 @@ void SoftRenderer3D::ShutdownBandPool()
 }
 #endif
 
+#ifdef LITEV_SOFT3D_BANDED
+// Recompute BandRasterBnd[0..nb] so that each band's MEASURED raster time converges
+// to the mean. Runs on the 3D render thread, before the workers are woken.
+//
+// Model: attribute the previous frame's band cost uniformly across the rows that band
+// owned (piecewise-constant per-row density), then re-cut [0,192) at equal-cost
+// prefixes. Iterating this each frame converges on equal band times even though the
+// true per-row cost is not uniform (the fixed edge-state fast-forward is folded into
+// the density and the feedback loop absorbs the model error).
+//
+// Output is unaffected: bands write disjoint rows and each fast-forwards its edge
+// state from row 0, so any partition renders the same framebuffer.
+void SoftRenderer3D::RebalanceBands(int nb)
+{
+    if (!BandBalance || nb < 2)
+    {
+        for (int b = 0; b <= nb; b++) BandRasterBnd[b] = (192 * b) / nb;
+        return;
+    }
+
+    if (!BandBndInit)
+    {
+        for (int b = 0; b <= nb; b++) BandRasterBnd[b] = (192 * b) / nb;
+        BandBndInit = true;
+        return;
+    }
+
+    // EWMA the measured band costs (scene load changes gradually; damp frame noise).
+    double total = 0.0;
+    for (int b = 0; b < nb; b++)
+    {
+        if (BandLastMs[b] > 0.0)
+            BandEwmaMs[b] = (BandEwmaMs[b] <= 0.0) ? BandLastMs[b]
+                                                   : (0.75 * BandEwmaMs[b] + 0.25 * BandLastMs[b]);
+        total += BandEwmaMs[b];
+    }
+    if (total <= 0.0) return;
+
+    // Per-row cost density from the CURRENT partition.
+    double dens[192];
+    for (int b = 0; b < nb; b++)
+    {
+        s32 y0 = BandRasterBnd[b], y1 = BandRasterBnd[b + 1];
+        s32 rows = y1 - y0;
+        if (rows <= 0) continue;
+        double d = BandEwmaMs[b] / (double)rows;
+        for (s32 y = y0; y < y1; y++) dens[y] = d;
+    }
+
+    // Re-cut at equal-cost prefixes.
+    const double target = total / (double)nb;
+    s32 nbnd[9];
+    nbnd[0] = 0;
+    int cut = 1;
+    double acc = 0.0;
+    for (s32 y = 0; y < 192 && cut < nb; y++)
+    {
+        acc += dens[y];
+        if (acc >= target * (double)cut)
+            nbnd[cut++] = y + 1;
+    }
+    while (cut <= nb) nbnd[cut++] = 192;
+    nbnd[nb] = 192;
+
+    // Enforce monotonic, >=MINROWS-per-band (keeps every worker useful and bounds the
+    // per-band fixed overhead from dominating).
+    const s32 MINROWS = 8;
+    for (int b = 1; b < nb; b++)
+    {
+        if (nbnd[b] < nbnd[b - 1] + MINROWS) nbnd[b] = nbnd[b - 1] + MINROWS;
+    }
+    for (int b = nb - 1; b >= 1; b--)
+    {
+        if (nbnd[b] > nbnd[b + 1] - MINROWS) nbnd[b] = nbnd[b + 1] - MINROWS;
+        if (nbnd[b] < 0) nbnd[b] = 0;
+    }
+
+    for (int b = 0; b <= nb; b++) BandRasterBnd[b] = nbnd[b];
+}
+#endif
+
 void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npolys)
 {
     // DIAGNOSTIC (throwaway): LITEV_SKIP3D skips the raster but still posts the 192
@@ -2750,14 +2856,20 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         // scheduler contention while the emu thread waited at the GetLine barrier.
         EnsureBandPool();
         const int NB = BandPoolNB;
+#ifdef LITEV_SOFTPROF
+        LitevSP::S.NB3D.store(NB, std::memory_order_relaxed);
+#endif
 
         // Publish this frame's raster args, then wake all workers and wait them out.
-        for (int b = 0; b <= NB; b++) BandRasterBnd[b] = (192 * b) / NB;
+        const double _tr0 = LSP_NOW();
+        // Adaptive row partition (equal-line bands are ~2x imbalanced on a real scene).
+        RebalanceBands(NB);
         BandPolygons = polygons;
         BandNumPolys = npolys;
         BandPhase = 0;
         for (int b = 0; b < NB; b++) Platform::Semaphore_Post(BandStartSema[b]);
         for (int b = 0; b < NB; b++) Platform::Semaphore_Wait(BandDoneSema[b]);
+        LSP_ADD(S3DRaster, LSP_NOW() - _tr0);
         // --- raster barrier: every band's rows are now fully written ---
 
         // Phase 2: the per-scanline final pass (edge marking / fog / anti-aliasing)
@@ -2769,10 +2881,12 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         // are safe post-barrier), then release all 192 scanlines to the emu thread.
         if (BandFinalBanded)
         {
+            const double _tf0 = LSP_NOW();
             for (int b = 0; b <= NB; b++) BandFinalBnd[b] = (192 * b) / NB;
             BandPhase = 1;
             for (int b = 0; b < NB; b++) Platform::Semaphore_Post(BandStartSema[b]);
             for (int b = 0; b < NB; b++) Platform::Semaphore_Wait(BandDoneSema[b]);
+            LSP_ADD(S3DFinalWall, LSP_NOW() - _tf0);
             for (int k = 0; k < 192; k++) Platform::Semaphore_Post(Sema_ScanlineCount);
         }
         else
@@ -2848,13 +2962,47 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
 void SoftRenderer3D::FinishRendering()
 {
     if (RenderThreadRunning.load(std::memory_order_relaxed) && !GPU3D.AbortFrame)
+    {
+        // THE emu-thread render barrier: blocks until the 3D render thread has
+        // finished the WHOLE frame (clear + banded raster + final pass).
+        const double _t0 = LSP_NOW();
+#ifdef LITEV_SOFTPROF
+        {
+            LitevSP::S.NFinish.fetch_add(1, std::memory_order_relaxed);
+            double post = LitevSP::S.T3DPost.load(std::memory_order_relaxed);
+            if (post > 0.0) LSP_ADD(EmuWindow, _t0 - post);
+        }
+#endif
         Platform::Semaphore_Wait(Sema_RenderDone);
+        LSP_ADD(Emu3DBarrier, LSP_NOW() - _t0);
+    }
 }
+
+#ifdef LITEV_SOFT3D_ASYNC
+// True if the derived dirty set has any bit set (i.e. MakeVRAMFlat_* would WRITE).
+template <typename BF>
+static inline bool LitevAnyDirty(const BF& bf)
+{
+    for (u32 i = 0; i < BF::DataLength; i++)
+        if (bf.Data[i]) return true;
+    return false;
+}
+#endif
 
 void SoftRenderer3D::RenderFrame()
 {
     auto textureDirty = GPU.VRAMDirty_Texture.DeriveState(GPU.VRAMMap_Texture, GPU);
     auto texPalDirty = GPU.VRAMDirty_TexPal.DeriveState(GPU.VRAMMap_TexPal, GPU);
+
+#ifdef LITEV_SOFT3D_ASYNC
+    // The MakeVRAMFlat_* calls below WRITE the flat texture/palette buffers that an
+    // in-flight async raster is still reading. Barrier only when there is actually
+    // something to write — a frame that dirtied no texture VRAM writes nothing, so
+    // the raster is free to keep running.
+    if (RenderThreadRunning.load(std::memory_order_relaxed)
+        && (LitevAnyDirty(textureDirty) || LitevAnyDirty(texPalDirty)))
+        FinishRendering();
+#endif
 
     bool textureChanged = GPU.MakeVRAMFlat_TextureCoherent(textureDirty);
     bool texPalChanged = GPU.MakeVRAMFlat_TexPalCoherent(texPalDirty);
@@ -2871,6 +3019,10 @@ void SoftRenderer3D::RenderFrame()
 
     if (RenderThreadRunning.load(std::memory_order_relaxed))
     {
+#ifdef LITEV_SOFTPROF
+        LitevSP::S.T3DPost.store(LitevSP::NowMs(), std::memory_order_relaxed);
+        LitevSP::S.NPost.fetch_add(1, std::memory_order_relaxed);
+#endif
         // "Render thread, you're up! Get moving."
         Platform::Semaphore_Post(Sema_RenderStart);
     }
@@ -2890,11 +3042,20 @@ void SoftRenderer3D::RestartFrame()
 void SoftRenderer3D::RenderThreadFunc()
 {
     litevPinRenderThread();
+    LSP_NAME("s3d-rt");
     for (;;)
     {
         // Wait for a notice from the main thread to start rendering (or to stop entirely).
         Platform::Semaphore_Wait(Sema_RenderStart);
         if (!RenderThreadRunning) return;
+#ifdef LITEV_SOFTPROF
+        {
+            double now = LitevSP::NowMs();
+            LitevSP::S.T3DStart.store(now, std::memory_order_relaxed);
+            double post = LitevSP::S.T3DPost.load(std::memory_order_relaxed);
+            if (post > 0.0) LSP_ADD(S3DWake, now - post);
+        }
+#endif
 
         // Protect the GPU state from the main thread.
         // Some melonDS frontends (though not ours)
@@ -2905,14 +3066,28 @@ void SoftRenderer3D::RenderThreadFunc()
         RenderThreadRendering = true;
         if (FrameIdentical)
         { // If no rendering is needed, just say we're done.
+#ifdef LITEV_SOFTPROF
+            LitevSP::S.NIdent.fetch_add(1, std::memory_order_relaxed);
+#endif
             Platform::Semaphore_Post(Sema_ScanlineCount, 192);
         }
         else
         {
+#ifdef LITEV_SOFTPROF
+            LitevSP::S.NRender.fetch_add(1, std::memory_order_relaxed);
+#endif
+            const double _tc0 = LSP_NOW();
             ClearBuffers();
+            LSP_ADD(S3DClear, LSP_NOW() - _tc0);
             RenderPolygons(true, &GPU3D.RenderPolygonRAM[0], GPU3D.RenderNumPolygons);
         }
 
+#ifdef LITEV_SOFTPROF
+        {
+            double post = LitevSP::S.T3DPost.load(std::memory_order_relaxed);
+            if (post > 0.0) LSP_ADD(S3DTotal, LitevSP::NowMs() - post);
+        }
+#endif
         // Tell the main thread that we're done rendering
         // and that it's safe to access the GPU state again.
         Platform::Semaphore_Post(Sema_RenderDone);

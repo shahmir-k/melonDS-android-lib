@@ -132,6 +132,28 @@ option(LITEV_SOFT3D_BANDED "liteV: banded (multi-core) software 3D rasterizer" O
 if (LITEV_SOFT3D_BANDED)
     add_compile_definitions(LITEV_SOFT3D_BANDED=1)
 endif()
+# Software-render phase profiler: names every render thread and logs a per-60-frame
+# decomposition (emu barrier / snapshot, 3D clear/raster/final + per-band, 2D wall +
+# per-band GetLine block, whole render critical path). Diagnostic only; default OFF.
+option(LITEV_SOFTPROF "liteV: software-render phase profiler (thread names + phase ms)" OFF)
+if (LITEV_SOFTPROF)
+    add_compile_definitions(LITEV_SOFTPROF=1)
+endif()
+# Async software 3D: let the banded raster run PAST VBlank into the next frame.
+# Stock melonDS starts the 3D raster at VCount 215 and hard-barriers the emu thread on
+# it at the next VBlank (GPU::VBlank -> Finish3DRendering), so the raster gets only
+# ~1/2 a frame of wall. MEASURED on the Shrek race (A55, software renderer): the raster
+# needs ~26 ms but is given ~15 ms, so the emu stalls ~9.4 ms EVERY frame -- that stall
+# IS the 40fps wall. The game flushes 3D geometry only every OTHER frame, so the raster
+# actually has two frames of headroom. This flag barriers the emu ONLY when VBlank is
+# about to mutate state the raster still reads (geometry re-sort / Render* regs), and
+# only flattens texture VRAM behind that same barrier. Output is unchanged (the 2D
+# compositor already paces against the raster per-scanline via Sema_ScanlineCount);
+# FBHASH-gated. Default OFF.
+option(LITEV_SOFT3D_ASYNC "liteV: soft 3D raster may span into the next frame (no VBlank barrier unless state is mutated)" OFF)
+if (LITEV_SOFT3D_ASYNC)
+    add_compile_definitions(LITEV_SOFT3D_ASYNC=1)
+endif()
 # Subaffine 3D span interpolation: replaces the per-pixel perspective-correct
 # divide (Interpolator::SetX) in RenderPolygonScanline's span loops with a
 # perspective-correct anchor every 8 pixels + linear stepping in between.

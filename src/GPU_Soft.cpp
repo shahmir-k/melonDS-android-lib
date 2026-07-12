@@ -21,6 +21,7 @@
 #include "GPU_Soft.h"
 #include "GPU_ColorOp.h"
 #include "Platform.h"
+#include "LitevSoftProf.h"
 
 #if defined(LITEV_NEON_RENDERER) && defined(__aarch64__)
 #include "GPU2D_NEON.h"
@@ -265,13 +266,16 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
     auto* rA = static_cast<SoftRenderer2D*>(S2DBands[bi].rend[0].get());
     auto* rB = static_cast<SoftRenderer2D*>(S2DBands[bi].rend[1].get());
 
+    const double _lspB0 = LSP_NOW();
     for (u32 line = y0; line < y1; line++)
     {
         // DraStic model: consume the 3D line HERE, on the async render thread, paced by
         // the 3D render thread's per-scanline semaphore — NOT on the emu thread. Must
         // GetLine EVERY line (0..191) to keep the semaphore count balanced even for
         // skipped lines. (Single-threaded async render — S2D_NBANDS=1 — so in-order.)
+        const double _lspG0 = LSP_NOW();
         u32* l3d = Rend3D->GetLine(line);
+        LSP_ADD(S2DBlock[bi], LSP_NOW() - _lspG0);
 
         // Read the render-owned snapshot copies (frame N) — the emu thread is
         // concurrently overwriting the live FrameSnap/LineSnap/SprSnap for frame N+1,
@@ -326,6 +330,7 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
 
         f.Valid = 0;
     }
+    LSP_ADD(S2DBand[bi], LSP_NOW() - _lspB0);
 }
 
 // The banded raster+composite+capture+expand for one frame. Runs entirely on the
@@ -334,13 +339,21 @@ void SoftRenderer::RenderBand(int bi, u32 y0, u32 y1)
 // signalling VBlank. The emu thread is emulating frame N+1 concurrently.
 void SoftRenderer::AsyncRenderFrame()
 {
+    if (S2D_NBANDS == 1)
+    {
+        // Single-band: the whole 2D on this one persistent thread. No per-frame
+        // std::thread spawn, and the 3D bands keep all 3 render cores.
+        RenderBand(0, 0, 192);
+        return;
+    }
+
     const u32 rows = 192 / S2D_NBANDS;
-    std::thread helpers[S2D_NBANDS - 1];
+    std::thread helpers[S2D_NBANDS > 1 ? S2D_NBANDS - 1 : 1];
     for (int b = 1; b < S2D_NBANDS; b++)
     {
         u32 y0 = (u32)b * rows;
         u32 y1 = (b == S2D_NBANDS - 1) ? 192 : y0 + rows;
-        helpers[b-1] = std::thread([this, b, y0, y1]{ RenderBand(b, y0, y1); });
+        helpers[b-1] = std::thread([this, b, y0, y1]{ LSP_NAME("s2d-help"); RenderBand(b, y0, y1); });
     }
     RenderBand(0, 0, rows);
     for (int b = 0; b < S2D_NBANDS - 1; b++) helpers[b].join();
@@ -365,12 +378,23 @@ static void litevPinRenderThread() {}
 void SoftRenderer::AsyncRenderThreadFunc()
 {
     litevPinRenderThread();
+    LSP_NAME("s2d-async");
     for (;;)
     {
         Platform::Semaphore_Wait(AsyncStart);
         if (!AsyncThreadRunning.load(std::memory_order_acquire))
             break;
+        const double _t0 = LSP_NOW();
         AsyncRenderFrame();
+        const double _t1 = LSP_NOW();
+        LSP_ADD(S2DWall, _t1 - _t0);
+#ifdef LITEV_SOFTPROF
+        // whole render critical path: 3D render thread wake -> 2D done
+        {
+            double t3d = LitevSP::S.T3DStart.load(std::memory_order_relaxed);
+            if (t3d > 0.0) LSP_ADD(RenderWall, _t1 - t3d);
+        }
+#endif
         Platform::Semaphore_Post(AsyncDone);
     }
 }
@@ -403,7 +427,9 @@ void SoftRenderer::FlushAsyncRender()
 {
     if (AsyncInFlight)
     {
+        const double _t0 = LSP_NOW();
         Platform::Semaphore_Wait(AsyncDone);
+        LSP_ADD(EmuBarrier, LSP_NOW() - _t0);
         AsyncInFlight = false;
         AsyncPresentBuf = AsyncTargetBuf;
         AsyncEverProduced = true;
@@ -420,6 +446,8 @@ void SoftRenderer::VBlank()
 
     // (a) BARRIER: wait for the previous frame's render, publish it as present.
     FlushAsyncRender();
+
+    const double _lspSnap0 = LSP_NOW();
 
     StartAsyncThread();
 
@@ -452,7 +480,11 @@ void SoftRenderer::VBlank()
     AsyncTargetBuf = BackBuffer;
     AsyncInFlight = true;
     S2DDeferActive = false;
+    LSP_ADD(EmuSnap, LSP_NOW() - _lspSnap0);
     Platform::Semaphore_Post(AsyncStart);
+#ifdef LITEV_SOFTPROF
+    LitevSP::Tick();
+#endif
     // (d) return immediately — emu emulates frame N+1 while the render thread runs.
 }
 #endif

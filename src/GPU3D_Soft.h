@@ -481,6 +481,23 @@ private:
     int BandPhase = 0;                         // 0 = raster, 1 = final pass
     s32 BandRasterBnd[9] = {};
     s32 BandFinalBnd[9] = {};
+
+    // ---- adaptive band load balancing (LITEV_BAND_BALANCE, default on) ----
+    // Equal-line bands are badly imbalanced on a real scene: on the Shrek race the
+    // measured per-band raster times were 22.8 / 19.2 / 11.7 ms (band 0 does ~2x
+    // band 2), so the raster WALL is set by the slowest band, ~27% above the
+    // perfectly-balanced ideal. Rebalance the row partition every frame from the
+    // previous frame's measured band times (EWMA), converging on equal band times.
+    //
+    // BIT-EXACT BY CONSTRUCTION: a band fast-forwards its incremental edge/stencil
+    // state from row 0 regardless of where its write window starts, and bands write
+    // disjoint rows. So ANY partition of [0,192) produces an identical framebuffer;
+    // only the wall time changes. (FBHASH-gated anyway.)
+    bool BandBalance = true;
+    bool BandBndInit = false;
+    double BandLastMs[8] = {};                 // band i writes its own slot (no race)
+    double BandEwmaMs[8] = {};
+    void RebalanceBands(int nb);
 #else
     RendererPolygon PolygonList[2048];
 #endif

@@ -104,11 +104,14 @@ private:
     // buffers, so all bands run concurrently on idle cores with no shared mutable
     // render state. They read the shared read-only snapshots + shared VRAM (emu is
     // blocked during the batch).
-    // The 2D raster is small and was never the bottleneck; banding it 4-wide spawns
-    // 3 extra threads/frame that just CONTEND with the 3D bands + emu + ART/audio/GL
-    // on the 4-core A55 (the app is core-contention-limited). Render the whole 2D on
-    // the single async render thread (NBANDS=1) to free cores for the 3D raster.
-    static constexpr int S2D_NBANDS = 2;
+    // The 2D raster is small and is NOT on the critical path: it gets a whole emu
+    // frame of slack (measured emu 2D barrier = 0.00 ms) and needs only ~11 ms of CPU.
+    // The 3D raster IS the critical path (measured: ~26 ms wall against a ~15 ms
+    // budget, emu blocks ~9 ms/frame at Finish3DRendering). Every 2D helper thread
+    // therefore STEALS a core from the 3D bands during the raster phase — and the old
+    // NBANDS=2 path also spawned+joined a std::thread EVERY frame.
+    // NBANDS=1: one persistent thread, no per-frame spawn, 3 full cores for the 3D.
+    static constexpr int S2D_NBANDS = 1;
     struct S2DBand
     {
         std::unique_ptr<GPU2D> unit[2];
