@@ -365,10 +365,25 @@ void SoftRenderer::AsyncRenderFrame()
 // app glue) and off the UI/Mali core (0). Without this the lib-created render threads
 // land on core 3 and preempt the critical emu thread (~13ms/frame descheduling measured:
 // app runFrame 33.5ms vs 20.4ms headless). DraStic pins its render/raster threads (07).
+// LITEV_RENDER_4CORE: with SOFT3D_ASYNC the emu no longer stalls on the 3D barrier and
+// only needs ~12.8ms of a ~22.5ms frame, so core 3 idles ~43% while the raster (now the
+// critical path) is fenced off it. Widen to all 4 cores; the emu (nice -10) still
+// preempts the render threads (default nice), so we only harvest core 3's idle residue.
 static void litevPinRenderThread()
 {
     cpu_set_t set; CPU_ZERO(&set);
     CPU_SET(0, &set); CPU_SET(1, &set); CPU_SET(2, &set);
+#if defined(LITEV_RENDER_4CORE) || defined(LITEV_SOFT3D_STREAM)
+    // This pins the ASYNC 2D thread only (the 3D band workers pin themselves to
+    // {0,1,2} in GPU3D_Soft.cpp and stay there). With LITEV_SOFT3D_STREAM the 3D
+    // bands saturate all 3 render cores, so a 2D that streams behind them has
+    // nowhere to run and just contends -- measured: bands 11.5 -> 12.7ms, no drop
+    // in the 2D block. The emu's core 3 is ~40% IDLE (emu needs ~13ms of a ~23ms
+    // frame), and the 2D is only ~9.3ms of work: let it use that idle residue. The
+    // emu runs at nice -10 vs the render threads' default nice, so the emu still
+    // PREEMPTS the 2D whenever it needs core 3.
+    CPU_SET(3, &set);
+#endif
     sched_setaffinity(0, sizeof(set), &set);
 }
 #else

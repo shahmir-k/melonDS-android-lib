@@ -482,6 +482,23 @@ private:
     s32 BandRasterBnd[9] = {};
     s32 BandFinalBnd[9] = {};
 
+#ifdef LITEV_SOFT3D_STREAM
+    // LITEV_SOFT3D_STREAM: the 2D composite was fully SERIALIZED behind the 3D raster
+    // -- the old path waited the whole raster barrier, ran the final pass, then dumped
+    // all 192 Sema_ScanlineCount posts at once, so the 2D (~9.3ms of work) could not
+    // start until raster(~14.7ms)+final(~1.1ms) were done. Measured: 2D sat BLOCKED
+    // 8.7ms/frame. Bands raster CONTIGUOUS row ranges top-to-bottom, so band 0's rows
+    // are ready long before the last band finishes.
+    //
+    // Each band publishes a row watermark; the render thread then streams
+    // finalPass(y) -> release(y) in order as soon as rows y and y+1 are rastered, so
+    // the 2D pipelines behind the bands. Render wall: 14.7+9.3+1.1 -> max(14.7, 9.3).
+    // BandRowProgress[b] = "first row of band b NOT yet rastered" (starts at its y0).
+    std::atomic<s32> BandRowProgress[8];
+    // Block until guest row `row` has been rastered by whichever band owns it.
+    void WaitRowRastered(s32 row, int nb);
+#endif
+
     // ---- adaptive band load balancing (LITEV_BAND_BALANCE, default on) ----
     // Equal-line bands are badly imbalanced on a real scene: on the Shrek race the
     // measured per-band raster times were 22.8 / 19.2 / 11.7 ms (band 0 does ~2x

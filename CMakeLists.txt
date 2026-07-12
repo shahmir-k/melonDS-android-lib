@@ -150,6 +150,16 @@ endif()
 # only flattens texture VRAM behind that same barrier. Output is unchanged (the 2D
 # compositor already paces against the raster per-scanline via Sema_ScanlineCount);
 # FBHASH-gated. Default OFF.
+option(LITEV_RENDER_4CORE "liteV: let the software raster use ALL 4 cores (emu core 3 idles ~43% once SOFT3D_ASYNC removes its barrier stall; emu nice -10 still preempts)" OFF)
+if (LITEV_RENDER_4CORE)
+    add_compile_definitions(LITEV_RENDER_4CORE=1)
+endif()
+
+option(LITEV_SOFT3D_STREAM "liteV: stream 3D scanlines to the 2D compositor as bands finish them (kills the 8.7ms 2D block behind the raster barrier)" OFF)
+if (LITEV_SOFT3D_STREAM)
+    add_compile_definitions(LITEV_SOFT3D_STREAM=1)
+endif()
+
 option(LITEV_SOFT3D_ASYNC "liteV: soft 3D raster may span into the next frame (no VBlank barrier unless state is mutated)" OFF)
 if (LITEV_SOFT3D_ASYNC)
     add_compile_definitions(LITEV_SOFT3D_ASYNC=1)

@@ -32,12 +32,22 @@
 
 #if defined(__ANDROID__) && defined(LITEV_PIN_RENDER)
 #include <sched.h>
-// Pin the software 3D render + band-worker threads to cores {1,2}, off the emu's core
-// (3) and the UI/Mali core (0), so they stop preempting the critical emu thread.
+// Pin the software 3D render + band-worker threads to cores {0,1,2}, off the emu's core
+// (3), so they stop preempting the critical emu thread.
+//
+// LITEV_RENDER_4CORE: once SOFT3D_ASYNC removed the emu's 3D barrier stall, the emu
+// thread only needs ~12.8ms of a ~22.5ms frame -- core 3 sits ~43% IDLE while the 3D
+// raster (the new critical path, ~14.7ms over 3 bands) is fenced off it. Widen the
+// raster to all 4 cores and let the scheduler share core 3: the emu thread runs at
+// nice -10 and the band workers at default nice, so the emu still PREEMPTS them
+// whenever it needs the core -- we only harvest core 3's idle residue.
 static void litevPinRenderThread()
 {
     cpu_set_t set; CPU_ZERO(&set);
     CPU_SET(0, &set); CPU_SET(1, &set); CPU_SET(2, &set);
+#ifdef LITEV_RENDER_4CORE
+    CPU_SET(3, &set);
+#endif
     sched_setaffinity(0, sizeof(set), &set);
 }
 #else
@@ -2634,12 +2644,45 @@ void SoftRenderer3D::RenderBand(Polygon** polygons, int npolys, s32 y0, s32 y1, 
     {
         nActive = AETAdvance(nActive, y);
         RenderActiveList(y, nActive);
+#ifdef LITEV_SOFT3D_STREAM
+        // Rows below y0 are only walked for edge state -- this band WRITES [y0,y1).
+        // Publish the watermark so the streaming releaser can hand row y to the 2D.
+        if (y >= y0)
+            BandRowProgress[bandidx].store(y + 1, std::memory_order_release);
+#endif
     }
 #else
     for (s32 y = 0; y < 192; y++)
+    {
         RenderScanline(y, j);
+#ifdef LITEV_SOFT3D_STREAM
+        if (y >= y0)
+            BandRowProgress[bandidx].store(y + 1, std::memory_order_release);
+#endif
+    }
 #endif
 }
+
+#ifdef LITEV_SOFT3D_STREAM
+// Spin until row `row` has been rasterized by the band that owns it. Bands raster
+// contiguous ranges [BandRasterBnd[b], BandRasterBnd[b+1]), so locate the owner and
+// wait on its watermark. Short spin (the producer is running concurrently on another
+// core and is typically only microseconds away), then yield so we never burn a core.
+void SoftRenderer3D::WaitRowRastered(s32 row, int nb)
+{
+    int b = 0;
+    while (b < nb - 1 && row >= BandRasterBnd[b + 1]) b++;
+
+    int spins = 0;
+    while (BandRowProgress[b].load(std::memory_order_acquire) <= row)
+    {
+        if (++spins < 256)
+            __builtin_arm_yield();
+        else
+            std::this_thread::yield();
+    }
+}
+#endif
 #endif
 
 #ifdef LITEV_SOFT3D_BANDED
@@ -2695,7 +2738,12 @@ void SoftRenderer3D::EnsureBandPool()
     if (BandPoolRunning.load(std::memory_order_relaxed)) return;
 
     const char* e = getenv("LITEV_BANDS");
+#ifdef LITEV_RENDER_4CORE
+    // 4 raster cores available (see litevPinRenderThread): one band per core.
+    int n = e ? atoi(e) : 4;
+#else
     int n = e ? atoi(e) : 3;
+#endif
     if (n < 1) n = 1;
     if (n > 8) n = 8;
     BandPoolNB = n;
@@ -2867,10 +2915,35 @@ void SoftRenderer3D::RenderPolygons(bool threaded, Polygon** polygons, int npoly
         BandPolygons = polygons;
         BandNumPolys = npolys;
         BandPhase = 0;
+#ifdef LITEV_SOFT3D_STREAM
+        // Reset the row watermarks BEFORE waking the workers.
+        for (int b = 0; b < NB; b++)
+            BandRowProgress[b].store(BandRasterBnd[b], std::memory_order_relaxed);
+        for (int b = 0; b < NB; b++) Platform::Semaphore_Post(BandStartSema[b]);
+
+        // STREAM: do NOT wait out the raster barrier. Release each scanline to the 2D
+        // consumer (GetLine) the moment it -- and its forward neighbour, which
+        // ScanlineFinalPass reads -- have been rastered. Walking y in order also
+        // guarantees row y-1 is already done (we waited on it last iteration), so the
+        // final pass sees exactly the same neighbours as the barriered path => output
+        // is bit-identical. The 2D composite now pipelines behind the bands instead of
+        // sitting BLOCKED for the entire raster (8.7ms/frame measured).
+        for (s32 y = 0; y < 192; y++)
+        {
+            WaitRowRastered(y < 191 ? y + 1 : 191, NB);
+            ScanlineFinalPass(y);
+            Platform::Semaphore_Post(Sema_ScanlineCount);
+        }
+        // Every band has passed its last row by construction; join them.
+        for (int b = 0; b < NB; b++) Platform::Semaphore_Wait(BandDoneSema[b]);
+        LSP_ADD(S3DRaster, LSP_NOW() - _tr0);
+        return;
+#else
         for (int b = 0; b < NB; b++) Platform::Semaphore_Post(BandStartSema[b]);
         for (int b = 0; b < NB; b++) Platform::Semaphore_Wait(BandDoneSema[b]);
         LSP_ADD(S3DRaster, LSP_NOW() - _tr0);
         // --- raster barrier: every band's rows are now fully written ---
+#endif
 
         // Phase 2: the per-scanline final pass (edge marking / fog / anti-aliasing)
         // reads neighbouring scanlines, so it must run only after ALL bands have
