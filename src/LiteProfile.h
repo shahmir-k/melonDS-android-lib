@@ -124,7 +124,14 @@ struct FrameCounters
     std::atomic<uint64_t> LinksUnlinked{0};  // sites rewritten target->dispatcher
     std::atomic<uint64_t> PendingPeak{0};    // high-water mark of pending-link maps
     std::atomic<uint64_t> LinkSitesEmitted{0};   // eligible exit sites (got a link slot)
+    std::atomic<uint64_t> CommitStubEntries{0};  // commit-stub entries (runtime, emitted in the stub)
     std::atomic<uint64_t> DispatchOnlyExits{0};  // ineligible exit sites (plain dispatcher)
+    std::atomic<uint64_t> RetCacheHits{0};       // dispatcher return-cache hits (runtime, LITEV_JIT_RETCACHE)
+
+    // --- DraStic tile renderer async attribution (LITEV_SOFT3D_DRASTIC) ---
+    std::atomic<uint64_t> TileGetLineCalls{0};   // 2D-consumer GetLine calls
+    std::atomic<uint64_t> TileGetLineStalls{0};  // GetLine calls that hit RowReady==0 (row not ready)
+    std::atomic<uint64_t> TileGetLineStallNs{0}; // wall time the consumer stalled in the RowReady fallback
 
     // Time-in-JIT vs time-in-C++ (nanoseconds within the frame)
     std::atomic<uint64_t> TimeInJitNs{0};
@@ -187,6 +194,7 @@ struct FrameCounters
         LinksUnlinked.store(0, std::memory_order_relaxed);
         PendingPeak.store(0, std::memory_order_relaxed);
         LinkSitesEmitted.store(0, std::memory_order_relaxed);
+        CommitStubEntries.store(0, std::memory_order_relaxed);
         DispatchOnlyExits.store(0, std::memory_order_relaxed);
         TimeInJitNs.store(0, std::memory_order_relaxed);
         TimeInCppNs.store(0, std::memory_order_relaxed);

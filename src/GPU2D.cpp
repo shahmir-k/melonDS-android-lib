@@ -592,15 +592,25 @@ u16* GPU2D::GetBGExtPal(u32 slot, u32 pal)
     const u32 PaletteSize = 256 * 2;
     const u32 SlotSize = PaletteSize * 16;
     return (u16*)&(Num == 0
+#ifdef LITEV_SOFT3D_PIPELINE2
+         ? GPU.VRAMFlat_ABGExtPalRead
+         : GPU.VRAMFlat_BBGExtPalRead)[slot * SlotSize + pal * PaletteSize];
+#else
          ? GPU.VRAMFlat_ABGExtPal
          : GPU.VRAMFlat_BBGExtPal)[slot * SlotSize + pal * PaletteSize];
+#endif
 }
 
 u16* GPU2D::GetOBJExtPal()
 {
     return Num == 0
+#ifdef LITEV_SOFT3D_PIPELINE2
+         ? (u16*)GPU.VRAMFlat_AOBJExtPalRead
+         : (u16*)GPU.VRAMFlat_BOBJExtPalRead;
+#else
          ? (u16*)GPU.VRAMFlat_AOBJExtPal
          : (u16*)GPU.VRAMFlat_BOBJExtPal;
+#endif
 }
 
 
@@ -763,12 +773,20 @@ void GPU2D::GetBGVRAM(u8*& data, u32& mask) const
 {
     if (Num == 0)
     {
+#ifdef LITEV_SOFT3D_PIPELINE2
+        data = GPU.VRAMFlat_ABGRead;
+#else
         data = GPU.VRAMFlat_ABG;
+#endif
         mask = 0x7FFFF;
     }
     else
     {
+#ifdef LITEV_SOFT3D_PIPELINE2
+        data = GPU.VRAMFlat_BBGRead;
+#else
         data = GPU.VRAMFlat_BBG;
+#endif
         mask = 0x1FFFF;
     }
 }
@@ -777,12 +795,20 @@ void GPU2D::GetOBJVRAM(u8*& data, u32& mask) const
 {
     if (Num == 0)
     {
+#ifdef LITEV_SOFT3D_PIPELINE2
+        data = GPU.VRAMFlat_AOBJRead;
+#else
         data = GPU.VRAMFlat_AOBJ;
+#endif
         mask = 0x3FFFF;
     }
     else
     {
+#ifdef LITEV_SOFT3D_PIPELINE2
+        data = GPU.VRAMFlat_BOBJRead;
+#else
         data = GPU.VRAMFlat_BOBJ;
+#endif
         mask = 0x1FFFF;
     }
 }
