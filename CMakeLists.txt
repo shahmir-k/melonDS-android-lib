@@ -160,6 +160,21 @@ if (LITEV_SOFT3D_STREAM)
     add_compile_definitions(LITEV_SOFT3D_STREAM=1)
 endif()
 
+# LITEV_SOFT3D_OVERLAP: same goal as STREAM (overlap the ~9.3ms 2D composite with the
+# ~14.7ms 3D raster instead of serializing it behind the raster barrier), but drives the
+# overlap from the CONSUMER (the 2D async thread's GetLine) instead of a producer-side
+# releaser. STREAM regressed because its releaser ran on the 3D coordinator thread and
+# BUSY-WAITED, stealing a core from the 3 band workers. Here the final pass + scanline
+# release happen inside GetLine on the s2d-async thread -- which was going to BLOCK for
+# the raster anyway -- pinned to the emu's idle core 3 (bands stay {0,1,2}). Per-row
+# readiness is a double-buffered flag array (RowRastered[parity][row]) so the two frames
+# in flight under SOFT3D_ASYNC (consumer of frame N overlaps the raster kick of N+1 over
+# a single-buffered ColorBuffer) never collide. FBHASH-gated. Default OFF.
+option(LITEV_SOFT3D_OVERLAP "liteV: overlap the 2D composite with the 3D raster, consumer-driven (final pass in GetLine), no extra threads" OFF)
+if (LITEV_SOFT3D_OVERLAP)
+    add_compile_definitions(LITEV_SOFT3D_OVERLAP=1)
+endif()
+
 option(LITEV_SOFT3D_ASYNC "liteV: soft 3D raster may span into the next frame (no VBlank barrier unless state is mutated)" OFF)
 if (LITEV_SOFT3D_ASYNC)
     add_compile_definitions(LITEV_SOFT3D_ASYNC=1)
@@ -199,6 +214,180 @@ endif()
 option(LITEV_SOFT3D_INTERPNEON "liteV: 4-wide NEON subaffine span interpolation ramp" OFF)
 if (LITEV_SOFT3D_INTERPNEON)
     add_compile_definitions(LITEV_SOFT3D_INTERPNEON=1)
+endif()
+# Per-polygon edge-gradient raster (builds on LITEV_SOFT3D_FAST). A/B alternative to
+# EDGENEON (mutually exclusive at build time). The ~46% per-scanline edge-interp cost is
+# the perspective ARITHMETIC (Interpolate mul/shift, dependency-stalled on the in-order
+# A55). This variant replaces the per-scanline edge Interpolate for W + colour/texcoord
+# (index 0..5) with an incremental sub-affine DDA along Y: anchor the true perspective
+# value every SA_SUB_Y rows (default 8, tunable) via the edge interpolator, then pure ADD
+# per row between anchors (mirrors the shipped SA_STEP_Z span code). APPROXIMATE (FPS-first,
+# no strict gate) -- small edge/texture warp is expected on tall near polys. Z is NOT DDA'd:
+# it stays on the exact InterpolateZ path (it drives the depth test). Reuses the same
+# per-edge endpoint snapshot as EDGENEON. All changes behind #ifdef LITEV_SOFT3D_GRADIENT
+# (reads under #if FAST && (EDGENEON||GRADIENT)); flag-OFF is byte-identical.
+option(LITEV_SOFT3D_GRADIENT "liteV: per-polygon edge-gradient raster, stage 2 = sub-affine DDA (approx)" OFF)
+if (LITEV_SOFT3D_GRADIENT)
+    add_compile_definitions(LITEV_SOFT3D_GRADIENT=1)
+endif()
+# EDGENEON (builds on LITEV_SOFT3D_FAST; A/B alternative to GRADIENT, mutually exclusive at
+# build time). Stage-1 measured that the ~46% per-scanline edge-interp cost is the
+# perspective ARITHMETIC (Interpolate mul/shift, dependency-stalled on the in-order A55),
+# NOT the endpoint memory. This variant NEON-vectorizes the EXACT per-scanline EDGE (Y)
+# interpolation that INTERPNEON left scalar: the 6 independent attrs per edge (W + colour/
+# texcoord) share the edge yfactor/shift, so they batch 4 lanes/iter with a select for the
+# y0<y1 vs y0>=y1 branch. BYTE-IDENTICAL to the scalar path (same integer ops, SIMD-packed;
+# Z stays on the exact scalar InterpolateZ). Reuses the same per-edge endpoint snapshot as
+# GRADIENT. All changes behind #ifdef LITEV_SOFT3D_EDGENEON (reads under #if FAST &&
+# (EDGENEON||GRADIENT)); flag-OFF is byte-identical.
+option(LITEV_SOFT3D_EDGENEON "liteV: NEON-vectorize the EXACT per-scanline edge interpolation" OFF)
+if (LITEV_SOFT3D_EDGENEON)
+    add_compile_definitions(LITEV_SOFT3D_EDGENEON=1)
+endif()
+# Branchless per-pixel depth test (builds on LITEV_SOFT3D_HANDNEON + the NEON batch).
+# The #1 branch-miss in RenderPolygonScanline is the data-dependent per-pixel depth test
+# `if(!DTEST(...)) continue;` (~10.6% of RPS branch-miss), which mispredicts on the in-order
+# A55. In the NEON batch (shade deferred to shade4), replace it with survivor COMPACTION:
+# compute a branchless pass mask (DepthTestMask, bit-identical to DepthTestInline), buffer
+# the slot unconditionally, then `nb += pass` -- a failed pixel's slot is overwritten by the
+# next pixel and never shaded, so there is NO extra shade. The exact 2-level under-retry
+# stays behind the edge-only (predictable) `dstattr & 0xF` test. EXACT (same survivor set /
+# same shade4/plot2 writes / same depth-write semantics -- just no data-dependent branch).
+# All changes behind #ifdef LITEV_SOFT3D_DTEST_BRANCHLESS (batch reads under #if HANDNEON &&
+# DTEST_BRANCHLESS); flag-OFF is byte-identical.
+option(LITEV_SOFT3D_DTEST_BRANCHLESS "liteV: branchless NEON-batch per-pixel depth test (survivor compaction)" OFF)
+if (LITEV_SOFT3D_DTEST_BRANCHLESS)
+    add_compile_definitions(LITEV_SOFT3D_DTEST_BRANCHLESS=1)
+endif()
+# COMPACTVTX (builds on LITEV_SOFT3D_FAST/BANDED): DraStic-style compact, contiguous,
+# direct-indexed vertex layout for the software raster. Our `Vertex` is a full 64B cache
+# line and `Polygon.Vertices[10]` is a POINTER array, so the raster's per-scanline
+# `polygon->Vertices[i]->FinalPosition/FinalColor/TexCoords` is a double-indirection into
+# scattered fat structs -- a non-prefetchable dependent pointer-chase that stalls the
+# in-order A55 (measured: ~45% of band-thread L1D-load-miss). This lever builds a raster-
+# private compact vertex buffer ONCE per frame (in RenderPolygons, when it is off the emu
+# critical path), holding only the raster-needed fields {X,Y,W,Z,R,G,B,S,T} packed to 32B
+# (2/line), and retargets every raster vertex read to it. Bands then read a contiguous,
+# hardware-prefetchable, L2-warm buffer instead of chasing pointers -- and the scattered
+# gather is paid 1x (build) instead of Nx (per band). Distinct from the null "endpoint-
+# hoist", which kept the scattered layout and only re-cached L1-resident values. Output
+# byte-identical (same values, compact layout); all changes behind #ifdef
+# LITEV_SOFT3D_COMPACTVTX; flag-OFF is byte-identical. Assumes the scalar exact edge path
+# (shipping config: EDGENEON/GRADIENT OFF), though the SnapshotEdge path is retargeted too.
+option(LITEV_SOFT3D_COMPACTVTX "liteV: DraStic-style compact contiguous direct-indexed raster vertex buffer" ON)
+if (LITEV_SOFT3D_COMPACTVTX)
+    add_compile_definitions(LITEV_SOFT3D_COMPACTVTX=1)
+endif()
+# EDGEHOIST (builds on LITEV_SOFT3D_COMPACTVTX): hoist the per-EDGE endpoint attributes
+# into the HOT per-poly RendererPolygon state. Post-compact, RenderPolygonScanline's #1
+# remaining L1D stall is the per-scanline re-read of the edge endpoints (crossing-check Y,
+# filledge X, W/Z, colour/texcoord) from the compact arena -- a SEPARATE region reached by
+# a cold `rp->CompactV` deref, touched once per scanline (LRU-cold, evicted by the span
+# loop). The endpoints only change at a vertex CROSSING (rare), so snapshot them ONCE at
+# edge-setup into rp->EHL/EHR and read from there every scanline. Unlike the pre-compact
+# EDGENEON EdgeEndpoints (which was byte-exact but NULL because it LEFT the scattered
+# `Vertices[i]->FinalPosition` crossing/filledge chase in place), this hoists POSITION too,
+# so the per-scanline hot path touches ONLY the contiguous rp (Slopes + Edge snapshot,
+# spatially prefetched by the mandatory Slope fetch) and makes ZERO compact-arena derefs.
+# Byte-identical (verbatim value copies at setup); all changes behind #ifdef
+# LITEV_SOFT3D_EDGEHOIST; flag-OFF is byte-identical. Targets the scalar shipping edge
+# path (EDGENEON/GRADIENT OFF, which have their own endpoint cache).
+option(LITEV_SOFT3D_EDGEHOIST "liteV: hoist per-edge endpoints into hot RendererPolygon state (on top of compact)" OFF)
+if (LITEV_SOFT3D_EDGEHOIST)
+    add_compile_definitions(LITEV_SOFT3D_EDGEHOIST=1)
+endif()
+# AAFOLD (builds on LITEV_SOFT3D_FAST/NEON): fold the AA-edge (part 1 / part 3) span pixels
+# into the same batched shade path the interior (part 2) already uses. Post-compact the
+# raster L1D is CAPACITY-bound: only working-set SHRINK converts, never relocation. The AA-
+# edge pixels currently take a SEPARATE, duplicated (part1==part3), branchy, scalar per-pixel
+# shadeFast inline (measured ~7.9% of band L1I, ~10% of band branch-miss -- the largest
+# stall axis). This lever SHRINKS two axes relocation can't touch: for the dominant pure-
+# modulate case, the wide-edge pixels buffer their depth survivors and go through the SHARED
+# branchless NEON shade4 (already resident from the interior) + a SHARED plotEdge, instead of
+# the edge's own scalar shadeFast + duplicated plot. BYTE-IDENTICAL: shade4==shadeFast for
+# this case, and the exact per-pixel xcov coverage / push-down / translucent logic is
+# replayed in x-order (columns are framebuffer-independent within a scanline, so deferring
+# the plot changes nothing). Thin edges (<4 px) keep the unchanged scalar path (no
+# regression). All changes behind #ifdef LITEV_SOFT3D_AAFOLD; flag-OFF is byte-identical.
+option(LITEV_SOFT3D_AAFOLD "liteV: fold the AA-edge span pixels into the batched shade4 fast path" OFF)
+if (LITEV_SOFT3D_AAFOLD)
+    add_compile_definitions(LITEV_SOFT3D_AAFOLD=1)
+endif()
+# TEX1B (builds on LITEV_SOFT3D_FAST): 1-byte palette-texel decode-once cache (DraStic's
+# trade). The decode-once texture arena stores a 2-byte RGBA5551 per texel today; on a
+# 100%-palette scene (Shrek = 100% fmt3 16-color) that arena is ~403KB/band and = 79% of
+# the 512KB L2 the 3 band threads SHARE (aggregate overflows L2) -- the dominant L1/L2
+# capacity-buster, bigger than the vertex data compact shrank. This lever stores a 1-BYTE
+# value per texel for PALETTE formats (fmt 1/2/3/4/6) -- HALVING the arena working set --
+# plus a small per-texture DECODED palette (u16 RGBA5551) in the arena. Per pixel:
+# packed = palette[arena1b[texAddr]], reproducing the CURRENT 2B value BIT-FOR-BIT (the
+# palette stores exactly what DecodeTexel+pack produces, incl. the current 0/31 alpha
+# rounding for A3I5/A5I3 -- NOT an accuracy change). Direct (fmt7) + 4x4 (fmt5) stay 2B
+# exactly as now. BYTE-IDENTICAL, FBHASH-gateable; attacks L2 not just L1. All changes
+# behind #ifdef LITEV_SOFT3D_TEX1B; flag-OFF is byte-identical. Independent of AAFOLD.
+option(LITEV_SOFT3D_TEX1B "liteV: 1-byte palette-index decode-once texture cache (halves the arena working set)" OFF)
+if (LITEV_SOFT3D_TEX1B)
+    add_compile_definitions(LITEV_SOFT3D_TEX1B=1)
+endif()
+# UNDERCOLO (builds on LITEV_SOFT3D_FAST): co-locate the AA/translucent under-slot next to
+# its top-slot to kill the +BufferSize (+195KB) scatter jump. Measured: Shrek has AA ON and
+# ~29% of interior pixels touch the under-slot -- a data-dependent +195KB write per touch,
+# the load-bearing framebuffer scatter (stubbing the final pass moved L2-refill only 6%, so
+# the under-slot IS the target). This is a PURE ADDRESS REMAP (layout-only, bit-exact): the
+# planes switch to a per-ROW interleave -- each buffer row occupies a pow2 RowStride (1024)
+# words with the top sub-row at [0,258) and the under sub-row at [512,770), so a pixel's
+# under-slot is 512 words (2KB, SAME 4KB page) away instead of +195KB. Top-slot stays
+# stride-1 within a row (coherence preserved). The pow2 layout makes the top/under test a
+# cheap `& 512` (no modulo). NO stored value changes -- FBHASH-gateable. All changes behind
+# #ifdef LITEV_SOFT3D_UNDERCOLO; flag-OFF is byte-identical. (Assumes BANDTILE/PIPELINE2 OFF,
+# the shipping config.) Independent of the other soft3d flags.
+option(LITEV_SOFT3D_UNDERCOLO "liteV: co-locate the AA under-slot next to its top-slot (kill the +195KB scatter)" OFF)
+if (LITEV_SOFT3D_UNDERCOLO)
+    add_compile_definitions(LITEV_SOFT3D_UNDERCOLO=1)
+endif()
+# DRASTIC: alternate DraStic-style TILE-BASED software 3D renderer (ground-up rewrite), dropped
+# in behind a flag so the current renderer is untouched and we A/B at every step. Goal: cut the
+# render's CPU-CORE cost so it stops starving the emulator on the 4-core A55 (the 48-vs-60 root
+# cause). P1 is the integration SKELETON: a TileRenderer3D : Renderer3D that plugs into the same
+# interface, runs SYNCHRONOUS, and fills a distinctive test pattern into its own framebuffer to
+# prove the seam (entry points, GetLine format/timing, 2D compositing) with no hang/crash --
+# rasterization lands in later phases. Selected at GPU_Soft.cpp construction; the new files
+# compile to nothing when OFF, so the shipping build is byte-identical. Build with OVERLAP/
+# PIPELINE2 OFF (the composite's async cross-class casts assume the reference renderer). All
+# changes behind #ifdef LITEV_SOFT3D_DRASTIC; flag-OFF is byte-identical.
+option(LITEV_SOFT3D_DRASTIC "liteV: alternate DraStic-style tile-based software 3D renderer (WIP; P1 skeleton)" OFF)
+if (LITEV_SOFT3D_DRASTIC)
+    add_compile_definitions(LITEV_SOFT3D_DRASTIC=1)
+endif()
+# BANDTILE (builds on LITEV_SOFT3D_BANDED): DraStic's cache-resident raster tiles. We
+# rasterize into full-frame Color/Depth/Attr buffers (~1.2MB incl. the x2 AA under-slot) ->
+# every per-pixel depth read-modify-write + attr access misses the 512KB shared L2 to DRAM.
+# Each band instead rasters into a small CACHE-RESIDENT sub-tile (BtChunkRows=16 lines, both
+# AA slots ~= 95KB, L2/L1-resident, matching DraStic's ctx+0x20000 16-line tiles), then
+# copies the tile out to the real framebuffer. ScanlineFinalPass (Phase 2) is UNCHANGED and
+# runs on the full framebuffer AFTER copy-out, so its y-1/y+1 neighbour reads never cross a
+# tile edge. Retarget is by SHADOWING ColorBuffer/DepthBuffer/AttrBuffer/BufferSize/
+# FirstPixelOffset in the raster fns (no per-site edits). OUTPUT byte-identical (same raster
+# math + writes, staged through a tile + copied out); gate via strict fbhash. All changes
+# behind #ifdef LITEV_SOFT3D_BANDTILE; flag-OFF is byte-identical.
+option(LITEV_SOFT3D_BANDTILE "liteV: DraStic cache-resident per-band raster tiles" OFF)
+if (LITEV_SOFT3D_BANDTILE)
+    add_compile_definitions(LITEV_SOFT3D_BANDTILE=1)
+endif()
+# PIPELINE2 (steps 1+2 here; step 3 = the depth-2 flip, added later): deepen the async
+# render pipeline from depth-1 to depth-2 to remove the ~4.5ms/frame emu barrier bubble at
+# VBlank -> FlushAsyncRender -> Semaphore_Wait(AsyncDone). STEP 1 double-buffers the 3D
+# planes (ColorBuffer/DepthBuffer/AttrBuffer) by frame parity: raster writes bank[P2RenderBank],
+# GetLine/ScanlineFinalPass read bank[P2ConsumeBank], via a shadow-pointer base offset keyed
+# on a parity toggled at the 3D kick and latched at the render-wake / VBlank. STEP 2 double-
+# buffers the 2D emu->render snapshots by frame parity. Both are still DEPTH-1 and therefore
+# OUTPUT byte-identical (the barrier still sequences 2D-N before 3D-N+1, so only one bank/slot
+# is ever live -- the parity just alternates); they add the banks step 3 will exploit.
+# fbhash-gateable. NOTE: mutually exclusive with LITEV_SOFT3D_BANDTILE (both shadow the raster
+# framebuffer base). All behind #ifdef LITEV_SOFT3D_PIPELINE2; flag-OFF is byte-identical.
+option(LITEV_SOFT3D_PIPELINE2 "liteV: depth-2 async pipeline scaffolding (steps 1+2: parity-banked 3D planes + 2D snapshots)" OFF)
+if (LITEV_SOFT3D_PIPELINE2)
+    add_compile_definitions(LITEV_SOFT3D_PIPELINE2=1)
 endif()
 # Hand-written AArch64 assembly transcription of DraStic's span-fill inner
 # texture-modulate loop (builds on LITEV_SOFT3D_NEON): replaces the compiler's
@@ -366,6 +555,58 @@ if (LITEV_JIT_DISPATCH AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
     # bookkeeping vanishes and the tree is the pure Unit-3 dispatcher.
     if (_litev_any_link)
         add_compile_definitions(LITEV_JIT_LINK=1)
+    endif()
+endif()
+
+# liteDS-v2 commit-stub: hoist the per-hop commit (StopExecution / Timestamp+=Cycles
+# / budget / CPSR store) that EmitLinkExit inlined at EVERY linkable exit into ONE
+# shared per-CPU stub each link exit BLs into. Shrinks the block-tail L1I footprint
+# (attacks the measured fetch stall). Only meaningful with the emitted dispatcher +
+# at least one link class (it accelerates linkable exits); AArch64-only. BIT-EXACT:
+# identical ops/order, and the unlinked patch-B re-enters the dispatcher whose
+# re-commit is a no-op (the stub already set RCycles=0). Default OFF -> flag-off is
+# byte-identical (all code behind #ifdef LITEV_JIT_COMMIT_STUB).
+option(LITEV_JIT_COMMIT_STUB "Commit-stub: shared per-CPU per-hop commit for linkable exits" OFF)
+if (LITEV_JIT_COMMIT_STUB)
+    if (LITEV_JIT_DISPATCH
+        AND (LITEV_LINK_UNCOND OR LITEV_LINK_COND OR LITEV_LINK_FALLTHROUGH)
+        AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_COMMIT_STUB=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_COMMIT_STUB requires LITEV_JIT_DISPATCH, at "
+                            "least one LITEV_LINK_* class, and an AArch64 target.")
+    endif()
+endif()
+
+# liteDS-v2 cycle down-counter (DraStic register-budget model). Defers the per-hop
+# `NDS.ARMxTimestamp += Cycles` (a MOVP2R over a multi-MB NDS address + a 64-bit
+# cache-cold RMW on EVERY block boundary -- the dominant IPC-0.63 stall) into a
+# callee-saved slice accumulator (Ran = the freed W25; guest r6's GLOBALREG pin is
+# dropped to make room), reconciling `Timestamp += Ran` ONCE per slice in C++. The
+# cheap 32-bit budget RMW and the StopExecution residual split are UNCHANGED, so this
+# is BIT-EXACT vs the per-hop model (identical event-firing schedule -> MP-safe).
+# AArch64-only; needs the emitted dispatcher. Default OFF -> flag-off is byte-identical
+# (GLOBALREG table, Linkage.S, reg defs all restored to the shipped 7-pin allocation).
+option(LITEV_JIT_CYCLE_DOWNCOUNTER "Cycle down-counter: defer per-hop Timestamp commit into a slice register (drops the r6 pin)" OFF)
+if (LITEV_JIT_CYCLE_DOWNCOUNTER)
+    if (LITEV_JIT_DISPATCH AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_CYCLE_DOWNCOUNTER=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_CYCLE_DOWNCOUNTER requires LITEV_JIT_DISPATCH and an AArch64 target.")
+    endif()
+endif()
+
+# Return-target cache: a per-CPU single-entry predictor in the emitted dispatcher for repeated
+# indirect-branch targets (guest returns/BX/computed jumps -- the branch class direct-linking
+# cannot cover). On a match it skips the region + tag lookup and branches straight to the cached
+# block. Pure predictor (cleared on any invalidation) -> BIT-EXACT timing (MP-safe). Default OFF ->
+# flag-off is byte-identical (all code behind #ifdef LITEV_JIT_RETCACHE).
+option(LITEV_JIT_RETCACHE "Dispatcher return-target cache: skip the block lookup for repeated indirect-branch targets" OFF)
+if (LITEV_JIT_RETCACHE)
+    if (LITEV_JIT_DISPATCH AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+        add_compile_definitions(LITEV_JIT_RETCACHE=1)
+    else()
+        message(FATAL_ERROR "LITEV_JIT_RETCACHE requires LITEV_JIT_DISPATCH and an AArch64 target.")
     endif()
 endif()
 

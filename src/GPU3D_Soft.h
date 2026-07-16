@@ -23,6 +23,9 @@
 #include "Platform.h"
 #include <thread>
 #include <atomic>
+#ifdef LITEV_SOFT3D_EDGENEON
+#include <arm_neon.h>   // InterpolateBatch (EXACT NEON edge interp) is inline in this header
+#endif
 
 namespace melonDS
 {
@@ -43,6 +46,30 @@ public:
     void RestartFrame() override;
 
     u32* GetLine(int line) override;
+
+#ifdef LITEV_SOFT3D_OVERLAP
+    // EMU thread, called from SoftRenderer::VBlank (sibling 2D class): latch the parity
+    // slot the async 2D consumer (GetLine) will read this frame. Public so the 2D
+    // renderer can reach it; touches only this class's own parity fields.
+    void OverlapLatchConsume() { ConsumeParity = LastKickParity; }
+#endif
+#ifdef LITEV_SOFT3D_PIPELINE2
+    // EMU thread, called from SoftRenderer::VBlank: latch which 3D bank the async 2D
+    // consumer (GetLine / consumer-side final pass) will read this frame. Ordered to the
+    // consumer by the AsyncStart post that follows in VBlank. Under depth-1 this equals the
+    // bank the render thread rastered (same frame parity).
+    void Pipeline2LatchConsume() { P2ConsumeBank = P2KickParity * P2BankStride; }
+    // The parity of the 3D bank the 2D consumer of THIS frame must read (== the parity 3D-N
+    // was kicked/rastered with). Public so SoftRenderer::VBlank can capture it into the
+    // depth-2 ring for the frame's 2D consumer. See the confirmation note in VBlank: at
+    // VBlank(N) P2KickParity is exactly 3D-N's parity (toggled at frame N's VCount-215
+    // RenderFrame, next toggle not until N+1's VCount 215). Identical to what
+    // Pipeline2LatchConsume uses at depth-1.
+    int Pipeline2CurrentConsumeParity() const { return P2KickParity; }
+    // Depth-2: set the 3D consume bank from a captured parity (called by the async 2D thread
+    // when it pops a ring frame). Public so SoftRenderer can reach it cross-class.
+    void Pipeline2SetConsumeParity(int par) { P2ConsumeBank = par * P2BankStride; }
+#endif
 
     void SetupRenderThread();
     void EnableRenderThread();
@@ -212,6 +239,49 @@ private:
                 }
             }
         }
+
+#ifdef LITEV_SOFT3D_EDGENEON
+        // EXACT NEON batch of Interpolate() over n independent attributes that all share
+        // this interpolator's yfactor/shift: out[i] == Interpolate(y0v[i], y1v[i]) for
+        // every i, byte-identical to the scalar path (same integer ops, SIMD-packed).
+        // The perspective (!linear) case is vectorised 4 lanes/iter; the rare linear /
+        // xdiff==0 cases fall back to scalar Interpolate. Used for the per-scanline EDGE
+        // interpolation (Interpolator<1>), which is otherwise scalar and dependency-
+        // stalled on the in-order A55.
+        void InterpolateBatch(const s32* y0v, const s32* y1v, s32* out, int n) const
+        {
+            if (linear || xdiff == 0)
+            {
+                for (int i = 0; i < n; i++) out[i] = Interpolate(y0v[i], y1v[i]);
+                return;
+            }
+            // shift is always (dir ? 9 : 8); use the compile-time value so the logical
+            // right-shift count is a constant (required by vshrq_n_u32). The scalar path
+            // does the multiply in u32 (mod 2^32) and a LOGICAL >> shift, then adds to the
+            // base -- reproduced here exactly (vmulq_s32 keeps the same low 32 bits; the
+            // wrap on overflow matches because both are mod 2^32).
+            constexpr int SH = dir ? 9 : 8;
+            const int32x4_t vyf   = vdupq_n_s32((s32)yfactor);
+            const int32x4_t vcomp = vdupq_n_s32((1 << SH) - (s32)yfactor);
+            int i = 0;
+            for (; i + 4 <= n; i += 4)
+            {
+                int32x4_t a0 = vld1q_s32(y0v + i);
+                int32x4_t a1 = vld1q_s32(y1v + i);
+                int32x4_t dpos = vsubq_s32(a1, a0);   // y1 - y0
+                int32x4_t dneg = vsubq_s32(a0, a1);   // y0 - y1
+                // pathA (y0<y1):  y0 + ((u32)(dpos * yfactor)          >> SH)
+                uint32x4_t pa = vshrq_n_u32(vreinterpretq_u32_s32(vmulq_s32(dpos, vyf)), SH);
+                int32x4_t  rA = vaddq_s32(a0, vreinterpretq_s32_u32(pa));
+                // pathB (y0>=y1): y1 + ((u32)(dneg * (2^SH - yfactor)) >> SH)
+                uint32x4_t pb = vshrq_n_u32(vreinterpretq_u32_s32(vmulq_s32(dneg, vcomp)), SH);
+                int32x4_t  rB = vaddq_s32(a1, vreinterpretq_s32_u32(pb));
+                uint32x4_t lt = vcltq_s32(a0, a1);    // y0 < y1
+                vst1q_s32(out + i, vbslq_s32(lt, rA, rB));
+            }
+            for (; i < n; i++) out[i] = Interpolate(y0v[i], y1v[i]);
+        }
+#endif
 
     private:
         s32 x0, x1, xdiff, x;
@@ -432,9 +502,54 @@ private:
 
     u32 AlphaBlend(u32 srccolor, u32 dstcolor, u32 alpha) const noexcept;
 
+#ifdef LITEV_SOFT3D_COMPACTVTX
+    // DraStic-style compact, contiguous, direct-indexed raster vertex. Holds ONLY the
+    // fields the software raster reads per scanline, in a tightly packed 32-byte record
+    // (2 per 64B cache line, vs the shared 64B `Vertex` = 1/line chased through a pointer
+    // array). Values are copied verbatim from the fat structs so the raster is byte-
+    // identical: X/Y = Vertex::FinalPosition[0/1], W/Z = Polygon::FinalW/FinalZ[i],
+    // R/G/B = Vertex::FinalColor[0..2] (kept s32 so no range assumption is needed),
+    // S/T = Vertex::TexCoords[0/1] (kept s16 so the s16->s32 sign-extension the scalar
+    // Interpolate does is reproduced exactly). Indexed by the polygon's own vertex index
+    // [0,NumVertices) -- the SAME index the raster uses for Vertices[i]/FinalW[i].
+    struct CompactVtx
+    {
+        s32 X, Y;      // FinalPosition[0], FinalPosition[1]
+        s32 W, Z;      // Polygon::FinalW[i], Polygon::FinalZ[i]
+        s32 R, G, B;   // FinalColor[0..2]
+        s16 S, T;      // TexCoords[0..1]
+    };                 // 7*s32 + 2*s16 = 32 bytes
+#endif
+
     struct RendererPolygon
     {
         Polygon* PolyData;
+#ifdef LITEV_SOFT3D_COMPACTVTX
+        // Base of THIS polygon's contiguous compact-vertex block in CompactArena (built
+        // once per frame by BuildCompactVtx, before the band workers wake). Set at the
+        // SetupPolygon call site from the polygon's global index. Read-only during raster.
+        const CompactVtx* CompactV;
+#endif
+#ifdef LITEV_SOFT3D_EDGEHOIST
+        // Per-EDGE endpoint snapshot, taken ONCE at edge-setup (SnapshotEdgeHoistL/R, from
+        // SetupPolygon*Edge + SetupPolygon's flat branch) -- the endpoints only change at a
+        // vertex crossing. Every per-scanline raster read (crossing-check Y1, filledge X1,
+        // W/Z, colour/texcoord) reads from HERE instead of dereferencing the compact arena,
+        // so the hot loop touches only the contiguous rp. 0 = Cur vertex, 1 = Next vertex.
+        // Values are verbatim copies of the compact fields (byte-identical): Y1 = Next
+        // FinalPosition[1], X1 = Next FinalPosition[0], W/Z = Polygon FinalW/FinalZ, R/G/B =
+        // FinalColor (s32), S/T = TexCoords (s16, so Interpolate's s16->s32 promotion matches).
+        struct EdgeHoist
+        {
+            s32 Y1;                        // Next FinalPosition[1] (per-scanline crossing check)
+            s32 X1;                        // Next FinalPosition[0] (filledge)
+            s32 W0, W1;                    // FinalW  (wl/wr interp)
+            s32 Z0, Z1;                    // FinalZ  (zl/zr interp)
+            s32 R0, R1, G0, G1, B0, B1;    // FinalColor (colour interp)
+            s16 S0, S1, T0, T1;            // TexCoords  (texcoord interp)
+        };
+        EdgeHoist EHL, EHR;                // left edge (SlopeL/CurVL..) / right edge (SlopeR/CurVR..)
+#endif
 
         Slope<0> SlopeL;
         Slope<1> SlopeR;
@@ -442,6 +557,34 @@ private:
         u32 CurVL, CurVR;
         u32 NextVL, NextVR;
 
+#if defined(LITEV_SOFT3D_GRADIENT) || defined(LITEV_SOFT3D_EDGENEON)
+        // Per-edge Cur/Next vertex-attribute snapshot, taken ONCE per vertex-crossing
+        // (SnapshotEdgeL/R, from SetupPolygon*Edge + SetupPolygon's flat branch). The two
+        // edge vertices only change on a crossing, so between crossings these are the
+        // invariant endpoints of the per-scanline edge interpolation. Both raster variants
+        // consume this cache as their lane/DDA inputs:
+        //   * LITEV_SOFT3D_EDGENEON  -- NEON-vectorize the EXACT edge Interpolate (byte-
+        //                               identical), 6 attrs/edge sharing the edge yfactor.
+        //   * LITEV_SOFT3D_GRADIENT  -- sub-affine DDA along Y (approximate) for the same
+        //                               6 attrs (W + colour/texcoord); Z stays exact.
+        // Attr index order: 0=W, 1=R, 2=G, 3=B, 4=S(texcoord), 5=T. Texcoords are stored
+        // sign-extended to s32 (matches the s16->s32 promotion the scalar Interpolate did).
+        // Z is kept out of the batch/DDA (exact InterpolateZ) and stored separately.
+        struct EdgeEndpoints
+        {
+            s32 v0[6];   // Cur  vertex: W, R, G, B, S, T
+            s32 v1[6];   // Next vertex: W, R, G, B, S, T
+            s32 z0, z1;  // polygon->FinalZ[Cur/Next] (exact path, not batched/DDA'd)
+#ifdef LITEV_SOFT3D_GRADIENT
+            // Sub-affine DDA state (Stage 2, GRADIENT only). 16.16 fixed point.
+            s64 acc[6];  // current accumulator for W,R,G,B,S,T
+            s64 dv[6];   // per-row step between anchors
+            s32 rem;     // rows until next re-anchor (0 => anchor this row); reset on crossing
+            s32 segYBot; // this segment's bottom scanline (Next vertex Y) -- anchor clamp
+#endif
+        };
+        EdgeEndpoints EdgeL, EdgeR;
+#endif
     };
 
 #ifdef LITEV_SOFT3D_BANDED
@@ -499,6 +642,41 @@ private:
     void WaitRowRastered(s32 row, int nb);
 #endif
 
+#ifdef LITEV_SOFT3D_OVERLAP
+    // Consumer-driven 2D/3D overlap (see CMakeLists LITEV_SOFT3D_OVERLAP). The 2D async
+    // thread's GetLine(y) waits until rows y and y+1 are rastered, runs ScanlineFinalPass
+    // itself, then returns the composited line -- so the 2D pipelines behind the bands
+    // instead of blocking for the whole raster. No producer-side releaser, no extra
+    // thread (unlike the reverted STREAM lever).
+    //
+    // DOUBLE-BUFFERED by frame parity: under SOFT3D_ASYNC two frames are in flight (the
+    // consumer of frame N overlaps the raster kick of N+1) over a SINGLE-buffered
+    // ColorBuffer, so a single shared progress array would be bulk-reset by N+1 while N
+    // still reads it. RowRastered[parity][row]=1 once that row is rastered; each frame
+    // owns its own parity slot, reset by the EMU thread at the RenderFrame kick (ordered
+    // before both the bands via Sema_RenderStart and the consumer via AsyncStart).
+    std::atomic<u8> RowRastered[2][256];
+    // Parity the BANDS write this frame (set by the render thread from LastKickParity
+    // before posting the band start-semas; the sema pair provides the ordering).
+    int BandRasterParity = 0;
+    // Parity the CONSUMER reads (latched by the emu thread in SoftRenderer::VBlank from
+    // LastKickParity, ordered to the consumer by the AsyncStart post/wait).
+    int ConsumeParity = 0;
+    // Parity assigned to the raster kicked at the last RenderFrame (emu thread only).
+    int LastKickParity = 0;
+    // Per-parity: did this frame do a FRESH raster (=> the consumer must run the final
+    // pass), or was it FrameIdentical (buffers already final from the previous frame =>
+    // consumer must NOT re-run edge/fog, which would double-apply)?
+    bool RasterFresh[2] = { false, false };
+    // EMU thread, at the RenderFrame kick: toggle parity, reset the new parity's row
+    // flags (or mark all-ready for an identical frame), and record fresh-ness.
+    void OverlapKickReset(bool fresh);
+    // (OverlapLatchConsume is declared public above -- it is called cross-class from
+    // the 2D SoftRenderer, which cannot reach a private member.)
+    // CONSUMER (2D async) thread: block until row `row` of parity `par` is rastered.
+    void WaitRowRasteredP(s32 row, int par);
+#endif
+
     // ---- adaptive band load balancing (LITEV_BAND_BALANCE, default on) ----
     // Equal-line bands are badly imbalanced on a real scene: on the Shrek race the
     // measured per-band raster times were 22.8 / 19.2 / 11.7 ms (band 0 does ~2x
@@ -541,6 +719,21 @@ private:
     static constexpr u32 TexCacheArenaTexels = 1u << 21; // 2M texels (4MB u16) per band
     static constexpr u32 TexCacheSlots = 512;
     static constexpr int TexCacheMaxBands = 8;
+#ifdef LITEV_SOFT3D_TEX1B
+    // Byte-addressed arena under TEX1B (same 4MB cap): palette-format textures store a
+    // 1-byte index per texel + a small decoded u16 palette (both in the arena); direct/4x4
+    // store 2-byte u16 exactly as before. ElemSize=1 => palette path (Offset=index base,
+    // PalOffset=palette base); ElemSize=2 => direct/4x4 (Offset=u16 base, no palette).
+    static constexpr u32 TexCacheArenaBytes = TexCacheArenaTexels * 2;
+    struct TexCacheEntry { u32 Param, Pal, Offset; s32 W, H; u32 PalOffset; u8 ElemSize; };
+    struct TexCacheState
+    {
+        u8*  Arena = nullptr;
+        u32  Used = 0;   // BYTES used
+        u32  Count = 0;
+        TexCacheEntry Entries[TexCacheSlots];
+    };
+#else
     struct TexCacheEntry { u32 Param, Pal, Offset; s32 W, H; };
     struct TexCacheState
     {
@@ -549,17 +742,56 @@ private:
         u32  Count = 0;
         TexCacheEntry Entries[TexCacheSlots];
     };
+#endif
     TexCacheState TexCaches[TexCacheMaxBands];
     static thread_local TexCacheState* CurTexCache;
     // Set in RenderFrame: texture/palette VRAM changed this frame => drop caches.
     bool TexCacheDirty = true;
+#ifdef LITEV_SOFT3D_TEX1B
+    // Returns f_texcache: the u16 PALETTE for palette formats (index it with *out1b[texAddr]),
+    // or the u16 direct/4x4 arena for fmt 5/7 (*out1b set null). nullptr => fall back.
+    const u16* ResolveTexCache(u32 texparam, u32 texpal, s32* outW, s32* outH, const u8** out1b);
+#else
     const u16* ResolveTexCache(u32 texparam, u32 texpal, s32* outW, s32* outH);
+#endif
 #endif
     u32 RenderPixel(const Polygon* polygon, u8 vr, u8 vg, u8 vb, s16 s, s16 t) const;
     void PlotTranslucentPixel(u32 pixeladdr, u32 color, u32 z, u32 polyattr, u32 shadow);
     void SetupPolygonLeftEdge(RendererPolygon* rp, s32 y) const;
     void SetupPolygonRightEdge(RendererPolygon* rp, s32 y) const;
+#ifdef LITEV_SOFT3D_EDGEHOIST
+    // Snapshot the left/right edge's current Cur/Next endpoint attributes into rp->EHL/EHR
+    // (read from the already-built compact arena). Called at every edge (re)setup.
+    void SnapshotEdgeHoistL(RendererPolygon* rp) const;
+    void SnapshotEdgeHoistR(RendererPolygon* rp) const;
+#endif
+#if defined(LITEV_SOFT3D_GRADIENT) || defined(LITEV_SOFT3D_EDGENEON)
+    // Snapshot each edge's Cur/Next vertex attributes into rp->EdgeL/EdgeR. Called
+    // wherever CurVL/NextVL (L) or CurVR/NextVR (R) are (re)assigned. Under GRADIENT it
+    // also resets the DDA (rem=0) and records the segment bottom.
+    void SnapshotEdgeL(RendererPolygon* rp) const;
+    void SnapshotEdgeR(RendererPolygon* rp) const;
+#endif
+#if defined(LITEV_SOFT3D_FAST) && defined(LITEV_SOFT3D_GRADIENT)
+    // Sub-affine DDA (Stage 2, approximate): advance edge e by one scanline, writing the
+    // 6 attrs (W,R,G,B,S,T) to out[6]. Z is not handled here (exact path). interp supplies
+    // the true perspective value at anchor rows (current + look-ahead via a local copy).
+    void StepEdgeAttrsDDA(RendererPolygon::EdgeEndpoints& e,
+                          const Interpolator<1>& interp, s32 y, s32* out) const;
+#endif
     void SetupPolygon(RendererPolygon* rp, Polygon* polygon) const;
+#ifdef LITEV_SOFT3D_COMPACTVTX
+    // Compact-vertex arena, built ONCE per frame in RenderPolygons (render thread / the
+    // synchronous path) before the band workers are woken. Packed tightly: each polygon i
+    // writes NumVertices records starting at CompactBase[i]. Sized to the worst case
+    // (RenderPolygonRAM caps at 2048 polys, <=10 verts each); allocated lazily (like
+    // GeomEventLog) so the base pointer is stable for the frame. Written by one thread,
+    // then read-only across all band threads (the BandStartSema post/wait pair provides
+    // the release/acquire ordering).
+    std::unique_ptr<CompactVtx[]> CompactArena;
+    u32 CompactBase[2048] = {};
+    void BuildCompactVtx(Polygon** polygons, int npolys);
+#endif
     void RenderShadowMaskScanline(RendererPolygon* rp, s32 y);
     void RenderPolygonScanline(RendererPolygon* rp, s32 y);
     void RenderScanline(s32 y, int npolys);
@@ -594,11 +826,95 @@ private:
     static constexpr int ScanlineWidth = 258;
     static constexpr int NumScanlines = 194;
     static constexpr int BufferSize = ScanlineWidth * NumScanlines;
-    static constexpr int FirstPixelOffset = ScanlineWidth + 1;
+#ifdef LITEV_SOFT3D_UNDERCOLO
+#if defined(LITEV_SOFT3D_BANDTILE) || defined(LITEV_SOFT3D_PIPELINE2)
+#error "LITEV_SOFT3D_UNDERCOLO remaps the framebuffer layout and is incompatible with BANDTILE/PIPELINE2 (which shadow the buffer bases/BufferSize). Disable those (the shipping config already does)."
+#endif
+    // Per-ROW interleaved layout: each buffer row occupies RowStride (pow2 1024) words --
+    // top sub-row cols [0,258), under sub-row [512,770). A pixel's under-slot is UnderOffset
+    // (512 words, 2KB, same 4KB page) from its top-slot, not +BufferSize (+195KB). bit9
+    // (UnderOffset) tags top vs under so the slot test is a cheap AND. Top stays stride-1
+    // within a row. Cols [258,512) and [770,1024) are inert padding (never addressed).
+    static constexpr int RowStride   = 1024;
+    static constexpr int UnderOffset = 512;
+    static constexpr int PlaneWords  = NumScanlines * RowStride;   // 194 * 1024
+#else
+    static constexpr int RowStride   = ScanlineWidth;
+    static constexpr int UnderOffset = BufferSize;
+    static constexpr int PlaneWords  = BufferSize * 2;
+#endif
+    static constexpr int FirstPixelOffset = RowStride + 1;
 
-    u32 ColorBuffer[BufferSize * 2];
-    u32 DepthBuffer[BufferSize * 2];
-    u32 AttrBuffer[BufferSize * 2];
+#ifdef LITEV_SOFT3D_PIPELINE2
+    // Pipeline step 1: DOUBLE-BUFFER the 3D planes by frame parity so a depth-2 pipeline
+    // (step 3) can have two frames' 3D output coexist. A "bank" = one frame's planes (the
+    // usual [BufferSize*2], i.e. AA top+under slots). The raster writes bank[P2RenderBank];
+    // GetLine/ScanlineFinalPass read bank[P2ConsumeBank], via the shadow-pointer trick.
+    // UNDER DEPTH-1 (step 1) the barrier still sequences 2D-N before 3D-N+1, so only one
+    // bank is ever live and P2RenderBank==P2ConsumeBank per frame -> byte-identical; the
+    // second bank is allocated but the parity just alternates.
+    static constexpr int P2BankStride = BufferSize * 2;   // words per parity bank
+    // Part 3: THREE 3D-plane banks (mod-3), not two. The 3D raster is kicked at VCount 215,
+    // ~1 frame AHEAD of its 2D consumer (VBlank); under depth-2 the 2D-N consumer reads
+    // bank[p_N] for ~2 frames while 3D-{N+2} (kicked before the VBlank(N+2) drain) would
+    // reuse bank[p_N] with only 2 banks -> data race. mod-3 gives 3D-{N+2} a distinct bank;
+    // bank[p_N] is only reused by 3D-{N+3}, long after 2D-N drained. Byte-identical at
+    // depth-1 (one bank live; mod-3 just alternates 0/1/2). NB the TEXTURE shadow stays
+    // 2-bank (read only by the SERIAL 3D raster, <=1 outstanding) -> keyed on P2*Parity & 1.
+    u32 ColorBuffer[P2BankStride * 3];
+    u32 DepthBuffer[P2BankStride * 3];
+    u32 AttrBuffer[P2BankStride * 3];
+    // Parity (0/1/2) cycled by the emu at the 3D kick; the banks' word offsets. Shared
+    // members set at ordered points (kick / render-wake / 2D-frame-start) with sema
+    // release/acquire.
+    int P2KickParity = 0;    // emu, cycled 0->1->2->0 in RenderFrame (real frames only)
+    int P2RenderParity = 0;  // render-thread latch of P2KickParity (0/1/2); drives P2RenderBank
+                             // AND the flat-texture read shadow (& 1 -> mod-2 A/B).
+    int P2RenderBank = 0;    // = P2RenderParity * P2BankStride (raster + producer final pass)
+    int P2ConsumeBank = 0;   // = consume-parity * P2BankStride (GetLine + consumer final pass).
+                             // Depth-2: set per-frame by the 2D thread from the in-flight ring
+                             // (via the public Pipeline2SetConsumeParity). Depth-1: latched by
+                             // Pipeline2LatchConsume (== P2KickParity).
+#else
+    u32 ColorBuffer[PlaneWords];
+    u32 DepthBuffer[PlaneWords];
+    u32 AttrBuffer[PlaneWords];
+#endif
+
+#ifdef LITEV_SOFT3D_BANDTILE
+    // DraStic-style cache-resident raster tiles (LITEV_SOFT3D_BANDTILE). We rasterize into
+    // the full-frame Color/Depth/Attr buffers (~1.2MB incl. the x2 AA under-slot) -> every
+    // per-pixel depth read-modify-write + attr access misses the 512KB shared L2 to DRAM.
+    // Instead each band rasters into a small CACHE-RESIDENT sub-tile (BtChunkRows lines,
+    // both AA slots), then copies the tile out to the real framebuffer -- keeping the raster
+    // working set in L2/L1 (DraStic's ctx+0x20000 16-line tiles). ScanlineFinalPass (Phase 2)
+    // is UNCHANGED and runs on the full framebuffer AFTER copy-out, so its y-1/y+1 neighbour
+    // reads never cross a tile edge. OUTPUT byte-identical: same raster math + writes, just
+    // staged through a tile then copied out.
+    //
+    // Retarget with ZERO per-site edits: the raster fns (RenderPolygonScanline /
+    // RenderShadowMaskScanline / PlotTranslucentPixel) SHADOW the member ColorBuffer /
+    // DepthBuffer / AttrBuffer / BufferSize / FirstPixelOffset with per-chunk locals sourced
+    // from Bt* below. Shadowing the buffer bases retargets every ColorBuffer[pixeladdr];
+    // shadowing BufferSize retargets the AA under-slot stride (pixeladdr+BufferSize);
+    // shadowing FirstPixelOffset (= (SW+1) - BtTileY0*SW) folds the chunk's y-origin into
+    // pixeladdr so it becomes tile-relative with no change to the pixeladdr expressions.
+    static constexpr int BtChunkRows = 16;                        // sub-tile height (tunable)
+    static constexpr int BtTileRows  = BtChunkRows + 2;           // + a border row of slack
+    static constexpr int BtTileSlot  = ScanlineWidth * BtTileRows; // per-AA-slot stride (words)
+    static thread_local u32 BtTileColor[BtTileSlot * 2];
+    static thread_local u32 BtTileDepth[BtTileSlot * 2];
+    static thread_local u32 BtTileAttr [BtTileSlot * 2];
+    // Per-chunk retarget state (thread_local: bands run concurrently). Set to the REAL
+    // buffers by default (shadow == no-op) and pointed at the tile by RenderBand per chunk.
+    static thread_local u32* BtCB;
+    static thread_local u32* BtDB;
+    static thread_local u32* BtAB;
+    static thread_local s32  BtSlot;
+    static thread_local s32  BtTileY0;
+    void BandTileCopyIn(s32 cy0, s32 cy1);   // real (cleared) top-slot rows -> tile
+    void BandTileCopyOut(s32 cy0, s32 cy1);  // tile (both slots) -> real framebuffer
+#endif
 
     // attribute buffer:
     // bit0-3: edge flags (left/right/top/bottom)
